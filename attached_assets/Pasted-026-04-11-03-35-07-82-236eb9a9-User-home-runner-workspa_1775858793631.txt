@@ -1,0 +1,80 @@
+026-04-11 03:35:07.82
+236eb9a9
+User
+/home/runner/workspace/node_modules/.pnpm/path-to-regexp@8.3.0/node_modules/path-to-regexp/src/index.ts:225
+2026-04-11 03:35:07.82
+236eb9a9
+User
+at pathToRegexp (/home/runner/workspace/node_modules/.pnpm/path-to-regexp@8.3.0/node_modules/path-to-regexp/src/index.ts:480:54)
+2026-04-11 03:35:07.82
+236eb9a9
+User
+at <anonymous> (/home/runner/workspace/artifacts/api-server/src/app.ts:42:7) {
+2026-04-11 03:35:07.82
+236eb9a9
+User
+at matcher (/home/runner/workspace/node_modules/.pnpm/router@2.2.0/node_modules/router/lib/layer.js:86:23)
+2026-04-11 03:35:07.82
+236eb9a9
+User
+at parse (/home/runner/workspace/node_modules/.pnpm/path-to-regexp@8.3.0/node_modules/path-to-regexp/src/index.ts:242:62)
+2026-04-11 03:35:07.82
+236eb9a9
+User
+PathError [TypeError]: Missing parameter name at index 1: *; visit https://git.new/pathToRegexpError for info
+2026-04-11 03:35:07.82
+236eb9a9
+User
+throw new PathError(`Missing parameter name at index ${index}`, str);
+2026-04-11 03:35:07.82
+236eb9a9
+User
+at new Layer (/home/runner/workspace/node_modules/.pnpm/router@2.2.0/node_modules/router/lib/layer.js:93:62)
+2026-04-11 03:35:07.82
+236eb9a9
+User
+at app2.route (/home/runner/workspace/node_modules/.pnpm/express@5.2.1/node_modules/express/lib/application.js:257:22)
+2026-04-11 03:35:07.82
+236eb9a9
+User
+at app2.app2.<computed> (/home/runner/workspace/node_modules/.pnpm/express@5.2.1/node_modules/express/lib/application.js:478:22)
+2026-04-11 03:35:07.82
+236eb9a9
+User
+at Object.match (/home/runner/workspace/node_modules/.pnpm/path-to-regexp@8.3.0/node_modules/path-to-regexp/src/index.ts:438:28)
+2026-04-11 03:35:07.84
+236eb9a9
+System
+artifact process exited with error error=exit status 1 artifact=artifacts/api-server
+2026-04-11 03:35:56.97
+236eb9a9
+System
+a port configuration was specified but the required port was never opened
+2026-04-11 03:35:56.97
+236eb9a9
+System
+not all artifact ports opened within timeout expected=[8080] detected=0
+2026-04-11 03:36:10.87
+236eb9a9
+User
+To prepare for this change:
+2026-04-11 03:36:10.87
+236eb9a9
+User
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+2026-04-11 03:36:10.87
+236eb9a9
+User
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+2026-04-11 03:36:10.87
+236eb9a9
+User
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+2026-04-11 03:36:10.87
+236eb9a9
+User
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+2026-04-11 03:36:10.87
+236eb9a9
+User
+(Use `node --trace-warnings ...` to show where the warning was created)
