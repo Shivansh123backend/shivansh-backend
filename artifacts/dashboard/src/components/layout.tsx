@@ -16,12 +16,14 @@ import {
   Settings,
   LogOut,
   Activity,
+  Mic2,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
   { href: "/leads", label: "Lead Lists", icon: List },
+  { href: "/voices", label: "Voices", icon: Mic2 },
   { href: "/dispositions", label: "Dispositions", icon: Tag },
   { href: "/users", label: "Users", icon: Users },
   { href: "/queues", label: "Queues", icon: Layers },

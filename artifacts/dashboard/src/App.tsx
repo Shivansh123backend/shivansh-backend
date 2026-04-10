@@ -18,6 +18,7 @@ import InboundRoutesPage from "@/pages/inbound-routes";
 import CallsPage from "@/pages/calls";
 import AnalyticsPage from "@/pages/analytics";
 import SettingsPage from "@/pages/settings";
+import VoicesPage from "@/pages/voices";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -83,6 +84,9 @@ function Router() {
       </Route>
       <Route path="/analytics">
         <ProtectedRoute component={AnalyticsPage} />
+      </Route>
+      <Route path="/voices">
+        <ProtectedRoute component={VoicesPage} />
       </Route>
       <Route path="/settings">
         <ProtectedRoute component={SettingsPage} />
