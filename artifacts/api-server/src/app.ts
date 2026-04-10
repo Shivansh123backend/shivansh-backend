@@ -36,11 +36,23 @@ app.use("/api", router);
 
 if (process.env.NODE_ENV === "production") {
   // Production: serve the compiled React dashboard as static files
-  // with index.html fallback for client-side routing (SPA)
-  const dashboardDist = path.join(process.cwd(), "artifacts/dashboard/dist/public");
+  // with index.html fallback for client-side routing (SPA).
+  // Use DASHBOARD_DIST env if set, otherwise resolve relative to workspace root.
+  const dashboardDist =
+    process.env.DASHBOARD_DIST ||
+    path.join(process.cwd(), "artifacts/dashboard/dist/public");
+
+  logger.info({ dashboardDist }, "Serving dashboard static files");
+
   app.use(express.static(dashboardDist));
   app.get("/{*path}", (_req, res) => {
-    res.sendFile(path.join(dashboardDist, "index.html"));
+    const indexFile = path.join(dashboardDist, "index.html");
+    res.sendFile(indexFile, (err) => {
+      if (err) {
+        logger.error({ err, indexFile }, "Failed to send index.html");
+        res.status(500).json({ error: "Dashboard not built", indexFile });
+      }
+    });
   });
 } else {
   // Development: proxy all non-API requests to the Vite dev server
