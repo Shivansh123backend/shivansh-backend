@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import cors from "cors";
 import path from "path";
 import pinoHttp from "pino-http";
+import { createProxyMiddleware } from "http-proxy-middleware";
 import router from "./routes";
 import { logger } from "./lib/logger";
 
@@ -33,17 +34,27 @@ app.use(express.urlencoded({ extended: true }));
 // All REST API routes
 app.use("/api", router);
 
-// In production, serve the built React dashboard as static files
-// and fall back to index.html for client-side routing (SPA)
 if (process.env.NODE_ENV === "production") {
+  // Production: serve the compiled React dashboard as static files
+  // with index.html fallback for client-side routing (SPA)
   const dashboardDist = path.join(process.cwd(), "artifacts/dashboard/dist/public");
-
   app.use(express.static(dashboardDist));
-
-  // SPA catch-all — any non-API route returns index.html
   app.get("*", (_req, res) => {
     res.sendFile(path.join(dashboardDist, "index.html"));
   });
+} else {
+  // Development: proxy all non-API requests to the Vite dev server
+  // so any route (e.g. /settings, /campaigns) that reaches Express
+  // is transparently forwarded to the React SPA.
+  const VITE_PORT = process.env.VITE_PORT ?? "23183";
+  app.use(
+    createProxyMiddleware({
+      target: `http://localhost:${VITE_PORT}`,
+      changeOrigin: false,
+      ws: true,
+      logger: console,
+    })
+  );
 }
 
 export default app;
