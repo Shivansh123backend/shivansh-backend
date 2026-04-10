@@ -5,3 +5,4 @@ export * from "./campaigns";
 export * from "./phone_numbers";
 export * from "./leads";
 export * from "./calls";
+export * from "./call_logs";

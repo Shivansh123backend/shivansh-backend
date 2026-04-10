@@ -27,6 +27,10 @@ const createCampaignSchema = z.object({
   routingType: z.enum(["ai", "human", "ai_then_human"]).default("ai"),
   maxConcurrentCalls: z.number().min(1).max(100).default(5),
   transferRules: z.string().optional(),
+  agentPrompt: z.string().optional(),
+  voice: z.string().optional(),
+  fromNumber: z.string().optional(),
+  transferNumber: z.string().optional(),
 });
 
 const assignAgentSchema = z.object({
@@ -121,7 +125,8 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
       from: fromNumber,
       script,
       voice: voiceName,
-      transfer_number: campaign.transferRules ?? undefined,
+      transfer_number: transferNumber,
+      campaign_id: campaignId,
     });
 
     // Mark lead as called regardless of worker outcome
@@ -139,12 +144,14 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
 }
 
 async function resolveCampaignAssets(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
-  let script = "Hello, this is an AI assistant calling on behalf of our team.";
-  let voiceName = "default";
-  let fromNumber = process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
+  // Campaign's own fields take priority over linked AI agent values
+  let script = campaign.agentPrompt ?? "Hello, this is an AI assistant calling on behalf of our team.";
+  let voiceName = campaign.voice ?? "default";
+  let fromNumber = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
+  const transferNumber = campaign.transferNumber ?? campaign.transferRules ?? undefined;
 
-  // Resolve AI agent script
-  if (campaign.agentId) {
+  // Supplement from linked AI agent only when campaign fields are absent
+  if ((!campaign.agentPrompt || !campaign.voice) && campaign.agentId) {
     const [agent] = await db
       .select()
       .from(aiAgentsTable)
@@ -152,35 +159,32 @@ async function resolveCampaignAssets(campaignId: number, campaign: typeof campai
       .limit(1);
 
     if (agent) {
-      script = agent.prompt;
+      if (!campaign.agentPrompt) script = agent.prompt;
 
-      // Resolve default voice for this agent
-      if (agent.defaultVoiceId) {
+      if (!campaign.voice && agent.defaultVoiceId) {
         const [voice] = await db
           .select()
           .from(voicesTable)
           .where(eq(voicesTable.id, agent.defaultVoiceId))
           .limit(1);
 
-        if (voice) {
-          voiceName = voice.voiceId;
-        }
+        if (voice) voiceName = voice.voiceId;
       }
     }
   }
 
-  // Resolve caller phone number assigned to this campaign
-  const [phoneRow] = await db
-    .select()
-    .from(phoneNumbersTable)
-    .where(and(eq(phoneNumbersTable.campaignId, campaignId), eq(phoneNumbersTable.status, "active")))
-    .limit(1);
+  // Supplement fromNumber from campaign's assigned phone number if not set directly
+  if (!campaign.fromNumber) {
+    const [phoneRow] = await db
+      .select()
+      .from(phoneNumbersTable)
+      .where(and(eq(phoneNumbersTable.campaignId, campaignId), eq(phoneNumbersTable.status, "active")))
+      .limit(1);
 
-  if (phoneRow) {
-    fromNumber = phoneRow.phoneNumber;
+    if (phoneRow) fromNumber = phoneRow.phoneNumber;
   }
 
-  return { script, voiceName, fromNumber };
+  return { script, voiceName, fromNumber, transferNumber };
 }
 
 // Shared logger (pino-style simple wrapper)

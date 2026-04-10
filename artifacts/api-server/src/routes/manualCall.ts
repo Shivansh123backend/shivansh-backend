@@ -1,11 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import {
-  campaignsTable,
-  aiAgentsTable,
-  voicesTable,
-  phoneNumbersTable,
-} from "@workspace/db";
+import { campaignsTable, aiAgentsTable, voicesTable, phoneNumbersTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { triggerCall } from "../services/workerService.js";
@@ -27,7 +22,6 @@ router.post("/call/manual", authenticate, async (req, res): Promise<void> => {
 
   const { phone, campaign_id } = parsed.data;
 
-  // Fetch campaign
   const [campaign] = await db
     .select()
     .from(campaignsTable)
@@ -39,11 +33,14 @@ router.post("/call/manual", authenticate, async (req, res): Promise<void> => {
     return;
   }
 
-  // Resolve script from AI agent
-  let script = "Hello, this is an AI assistant calling on behalf of our team.";
-  let voiceName = "default";
+  // Use campaign's own fields first; fall back to AI agent lookup
+  let script = campaign.agentPrompt ?? "Hello, this is an AI assistant calling on behalf of our team.";
+  let voiceName = campaign.voice ?? "default";
+  let fromNumber = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
+  const transferNumber = campaign.transferNumber ?? campaign.transferRules ?? undefined;
 
-  if (campaign.agentId) {
+  // If no direct prompt on campaign, try linked AI agent
+  if (!campaign.agentPrompt && campaign.agentId) {
     const [agent] = await db
       .select()
       .from(aiAgentsTable)
@@ -53,7 +50,7 @@ router.post("/call/manual", authenticate, async (req, res): Promise<void> => {
     if (agent) {
       script = agent.prompt;
 
-      if (agent.defaultVoiceId) {
+      if (!campaign.voice && agent.defaultVoiceId) {
         const [voice] = await db
           .select()
           .from(voicesTable)
@@ -65,24 +62,24 @@ router.post("/call/manual", authenticate, async (req, res): Promise<void> => {
     }
   }
 
-  // Resolve caller number for this campaign
-  let fromNumber = process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
+  // If no fromNumber on campaign, try campaign's assigned phone number
+  if (!campaign.fromNumber) {
+    const [phoneRow] = await db
+      .select()
+      .from(phoneNumbersTable)
+      .where(and(eq(phoneNumbersTable.campaignId, campaign_id), eq(phoneNumbersTable.status, "active")))
+      .limit(1);
 
-  const [phoneRow] = await db
-    .select()
-    .from(phoneNumbersTable)
-    .where(and(eq(phoneNumbersTable.campaignId, campaign_id), eq(phoneNumbersTable.status, "active")))
-    .limit(1);
+    if (phoneRow) fromNumber = phoneRow.phoneNumber;
+  }
 
-  if (phoneRow) fromNumber = phoneRow.phoneNumber;
-
-  // Trigger single call — non-blocking response
   const result = await triggerCall({
     to: phone,
     from: fromNumber,
     script,
     voice: voiceName,
-    transfer_number: campaign.transferRules ?? undefined,
+    transfer_number: transferNumber,
+    campaign_id,
   });
 
   if (result.success) {
