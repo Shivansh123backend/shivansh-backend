@@ -9,9 +9,15 @@ import DashboardPage from "@/pages/dashboard";
 import CampaignsPage from "@/pages/campaigns";
 import AgentsPage from "@/pages/agents";
 import LeadsPage from "@/pages/leads";
-import CallsPage from "@/pages/calls";
-import NumbersPage from "@/pages/numbers";
+import DispositionsPage from "@/pages/dispositions";
 import UsersPage from "@/pages/users";
+import QueuesPage from "@/pages/queues";
+import LiveMonitorPage from "@/pages/live-monitor";
+import NumbersPage from "@/pages/numbers";
+import InboundRoutesPage from "@/pages/inbound-routes";
+import CallsPage from "@/pages/calls";
+import AnalyticsPage from "@/pages/analytics";
+import SettingsPage from "@/pages/settings";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -54,14 +60,32 @@ function Router() {
       <Route path="/leads">
         <ProtectedRoute component={LeadsPage} />
       </Route>
-      <Route path="/calls">
-        <ProtectedRoute component={CallsPage} />
+      <Route path="/dispositions">
+        <ProtectedRoute component={DispositionsPage} />
+      </Route>
+      <Route path="/users">
+        <ProtectedRoute component={UsersPage} />
+      </Route>
+      <Route path="/queues">
+        <ProtectedRoute component={QueuesPage} />
+      </Route>
+      <Route path="/live-monitor">
+        <ProtectedRoute component={LiveMonitorPage} />
       </Route>
       <Route path="/numbers">
         <ProtectedRoute component={NumbersPage} />
       </Route>
-      <Route path="/users">
-        <ProtectedRoute component={UsersPage} />
+      <Route path="/inbound-routes">
+        <ProtectedRoute component={InboundRoutesPage} />
+      </Route>
+      <Route path="/calls">
+        <ProtectedRoute component={CallsPage} />
+      </Route>
+      <Route path="/analytics">
+        <ProtectedRoute component={AnalyticsPage} />
+      </Route>
+      <Route path="/settings">
+        <ProtectedRoute component={SettingsPage} />
       </Route>
       <Route>
         <div className="flex h-screen items-center justify-center font-mono text-sm text-muted-foreground">

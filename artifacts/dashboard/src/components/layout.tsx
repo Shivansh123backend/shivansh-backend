@@ -4,23 +4,33 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
   Megaphone,
-  Bot,
+  List,
+  Tag,
   Users,
-  Phone,
-  PhoneCall,
-  PhoneIncoming,
-  LogOut,
+  Layers,
   Radio,
+  PhoneIncoming,
+  GitBranch,
+  PhoneCall,
+  BarChart2,
+  Settings,
+  LogOut,
+  Activity,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
-  { href: "/agents", label: "AI Agents", icon: Bot },
-  { href: "/leads", label: "Leads", icon: Users },
-  { href: "/calls", label: "Call Records", icon: PhoneCall },
-  { href: "/numbers", label: "Phone Numbers", icon: PhoneIncoming },
-  { href: "/users", label: "Team", icon: Users },
+  { href: "/leads", label: "Lead Lists", icon: List },
+  { href: "/dispositions", label: "Dispositions", icon: Tag },
+  { href: "/users", label: "Users", icon: Users },
+  { href: "/queues", label: "Queues", icon: Layers },
+  { href: "/live-monitor", label: "Live Monitor", icon: Activity },
+  { href: "/numbers", label: "DIDs", icon: PhoneIncoming },
+  { href: "/inbound-routes", label: "Inbound Routes", icon: GitBranch },
+  { href: "/calls", label: "CDR", icon: PhoneCall },
+  { href: "/analytics", label: "Analytics", icon: BarChart2 },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -29,7 +39,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
-      <aside className="w-56 flex-shrink-0 flex flex-col border-r border-border bg-[hsl(224,71%,3%)]">
+      <aside className="w-52 flex-shrink-0 flex flex-col border-r border-border bg-[hsl(224,71%,3%)]">
         <div className="flex items-center gap-2.5 px-4 py-4 border-b border-border">
           <div className="w-7 h-7 rounded bg-primary/20 border border-primary/40 flex items-center justify-center">
             <Radio className="w-3.5 h-3.5 text-primary" />
@@ -40,16 +50,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
+        <nav className="flex-1 px-2 py-2 space-y-0.5 overflow-y-auto">
           {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
             const isActive = href === "/" ? location === "/" : location.startsWith(href);
             return (
               <Link key={href} href={href}>
                 <div
                   className={cn(
-                    "flex items-center gap-2.5 px-3 py-2 rounded text-xs font-mono cursor-pointer transition-all",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded text-xs cursor-pointer transition-all",
                     isActive
-                      ? "bg-primary/15 text-primary border border-primary/25"
+                      ? "bg-primary/15 text-primary border border-primary/25 font-medium"
                       : "text-muted-foreground hover:text-foreground hover:bg-white/5"
                   )}
                 >
@@ -61,15 +71,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        <div className="px-2 pb-4 border-t border-border pt-3">
-          <button
-            onClick={logout}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded text-xs font-mono text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Sign Out
-          </button>
-        </div>
+        <UserFooter onLogout={logout} />
       </aside>
 
       <main className="flex-1 flex flex-col overflow-hidden">
@@ -77,6 +79,30 @@ export function Layout({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+    </div>
+  );
+}
+
+function UserFooter({ onLogout }: { onLogout: () => void }) {
+  const initials = "A";
+  return (
+    <div className="border-t border-border p-3 space-y-2">
+      <div className="flex items-center gap-2.5 px-2 py-1.5">
+        <div className="w-7 h-7 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center flex-shrink-0">
+          <span className="text-[10px] font-bold font-mono text-primary">{initials}</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-foreground font-medium truncate">Admin User</p>
+          <p className="text-[10px] text-muted-foreground truncate">Company Admin</p>
+        </div>
+      </div>
+      <button
+        onClick={onLogout}
+        className="w-full flex items-center gap-2 px-3 py-1.5 rounded text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all"
+      >
+        <LogOut className="w-3.5 h-3.5" />
+        Sign out
+      </button>
     </div>
   );
 }
