@@ -1,5 +1,5 @@
 kind = "api"
-previewPath = "/api" # TODO - should be excluded from preview in the first place
+previewPath = "/api"
 title = "API Server"
 version = "1.0.0"
 id = "3B4_FFSkEVBkAeYMFRJ2e"
@@ -7,7 +7,7 @@ id = "3B4_FFSkEVBkAeYMFRJ2e"
 [[services]]
 localPort = 8080
 name = "API Server"
-paths = ["/api"]
+paths = ["/api", "/"]
 
 [services.development]
 run = "pnpm --filter @workspace/api-server run dev"
@@ -15,17 +15,13 @@ run = "pnpm --filter @workspace/api-server run dev"
 [services.production]
 
 [services.production.build]
-# Schema push is intentionally excluded from build — DATABASE_URL is only
-# available at runtime (not during Docker build). It runs as part of the
-# start command below instead.
 args = ["sh", "-c", "pnpm --filter @workspace/dashboard run build && pnpm --filter @workspace/api-server run build"]
 
 [services.production.build.env]
 NODE_ENV = "production"
 
 [services.production.run]
-# Push schema first (DATABASE_URL is injected at runtime), then start server.
-args = ["sh", "-c", "pnpm --filter @workspace/db run push-force && node --enable-source-maps ./artifacts/api-server/dist/index.mjs"]
+args = ["bash", "scripts/start-production.sh"]
 
 [services.production.run.env]
 PORT = "8080"
