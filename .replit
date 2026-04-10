@@ -33,3 +33,8 @@ externalPort = 3000
 
 [nix]
 channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+WORKER_URL = "https://ai-voice-worker1.replit.app"

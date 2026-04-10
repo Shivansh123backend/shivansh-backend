@@ -9,6 +9,7 @@ import numbersRouter from "./numbers.js";
 import leadsRouter from "./leads.js";
 import callsRouter from "./calls.js";
 import agentStatusRouter from "./agentStatus.js";
+import manualCallRouter from "./manualCall.js";
 import { globalErrorHandler } from "../lib/errors.js";
 import type { Request, Response, NextFunction } from "express";
 
@@ -24,6 +25,7 @@ router.use(numbersRouter);
 router.use(leadsRouter);
 router.use(callsRouter);
 router.use(agentStatusRouter);
+router.use(manualCallRouter);
 
 router.use((err: Error, req: Request, res: Response, next: NextFunction) => globalErrorHandler(err, req, res, next));
 

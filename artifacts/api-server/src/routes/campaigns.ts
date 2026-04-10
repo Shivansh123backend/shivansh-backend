@@ -1,14 +1,24 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { campaignsTable, campaignAgentsTable, leadsTable, usersTable } from "@workspace/db";
-import { eq, and, count } from "drizzle-orm";
+import {
+  campaignsTable,
+  campaignAgentsTable,
+  leadsTable,
+  usersTable,
+  aiAgentsTable,
+  voicesTable,
+  phoneNumbersTable,
+} from "@workspace/db";
+import { eq, and } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { createAuditLog } from "../lib/audit.js";
-import { getCallQueue, pauseQueue, resumeQueue } from "../queue/callQueue.js";
 import { emitToSupervisors } from "../websocket/index.js";
+import { triggerCall, delay } from "../services/workerService.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
+
+const DEMO_LEAD_LIMIT = 5;
 
 const createCampaignSchema = z.object({
   name: z.string().min(1),
@@ -66,22 +76,12 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
     return;
   }
 
-  // Set active
+  // Activate campaign first so frontend sees the state change immediately
   const [updated] = await db
     .update(campaignsTable)
     .set({ status: "active" })
     .where(eq(campaignsTable.id, id))
     .returning();
-
-  // For outbound campaigns, get pending leads and enqueue jobs
-  if (campaign.type === "outbound") {
-    const pendingLeads = await db
-      .select()
-      .from(leadsTable)
-      .where(and(eq(leadsTable.campaignId, id), eq(leadsTable.status, "pending")));
-
-    req.log.info({ campaignId: id, leadCount: pendingLeads.length }, "Campaign started, leads ready for processing");
-  }
 
   emitToSupervisors("campaign:started", { campaignId: id, name: campaign.name });
 
@@ -92,8 +92,102 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
     resourceId: id,
   });
 
+  // Respond immediately — call triggering happens in background
   res.json(updated);
+
+  // Background: trigger calls for outbound campaigns
+  if (campaign.type === "outbound") {
+    triggerCampaignCalls(id, campaign).catch((err) => {
+      req.log.error({ err, campaignId: id }, "Background call triggering failed");
+    });
+  }
 });
+
+async function triggerCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
+  // Resolve agent, voice, and caller phone number
+  const { script, voiceName, fromNumber } = await resolveCampaignAssets(campaignId, campaign);
+
+  const pendingLeads = await db
+    .select()
+    .from(leadsTable)
+    .where(and(eq(leadsTable.campaignId, campaignId), eq(leadsTable.status, "pending")))
+    .limit(DEMO_LEAD_LIMIT);
+
+  logger.info(`Campaign ${campaignId}: triggering calls to ${pendingLeads.length} leads (limit ${DEMO_LEAD_LIMIT})`);
+
+  for (const lead of pendingLeads) {
+    await triggerCall({
+      to: lead.phone,
+      from: fromNumber,
+      script,
+      voice: voiceName,
+      transfer_number: campaign.transferRules ?? undefined,
+    });
+
+    // Mark lead as called regardless of worker outcome
+    await db
+      .update(leadsTable)
+      .set({ status: "called" })
+      .where(eq(leadsTable.id, lead.id));
+
+    // Small delay between calls to avoid rate limits
+    const jitter = 500 + Math.floor(Math.random() * 500);
+    await delay(jitter);
+  }
+
+  logger.info(`Campaign ${campaignId}: finished dispatching ${pendingLeads.length} calls`);
+}
+
+async function resolveCampaignAssets(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
+  let script = "Hello, this is an AI assistant calling on behalf of our team.";
+  let voiceName = "default";
+  let fromNumber = process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
+
+  // Resolve AI agent script
+  if (campaign.agentId) {
+    const [agent] = await db
+      .select()
+      .from(aiAgentsTable)
+      .where(eq(aiAgentsTable.id, campaign.agentId))
+      .limit(1);
+
+    if (agent) {
+      script = agent.prompt;
+
+      // Resolve default voice for this agent
+      if (agent.defaultVoiceId) {
+        const [voice] = await db
+          .select()
+          .from(voicesTable)
+          .where(eq(voicesTable.id, agent.defaultVoiceId))
+          .limit(1);
+
+        if (voice) {
+          voiceName = voice.voiceId;
+        }
+      }
+    }
+  }
+
+  // Resolve caller phone number assigned to this campaign
+  const [phoneRow] = await db
+    .select()
+    .from(phoneNumbersTable)
+    .where(and(eq(phoneNumbersTable.campaignId, campaignId), eq(phoneNumbersTable.status, "active")))
+    .limit(1);
+
+  if (phoneRow) {
+    fromNumber = phoneRow.phoneNumber;
+  }
+
+  return { script, voiceName, fromNumber };
+}
+
+// Shared logger (pino-style simple wrapper)
+const logger = {
+  info: (msg: string) => console.log(JSON.stringify({ level: "info", msg, time: Date.now() })),
+  error: (msg: string) => console.error(JSON.stringify({ level: "error", msg, time: Date.now() })),
+};
 
 router.post("/campaigns/stop/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
