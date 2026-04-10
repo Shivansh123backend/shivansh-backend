@@ -1,0 +1,364 @@
+Build a production-grade, scalable Node.js backend for an AI-powered calling SaaS platform with campaign management, AI voice agents, multi-provider telephony, human agent routing, and supervisor monitoring.
+
+The system must be modular, fault-tolerant, and designed to scale. Do NOT include frontend. Focus on strong backend architecture, clean code, and reliability.
+
+---
+
+TECH STACK:
+
+* Node.js (Express)
+* PostgreSQL (pg)
+* Redis (ioredis)
+* BullMQ (queue system)
+* JWT authentication
+* bcrypt for password hashing
+* WebSocket support (Socket.io or ws)
+
+---
+
+CORE REQUIREMENTS:
+
+1. AUTH SYSTEM:
+
+* JWT-based login (no signup, users created by admin)
+* Roles:
+
+  * admin (full control)
+  * supervisor (monitoring only)
+  * agent (human call receiver)
+* Middleware for role-based access control
+
+---
+
+2. USERS & AGENTS:
+
+* Admin can create users
+* Enforce maximum 25 agents
+* User fields:
+  id, name, email, password_hash, role, status
+* Agent statuses:
+  available, busy, break, offline
+* Track active agent sessions (for routing)
+
+---
+
+3. AI AGENTS (VOICE BOTS):
+
+* AI agents are configurable entities
+* Fields:
+  id, name, prompt, language, default_voice_id
+* Prompt must support strong override capability (always enforce prompt priority over runtime input)
+* Allow multiple voices per AI agent
+
+---
+
+4. VOICES SYSTEM:
+   Create voices module:
+
+* id, name, provider (elevenlabs, playht, azure), voice_id
+* gender (male/female)
+* accent (us, uk, indian, australian, etc)
+* language
+
+Create agent_voices table:
+
+* agent_id, voice_id, priority
+
+Support:
+
+* multiple voices per agent
+* dynamic selection per call
+
+---
+
+5. CAMPAIGNS:
+
+* Unlimited campaigns
+* Fields:
+  id, name, agent_id (AI agent), status, max_concurrent_calls
+* Campaign must support:
+
+  * outbound calling
+  * inbound routing
+  * transfer rules
+* Campaign can be started/stopped
+* Campaign execution must push jobs into queue
+
+---
+
+6. PHONE NUMBERS / DIDs:
+
+* Support multiple numbers per campaign
+* Fields:
+  id, phone_number, provider (voip, telnyx, twilio), campaign_id, status, priority
+* Allow multiple providers simultaneously
+* Support load balancing and fallback
+
+---
+
+7. LEADS:
+
+* Fields:
+  id, name, phone, campaign_id, status
+* Upload and manage lead lists
+* Track call progress per lead
+
+---
+
+8. CALL SYSTEM (CONTROL LAYER ONLY):
+
+* DO NOT implement telephony execution here (handled by VPS workers)
+* Backend should:
+
+  * create call jobs
+  * assign voice + number + provider
+  * push jobs to queue
+
+---
+
+9. CALL QUEUE (CRITICAL):
+
+* Use BullMQ
+
+* Queue name: "calls"
+
+* Each job must include:
+  lead_id, campaign_id, phone,
+  selected_voice,
+  selected_number,
+  provider,
+  agent_id
+
+* Implement retry logic and failure handling metadata
+
+---
+
+10. PROVIDER ABSTRACTION:
+    Create base class:
+
+CallProvider:
+
+* call()
+* transfer()
+* hangup()
+
+Implement:
+
+* VoipProvider (primary)
+* TelnyxProvider (backup)
+* TwilioProvider (optional)
+
+Do NOT hardcode providers anywhere
+
+---
+
+11. HUMAN AGENT ROUTING:
+
+* Agents must be assignable to campaigns (many-to-many)
+
+* Create campaign_agents table
+
+* Build routing logic:
+
+  * find available agents
+  * filter by campaign
+  * pick based on least busy or round robin
+
+* Handle cases:
+
+  * no agent available → fallback response
+  * agent busy → skip
+
+---
+
+12. TRANSFER SYSTEM:
+
+* AI should be able to trigger transfer intent
+* Backend must:
+
+  * detect transfer request
+  * find available agent
+  * initiate transfer via provider abstraction
+* Track transfer status in calls table
+
+---
+
+13. INBOUND CALL ROUTING:
+
+* Incoming call → map number to campaign
+* Route to:
+
+  * AI agent OR
+  * human agent (based on config)
+
+---
+
+14. SUPERVISOR FEATURES:
+
+* View all live calls (via WebSocket)
+
+* Access:
+
+  * call transcripts
+  * call recordings (URL only)
+  * summaries
+  * dispositions
+
+* Disposition types:
+  interested, not_interested, vm, no_answer, busy, connected, transferred, disconnected
+
+---
+
+15. CALL LOGGING / CDR:
+
+calls table must include:
+
+* id
+* lead_id
+* campaign_id
+* agent_id
+* provider_used
+* status
+* duration
+* recording_url
+* transcript
+* summary
+* disposition
+* timestamps
+
+---
+
+16. VOICE + NUMBER SELECTION LOGIC:
+
+* On call creation:
+
+  * select voice (random or priority-based)
+  * select number (round robin or priority-based)
+  * select provider (voip primary, fallback telnyx)
+
+---
+
+17. WEBSOCKET SYSTEM:
+
+* Real-time updates for:
+
+  * agent status
+  * incoming call events
+  * live call monitoring
+
+Events:
+
+* agent:incoming_call
+* call:started
+* call:ended
+* agent:status_update
+
+---
+
+18. ERROR HANDLING:
+
+* Global error handler
+* Retry logic for queue
+* Fallback provider logic
+* Prevent system crashes
+
+---
+
+19. DATABASE TABLES:
+
+users
+agents (or users with role agent)
+voices
+agent_voices
+campaigns
+campaign_agents
+phone_numbers
+leads
+calls
+
+---
+
+20. API ROUTES:
+
+Auth:
+POST /auth/login
+
+Users:
+POST /users/create
+GET /users
+
+Agents:
+POST /agents/create
+GET /agents
+POST /agents/:id/voices
+
+Voices:
+POST /voices/create
+GET /voices
+
+Campaigns:
+POST /campaigns/create
+POST /campaigns/start/:id
+POST /campaigns/stop/:id
+GET /campaigns
+
+Numbers:
+POST /numbers/add
+GET /numbers
+
+Leads:
+POST /leads/upload
+GET /leads
+
+Calls:
+POST /calls/initiate
+GET /calls
+
+Agent:
+POST /agent/status
+
+---
+
+21. CODE STRUCTURE:
+
+/src
+/modules
+/auth
+/users
+/agents
+/voices
+/campaigns
+/numbers
+/leads
+/calls
+/providers
+/queue
+/services
+/middlewares
+/websocket
+/config
+
+---
+
+22. IMPORTANT CONSTRAINTS:
+
+* Code must be modular and scalable
+* Use async/await everywhere
+* No frontend
+* No telephony execution logic
+* Clean separation of concerns
+* Avoid tight coupling
+* System must not break under load
+
+---
+
+23. BONUS:
+
+* Add agent limit validation (25 max)
+* Add campaign concurrency control
+* Add logging for provider failures
+* Add basic audit logs
+
+---
+
+Generate complete working backend code with folder structure, controllers, services, routes, middleware, queue setup, and database integration.

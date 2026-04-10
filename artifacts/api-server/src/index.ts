@@ -1,5 +1,10 @@
-import app from "./app";
-import { logger } from "./lib/logger";
+import { createServer } from "http";
+import app from "./app.js";
+import { logger } from "./lib/logger.js";
+import { initWebSocket } from "./websocket/index.js";
+import { getCallQueue } from "./queue/callQueue.js";
+import { closeRedis } from "./lib/redis.js";
+import { closeQueue } from "./queue/callQueue.js";
 
 const rawPort = process.env["PORT"];
 
@@ -15,11 +20,37 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
-    process.exit(1);
-  }
+const httpServer = createServer(app);
 
-  logger.info({ port }, "Server listening");
+// Initialize WebSocket server
+initWebSocket(httpServer);
+
+// Initialize call queue only if Redis is configured
+if (process.env.REDIS_HOST || process.env.REDIS_URL) {
+  try {
+    getCallQueue();
+    logger.info("Call queue initialized");
+  } catch (err) {
+    logger.warn({ err }, "Queue initialization failed — Redis may not be available");
+  }
+} else {
+  logger.info("Redis not configured — call queue disabled (set REDIS_HOST to enable)");
+}
+
+httpServer.listen(port, () => {
+  logger.info({ port }, "AI Calling SaaS backend listening");
 });
+
+// Graceful shutdown
+const shutdown = async (signal: string) => {
+  logger.info({ signal }, "Shutting down gracefully");
+  await closeQueue();
+  await closeRedis();
+  httpServer.close(() => {
+    logger.info("HTTP server closed");
+    process.exit(0);
+  });
+};
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
