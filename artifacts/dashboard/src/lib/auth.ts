@@ -1,7 +1,9 @@
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState } from "react";
 import { setAuthTokenGetter } from "@workspace/api-client-react";
 
 const TOKEN_KEY = "auth_token";
+
+setAuthTokenGetter(() => localStorage.getItem(TOKEN_KEY));
 
 export interface AuthContextType {
   token: string | null;
@@ -21,10 +23,6 @@ export function useAuth() {
 
 export function useAuthState(): AuthContextType {
   const [token, setToken] = useState<string | null>(localStorage.getItem(TOKEN_KEY));
-
-  useEffect(() => {
-    setAuthTokenGetter(() => localStorage.getItem(TOKEN_KEY));
-  }, []);
 
   const login = (newToken: string) => {
     localStorage.setItem(TOKEN_KEY, newToken);
