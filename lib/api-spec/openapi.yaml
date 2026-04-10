@@ -3,20 +3,28 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: AI Calling SaaS API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: auth
+  - name: users
+  - name: agents
+  - name: voices
+  - name: campaigns
+  - name: numbers
+  - name: leads
+  - name: calls
+  - name: supervisor
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +32,933 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: JWT token + user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List all users
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+
+  /users/create:
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create a user (admin only)
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserBody"
+      responses:
+        "201":
+          description: Created user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Validation error or agent limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /agents:
+    get:
+      operationId: listAgents
+      tags: [agents]
+      summary: List AI agents
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of AI agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AiAgent"
+
+  /agents/create:
+    post:
+      operationId: createAgent
+      tags: [agents]
+      summary: Create AI agent
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentBody"
+      responses:
+        "201":
+          description: Created agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiAgent"
+
+  /agents/{id}/voices:
+    get:
+      operationId: getAgentVoices
+      tags: [agents]
+      summary: Get voices assigned to an agent
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Agent voices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentVoice"
+    post:
+      operationId: addAgentVoice
+      tags: [agents]
+      summary: Assign voice to agent
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddAgentVoiceBody"
+      responses:
+        "201":
+          description: Voice assigned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentVoice"
+
+  /voices:
+    get:
+      operationId: listVoices
+      tags: [voices]
+      summary: List voices
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of voices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Voice"
+
+  /voices/create:
+    post:
+      operationId: createVoice
+      tags: [voices]
+      summary: Create a voice
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVoiceBody"
+      responses:
+        "201":
+          description: Created voice
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voice"
+
+  /campaigns:
+    get:
+      operationId: listCampaigns
+      tags: [campaigns]
+      summary: List campaigns
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of campaigns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Campaign"
+
+  /campaigns/create:
+    post:
+      operationId: createCampaign
+      tags: [campaigns]
+      summary: Create campaign
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCampaignBody"
+      responses:
+        "201":
+          description: Created campaign
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+
+  /campaigns/start/{id}:
+    post:
+      operationId: startCampaign
+      tags: [campaigns]
+      summary: Start a campaign
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Campaign started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+
+  /campaigns/stop/{id}:
+    post:
+      operationId: stopCampaign
+      tags: [campaigns]
+      summary: Stop a campaign
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Campaign stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+
+  /campaigns/{id}/agents:
+    get:
+      operationId: getCampaignAgents
+      tags: [campaigns]
+      summary: List agents assigned to campaign
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Campaign agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+    post:
+      operationId: assignCampaignAgent
+      tags: [campaigns]
+      summary: Assign human agent to campaign
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignCampaignAgentBody"
+      responses:
+        "201":
+          description: Agent assigned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignAgent"
+
+  /numbers:
+    get:
+      operationId: listNumbers
+      tags: [numbers]
+      summary: List phone numbers
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of phone numbers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PhoneNumber"
+
+  /numbers/add:
+    post:
+      operationId: addNumber
+      tags: [numbers]
+      summary: Add a phone number
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddNumberBody"
+      responses:
+        "201":
+          description: Added number
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhoneNumber"
+
+  /leads:
+    get:
+      operationId: listLeads
+      tags: [leads]
+      summary: List leads
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: campaignId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of leads
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Lead"
+
+  /leads/upload:
+    post:
+      operationId: uploadLeads
+      tags: [leads]
+      summary: Upload leads (JSON single or CSV bulk)
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLeadBody"
+      responses:
+        "201":
+          description: Lead(s) created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+
+  /calls:
+    get:
+      operationId: listCalls
+      tags: [calls]
+      summary: List calls (CDR)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: campaignId
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of calls
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Call"
+
+  /calls/initiate:
+    post:
+      operationId: initiateCall
+      tags: [calls]
+      summary: Initiate an outbound call
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitiateCallBody"
+      responses:
+        "201":
+          description: Call initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+
+  /calls/{id}:
+    get:
+      operationId: getCall
+      tags: [calls]
+      summary: Get a single call
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Call record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+
+  /agent/status:
+    post:
+      operationId: updateAgentStatus
+      tags: [supervisor]
+      summary: Update agent status
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAgentStatusBody"
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentStatusResponse"
+
+  /agent/available:
+    get:
+      operationId: getAvailableAgents
+      tags: [supervisor]
+      summary: Get available human agents
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Available agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+
+  /supervisor/live-calls:
+    get:
+      operationId: getLiveCalls
+      tags: [supervisor]
+      summary: Get currently active calls
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Live calls
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Call"
+
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   schemas:
     HealthStatus:
       type: object
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    LoginBody:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required: [email, password]
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+      required: [token, user]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [admin, supervisor, agent]
+        status:
+          type: string
+          enum: [available, busy, break, offline]
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, email, role, status]
+
+    CreateUserBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        role:
+          type: string
+          enum: [admin, supervisor, agent]
+      required: [name, email, password]
+
+    AiAgent:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        prompt:
+          type: string
+        language:
+          type: string
+        defaultVoiceId:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, prompt, language]
+
+    CreateAgentBody:
+      type: object
+      properties:
+        name:
+          type: string
+        prompt:
+          type: string
+        language:
+          type: string
+        defaultVoiceId:
+          type: integer
+      required: [name, prompt]
+
+    Voice:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        provider:
+          type: string
+          enum: [elevenlabs, playht, azure]
+        voiceId:
+          type: string
+        gender:
+          type: string
+          enum: [male, female]
+        accent:
+          type: string
+          enum: [us, uk, indian, australian, canadian, other]
+        language:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, provider, voiceId, gender, accent, language]
+
+    CreateVoiceBody:
+      type: object
+      properties:
+        name:
+          type: string
+        provider:
+          type: string
+          enum: [elevenlabs, playht, azure]
+        voiceId:
+          type: string
+        gender:
+          type: string
+          enum: [male, female]
+        accent:
+          type: string
+          enum: [us, uk, indian, australian, canadian, other]
+        language:
+          type: string
+      required: [name, provider, voiceId, gender]
+
+    AgentVoice:
+      type: object
+      properties:
+        id:
+          type: integer
+        agentId:
+          type: integer
+        voiceId:
+          type: integer
+        priority:
+          type: integer
+      required: [id, agentId, voiceId, priority]
+
+    AddAgentVoiceBody:
+      type: object
+      properties:
+        voiceId:
+          type: integer
+        priority:
+          type: integer
+      required: [voiceId]
+
+    Campaign:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        agentId:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [draft, active, paused, completed]
+        type:
+          type: string
+          enum: [outbound, inbound]
+        routingType:
+          type: string
+          enum: [ai, human, ai_then_human]
+        maxConcurrentCalls:
+          type: integer
+        transferRules:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, status, type, routingType, maxConcurrentCalls]
+
+    CreateCampaignBody:
+      type: object
+      properties:
+        name:
+          type: string
+        agentId:
+          type: integer
+        type:
+          type: string
+          enum: [outbound, inbound]
+        routingType:
+          type: string
+          enum: [ai, human, ai_then_human]
+        maxConcurrentCalls:
+          type: integer
+        transferRules:
+          type: string
+      required: [name]
+
+    AssignCampaignAgentBody:
+      type: object
+      properties:
+        agentId:
+          type: integer
+      required: [agentId]
+
+    CampaignAgent:
+      type: object
+      properties:
+        id:
+          type: integer
+        campaignId:
+          type: integer
+        agentId:
+          type: integer
+      required: [id, campaignId, agentId]
+
+    PhoneNumber:
+      type: object
+      properties:
+        id:
+          type: integer
+        phoneNumber:
+          type: string
+        provider:
+          type: string
+          enum: [voip, telnyx, twilio]
+        campaignId:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [active, inactive]
+        priority:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, phoneNumber, provider, status, priority]
+
+    AddNumberBody:
+      type: object
+      properties:
+        phoneNumber:
+          type: string
+        provider:
+          type: string
+          enum: [voip, telnyx, twilio]
+        campaignId:
+          type: integer
+        priority:
+          type: integer
+      required: [phoneNumber, provider]
+
+    Lead:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        phone:
+          type: string
+        campaignId:
+          type: integer
+        status:
+          type: string
+          enum: [pending, called, callback, do_not_call, completed]
+        metadata:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, phone, campaignId, status]
+
+    CreateLeadBody:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        campaignId:
+          type: integer
+        metadata:
+          type: string
+      required: [name, phone, campaignId]
+
+    Call:
+      type: object
+      properties:
+        id:
+          type: integer
+        leadId:
+          type: integer
+        campaignId:
+          type: integer
+        agentId:
+          type: integer
+          nullable: true
+        humanAgentId:
+          type: integer
+          nullable: true
+        providerUsed:
+          type: string
+          enum: [voip, telnyx, twilio]
+        selectedVoice:
+          type: string
+          nullable: true
+        selectedNumber:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [queued, initiated, ringing, in_progress, transferred, completed, failed, no_answer, busy]
+        disposition:
+          type: string
+          nullable: true
+          enum: [interested, not_interested, vm, no_answer, busy, connected, transferred, disconnected]
+        duration:
+          type: integer
+          nullable: true
+        recordingUrl:
+          type: string
+          nullable: true
+        transcript:
+          type: string
+          nullable: true
+        summary:
+          type: string
+          nullable: true
+        transferStatus:
+          type: string
+          nullable: true
+          enum: [pending, completed, failed]
+        externalCallId:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, leadId, campaignId, providerUsed, status]
+
+    InitiateCallBody:
+      type: object
+      properties:
+        leadId:
+          type: integer
+        campaignId:
+          type: integer
+        overrideProvider:
+          type: string
+          enum: [voip, telnyx, twilio]
+      required: [leadId, campaignId]
+
+    UpdateAgentStatusBody:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [available, busy, break, offline]
+      required: [status]
+
+    AgentStatusResponse:
+      type: object
+      properties:
+        agentId:
+          type: integer
+        status:
+          type: string
+      required: [agentId, status]

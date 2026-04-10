@@ -1,8 +1,17 @@
-# AI Calling SaaS Backend
+# NexusCall — AI Calling SaaS Platform
 
 ## Overview
 
-Production-grade, scalable Node.js backend for an AI-powered calling SaaS platform with campaign management, AI voice agents, multi-provider telephony, human agent routing, BullMQ job queue, and WebSocket supervisor monitoring.
+Production-grade AI-powered calling SaaS platform. Includes a complete Node.js/Express backend with JWT auth, RBAC, PostgreSQL database, multi-provider telephony (VoIP/Telnyx/Twilio), BullMQ job queue, WebSocket monitoring, and a React admin dashboard built with a dark terminal aesthetic.
+
+## Admin Dashboard
+
+- **Login**: `admin@example.com` / `Admin@12345`
+- **Theme**: Deep space dark + electric cyan (#00FFFF) — terminal/command-center aesthetic
+- **Pages**: Dashboard (live stats), Campaigns (start/stop), AI Agents, Leads (filtered), Call Records (CDR with transcripts), Phone Numbers, Team (users)
+- **Auth**: JWT stored in localStorage; shared React context for logout propagation
+- **Stack**: React + Vite + Wouter + TanStack Query + shadcn/ui + Tailwind CSS
+- **Location**: `artifacts/dashboard/`
 
 ## Stack
 
