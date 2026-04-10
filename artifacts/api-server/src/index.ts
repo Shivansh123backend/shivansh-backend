@@ -5,6 +5,7 @@ import { initWebSocket } from "./websocket/index.js";
 import { getCallQueue } from "./queue/callQueue.js";
 import { closeRedis } from "./lib/redis.js";
 import { closeQueue } from "./queue/callQueue.js";
+import { ensureAdminUser } from "./lib/startup.js";
 
 const rawPort = process.env["PORT"];
 
@@ -36,6 +37,11 @@ if (process.env.REDIS_HOST || process.env.REDIS_URL) {
 } else {
   logger.info("Redis not configured — call queue disabled (set REDIS_HOST to enable)");
 }
+
+// Ensure admin user exists (safe to call on every boot — checks first)
+ensureAdminUser().catch((err) => {
+  logger.warn({ err }, "ensureAdminUser failed — continuing anyway");
+});
 
 httpServer.listen(port, () => {
   logger.info({ port }, "AI Calling SaaS backend listening");
