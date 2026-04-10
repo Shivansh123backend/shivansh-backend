@@ -3,6 +3,8 @@ import { db } from "@workspace/db";
 import { humanAgentsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
+import { getAgentStatus, setAgentStatus } from "../lib/redis.js";
+import { emitToSupervisors } from "../websocket/index.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -55,7 +57,7 @@ router.post("/agents/create", authenticate, requireRole("admin"), async (req, re
   }
 });
 
-// POST /agents/status — update a human agent's status
+// POST /agents/status — update a human agent's status (DB + Redis)
 router.post("/agents/status", authenticate, async (req, res): Promise<void> => {
   const parsed = updateStatusSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -73,6 +75,21 @@ router.post("/agents/status", authenticate, async (req, res): Promise<void> => {
     res.status(404).json({ error: "Agent not found" });
     return;
   }
+
+  // Mirror status to Redis for real-time dashboard
+  await setAgentStatus({
+    agent_id: updated.id,
+    status: parsed.data.status,
+    updated_at: new Date().toISOString(),
+  });
+
+  // Broadcast to supervisors via WebSocket
+  emitToSupervisors("agent_status", {
+    agent_id: updated.id,
+    name: updated.name,
+    status: parsed.data.status,
+    current_call: null,
+  });
 
   res.json({
     id: updated.id,
@@ -105,18 +122,25 @@ router.get("/agents/available", authenticate, async (req, res): Promise<void> =>
   });
 });
 
-// GET /agents — list all human agents
+// GET /agents — list all human agents with live Redis status + current_call
 router.get("/agents", authenticate, async (req, res): Promise<void> => {
   const agents = await db.select().from(humanAgentsTable);
-  res.json(
-    agents.map((a) => ({
-      id: a.id,
-      name: a.name,
-      phone_number: a.phoneNumber,
-      status: a.status,
-      created_at: a.createdAt,
-    }))
+
+  // Enrich each agent with real-time status from Redis (falls back to DB status)
+  const enriched = await Promise.all(
+    agents.map(async (a) => {
+      const redisStatus = await getAgentStatus(a.id);
+      return {
+        id: a.id,
+        name: a.name,
+        phone_number: a.phoneNumber,
+        status: redisStatus?.status ?? a.status,
+        current_call: redisStatus?.current_call ?? null,
+      };
+    })
   );
+
+  res.json(enriched);
 });
 
 export default router;

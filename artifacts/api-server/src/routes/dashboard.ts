@@ -1,18 +1,23 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { callsTable, callLogsTable, usersTable, campaignsTable } from "@workspace/db";
-import { eq, and, count, sql } from "drizzle-orm";
+import { eq, count, sql } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
-import { getAllActiveCalls } from "../lib/redis.js";
+import {
+  getAllActiveCalls,
+  updateActiveCall,
+  setAgentStatus,
+} from "../lib/redis.js";
+import { emitToSupervisors } from "../websocket/index.js";
+import { logger } from "../lib/logger.js";
+import { z } from "zod";
 
 const router: IRouter = Router();
 
-// ── GET /dashboard/summary ──────────────────────────────────────────────────
-// Returns total_calls, active_calls, completed_calls
-// Uses call_logs (worker callbacks) as primary source of truth for totals,
-// and Redis for live active-call count (falls back to DB when Redis absent).
+const TERMINAL_STATUSES = new Set(["completed", "failed", "no_answer", "busy", "cancelled"]);
+
+// ── GET /dashboard/summary ───────────────────────────────────────────────────
 router.get("/dashboard/summary", authenticate, async (req, res): Promise<void> => {
-  // Aggregate call_logs table
   const [logStats] = await db
     .select({
       total: count(),
@@ -20,7 +25,6 @@ router.get("/dashboard/summary", authenticate, async (req, res): Promise<void> =
     })
     .from(callLogsTable);
 
-  // Aggregate richer calls table for statuses not in call_logs
   const [callStats] = await db
     .select({
       total: count(),
@@ -29,25 +33,20 @@ router.get("/dashboard/summary", authenticate, async (req, res): Promise<void> =
     })
     .from(callsTable);
 
-  // Redis gives real-time active count; fall back to DB count
   const redisActive = await getAllActiveCalls();
   const activeCallsCount = redisActive.length > 0
     ? redisActive.length
     : (callStats.active ?? 0);
 
-  const totalCalls = (logStats.total ?? 0) + (callStats.total ?? 0);
-  const completedCalls = (logStats.completed ?? 0) + (callStats.completed ?? 0);
-
   res.json({
-    total_calls: totalCalls,
+    total_calls: (logStats.total ?? 0) + (callStats.total ?? 0),
     active_calls: activeCallsCount,
-    completed_calls: completedCalls,
+    completed_calls: (logStats.completed ?? 0) + (callStats.completed ?? 0),
   });
 });
 
-// ── GET /dashboard/live-calls ───────────────────────────────────────────────
-// Returns real-time call list: phone_number, campaign, status
-// Redis is primary (live); DB is fallback.
+// ── GET /dashboard/live-calls ────────────────────────────────────────────────
+// Redis is primary source (real-time). Falls back to DB when Redis is absent.
 router.get("/dashboard/live-calls", authenticate, async (req, res): Promise<void> => {
   const redisActive = await getAllActiveCalls();
 
@@ -55,7 +54,8 @@ router.get("/dashboard/live-calls", authenticate, async (req, res): Promise<void
     res.json(
       redisActive.map((c) => ({
         phone_number: c.phone_number,
-        campaign: c.campaign_name ?? `Campaign #${c.campaign_id}`,
+        campaign_id: c.campaign_id,
+        campaign_name: c.campaign_name ?? null,
         status: c.status,
         started_at: c.started_at,
       }))
@@ -63,7 +63,7 @@ router.get("/dashboard/live-calls", authenticate, async (req, res): Promise<void
     return;
   }
 
-  // Fallback: query DB for calls in active states, join campaign name
+  // DB fallback for when Redis is not configured
   const liveCalls = await db
     .select({
       phone_number: callsTable.selectedNumber,
@@ -74,46 +74,36 @@ router.get("/dashboard/live-calls", authenticate, async (req, res): Promise<void
     })
     .from(callsTable)
     .leftJoin(campaignsTable, eq(callsTable.campaignId, campaignsTable.id))
-    .where(
-      sql`${callsTable.status} in ('ringing', 'initiated', 'in_progress')`
-    )
+    .where(sql`${callsTable.status} in ('ringing', 'initiated', 'in_progress')`)
     .orderBy(callsTable.createdAt)
     .limit(100);
 
   res.json(
     liveCalls.map((c) => ({
       phone_number: c.phone_number ?? "unknown",
-      campaign: c.campaign_name ?? `Campaign #${c.campaign_id}`,
+      campaign_id: c.campaign_id,
+      campaign_name: c.campaign_name ?? null,
       status: c.status === "in_progress" ? "in-call" : c.status,
       started_at: c.started_at,
     }))
   );
 });
 
-// ── GET /dashboard/agents ───────────────────────────────────────────────────
-// Returns human agents (users with role=agent or admin) with their status
-// and assigned campaign (if any active campaign has them enrolled).
+// ── GET /dashboard/agents ────────────────────────────────────────────────────
+// Returns users with role agent/admin. Status and current_call from Redis when available.
 router.get("/dashboard/agents", authenticate, async (req, res): Promise<void> => {
   const agents = await db
     .select({
       agent_id: usersTable.id,
       name: usersTable.name,
-      email: usersTable.email,
       status: usersTable.status,
     })
     .from(usersTable)
-    .where(
-      sql`${usersTable.role} in ('agent', 'admin')`
-    )
+    .where(sql`${usersTable.role} in ('agent', 'admin')`)
     .orderBy(usersTable.name);
 
-  // Fetch active campaigns to map agent → campaign
   const activeCampaigns = await db
-    .select({
-      id: campaignsTable.id,
-      name: campaignsTable.name,
-      agentId: campaignsTable.agentId,
-    })
+    .select({ id: campaignsTable.id, name: campaignsTable.name, agentId: campaignsTable.agentId })
     .from(campaignsTable)
     .where(eq(campaignsTable.status, "active"));
 
@@ -128,11 +118,83 @@ router.get("/dashboard/agents", authenticate, async (req, res): Promise<void> =>
       return {
         agent_id: a.agent_id,
         name: a.name,
-        assigned_campaign: assigned ? { id: assigned.id, name: assigned.name } : null,
+        assigned_campaign: assigned ?? null,
         status: a.status === "busy" ? "busy" : "available",
       };
     })
   );
+});
+
+// ── POST /dashboard/update ───────────────────────────────────────────────────
+// Worker webhook — no auth required.
+// Updates the call's status in Redis, emits a WebSocket event to supervisors,
+// and cleans up the key if the call is in a terminal state.
+const updateSchema = z.object({
+  call_id: z.string().min(1),
+  phone_number: z.string().optional(),
+  status: z.string().min(1),
+  agent_id: z.number().int().positive().optional(), // optional: which human agent is on the call
+});
+
+router.post("/dashboard/update", async (req, res): Promise<void> => {
+  const parsed = updateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "call_id and status are required" });
+    return;
+  }
+
+  const { call_id, phone_number, status, agent_id } = parsed.data;
+  const isTerminal = TERMINAL_STATUSES.has(status);
+
+  // Determine the normalised status for our ActiveCallRecord
+  const callStatus = isTerminal
+    ? "completed"
+    : status === "in-call" || status === "in_progress"
+    ? "in-call"
+    : "ringing";
+
+  // Update Redis active_calls key
+  let updatedRecord = await updateActiveCall(call_id, callStatus);
+
+  // If call wasn't in Redis yet (race or cold start), build a minimal record for the event
+  if (!updatedRecord && phone_number) {
+    updatedRecord = {
+      call_id,
+      phone_number,
+      campaign_id: 0,
+      status: callStatus,
+      started_at: new Date().toISOString(),
+    };
+  }
+
+  // Update agent_status key if an agent is linked to this call
+  if (agent_id) {
+    if (isTerminal) {
+      await setAgentStatus({ agent_id, status: "available", updated_at: new Date().toISOString() });
+    } else {
+      await setAgentStatus({ agent_id, status: "busy", current_call: call_id, updated_at: new Date().toISOString() });
+    }
+    // Emit agent status event
+    emitToSupervisors("agent_status", {
+      agent_id,
+      status: isTerminal ? "available" : "busy",
+      current_call: isTerminal ? null : call_id,
+    });
+  }
+
+  // Emit call_update event to all supervisors
+  if (updatedRecord) {
+    emitToSupervisors("call_update", {
+      call_id,
+      phone_number: updatedRecord.phone_number,
+      campaign_id: updatedRecord.campaign_id,
+      status,
+      is_terminal: isTerminal,
+    });
+  }
+
+  logger.info({ call_id, status, isTerminal }, "Dashboard update processed");
+  res.json({ ok: true, call_id, status, is_terminal: isTerminal });
 });
 
 export default router;
