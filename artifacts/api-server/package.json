@@ -26,6 +26,7 @@
     "pino": "^9",
     "pino-http": "^10",
     "socket.io": "^4.8.3",
+    "xlsx": "^0.18.5",
     "zod": "catalog:"
   },
   "devDependencies": {

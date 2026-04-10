@@ -1,94 +1,388 @@
 import { Router, type IRouter } from "express";
 import multer from "multer";
-import { parse } from "csv-parse";
+import { parse as csvParse } from "csv-parse/sync";
+import * as XLSX from "xlsx";
+import axios from "axios";
 import { db } from "@workspace/db";
 import { leadsTable, campaignsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
+import { logger } from "../lib/logger.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-const createLeadSchema = z.object({
-  name: z.string().min(1),
-  phone: z.string().min(1),
-  campaignId: z.number(),
-  metadata: z.string().optional(),
+// ── Multer — memory storage, 20 MB cap ──────────────────────────────────────
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
 });
 
-router.post("/leads/upload", authenticate, requireRole("admin"), upload.single("file"), async (req, res): Promise<void> => {
-  const campaignIdRaw = req.body.campaignId;
-  const campaignId = parseInt(campaignIdRaw, 10);
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-  if (isNaN(campaignId)) {
-    res.status(400).json({ error: "campaignId is required" });
+/** Normalise a phone string: strip everything except digits and leading +.
+ *  Returns null for obviously invalid numbers (< 7 digits). */
+function normalisePhone(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const stripped = String(raw).replace(/[^\d+]/g, "").replace(/(?!^\+)\+/g, "");
+  const digits = stripped.replace(/\D/g, "");
+  if (digits.length < 7) return null;
+  // Preserve leading + if present
+  return stripped.startsWith("+") ? stripped : digits;
+}
+
+function normaliseEmail(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = String(raw).trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ? trimmed : null;
+}
+
+/** Extract name/phone/email from a raw row object (handles various header spellings). */
+function extractRow(row: Record<string, unknown>): {
+  name: string;
+  phone: string | null;
+  email: string | null;
+} {
+  const str = (keys: string[]): string | null => {
+    for (const k of keys) {
+      const v = row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()];
+      if (v != null && String(v).trim()) return String(v).trim();
+    }
+    return null;
+  };
+
+  return {
+    name: str(["name", "Name", "NAME", "full_name", "Full Name"]) ?? "Unknown",
+    phone: normalisePhone(str(["phone_number", "phone", "Phone", "PHONE", "Phone Number", "mobile", "Mobile"])),
+    email: normaliseEmail(str(["email", "Email", "EMAIL", "e-mail", "E-mail"])),
+  };
+}
+
+/** Parse CSV buffer → array of raw row objects. */
+function parseCsv(buffer: Buffer): Record<string, unknown>[] {
+  return csvParse(buffer, { columns: true, skip_empty_lines: true, trim: true });
+}
+
+/** Parse XLSX/XLS/ODS buffer → array of raw row objects. */
+function parseExcel(buffer: Buffer): Record<string, unknown>[] {
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+}
+
+interface NormalisedLead {
+  name: string;
+  phone: string;
+  email: string | null;
+}
+
+/** Deduplicate by phone within the batch, then filter against existing DB rows. */
+async function deduplicateBatch(
+  rows: NormalisedLead[],
+  campaignId: number
+): Promise<{ valid: NormalisedLead[]; skipped: number }> {
+  // Within-batch deduplication (keep first occurrence per phone)
+  const seen = new Set<string>();
+  const unique: NormalisedLead[] = [];
+  for (const r of rows) {
+    if (!seen.has(r.phone)) {
+      seen.add(r.phone);
+      unique.push(r);
+    }
+  }
+
+  // DB deduplication — find phones already in this campaign
+  if (unique.length === 0) return { valid: [], skipped: rows.length };
+
+  const phones = unique.map((r) => r.phone);
+  const existing = await db
+    .select({ phone: leadsTable.phone })
+    .from(leadsTable)
+    .where(and(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.phone, phones)));
+
+  const existingPhones = new Set(existing.map((e) => e.phone));
+  const valid = unique.filter((r) => !existingPhones.has(r.phone));
+
+  return { valid, skipped: rows.length - valid.length };
+}
+
+/** Verify campaign exists and return it. */
+async function getCampaign(campaignId: number) {
+  const [campaign] = await db
+    .select()
+    .from(campaignsTable)
+    .where(eq(campaignsTable.id, campaignId));
+  return campaign ?? null;
+}
+
+// ── POST /leads/add ─────────────────────────────────────────────────────────
+// Manual single-lead entry
+const addLeadSchema = z.object({
+  name: z.string().min(1),
+  phone_number: z.string().min(1),
+  email: z.string().email().optional().nullable(),
+  campaign_id: z.coerce.number().int().positive(),
+});
+
+router.post("/leads/add", authenticate, async (req, res): Promise<void> => {
+  const parsed = addLeadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" });
     return;
   }
 
-  const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, campaignId));
+  const { name, phone_number, email, campaign_id } = parsed.data;
+
+  const phone = normalisePhone(phone_number);
+  if (!phone) {
+    res.status(400).json({ error: "Invalid phone_number" });
+    return;
+  }
+
+  const campaign = await getCampaign(campaign_id);
   if (!campaign) {
     res.status(404).json({ error: "Campaign not found" });
     return;
   }
 
-  // Handle CSV file upload
-  if (req.file) {
-    const csvContent = req.file.buffer.toString("utf-8");
-    const inserted: unknown[] = [];
+  // Duplicate check (same phone + campaign)
+  const [dup] = await db
+    .select({ id: leadsTable.id })
+    .from(leadsTable)
+    .where(and(eq(leadsTable.campaignId, campaign_id), eq(leadsTable.phone, phone)));
 
-    await new Promise<void>((resolve, reject) => {
-      parse(csvContent, { columns: true, skip_empty_lines: true }, async (err, records) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        const leads = records.map((record: Record<string, string>) => ({
-          name: record.name ?? record.Name ?? "Unknown",
-          phone: record.phone ?? record.Phone ?? record.phone_number ?? "",
-          campaignId,
-          metadata: JSON.stringify(record),
-        })).filter((l: { phone: string }) => l.phone);
-
-        if (leads.length > 0) {
-          const result = await db.insert(leadsTable).values(leads).returning();
-          inserted.push(...result);
-        }
-
-        resolve();
-      });
-    });
-
-    res.status(201).json({ inserted: inserted.length, message: `${inserted.length} leads uploaded` });
+  if (dup) {
+    res.status(409).json({ error: "Lead with this phone number already exists in this campaign" });
     return;
   }
 
-  // Handle single lead JSON
-  const parsed = createLeadSchema.safeParse({ ...req.body, campaignId });
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
-    return;
-  }
+  const [lead] = await db
+    .insert(leadsTable)
+    .values({ name, phone, email: email ?? null, campaignId: campaign_id, source: "manual" })
+    .returning();
 
-  const [lead] = await db.insert(leadsTable).values(parsed.data).returning();
-  res.status(201).json(lead);
+  res.status(201).json({
+    id: lead.id,
+    name: lead.name,
+    phone_number: lead.phone,
+    email: lead.email,
+    campaign_id: lead.campaignId,
+    source: lead.source,
+    status: lead.status,
+    created_at: lead.createdAt,
+  });
 });
 
+// ── POST /leads/upload ──────────────────────────────────────────────────────
+// CSV or Excel bulk upload — multipart/form-data field: "file" + "campaign_id"
+router.post(
+  "/leads/upload",
+  authenticate,
+  requireRole("admin"),
+  upload.single("file"),
+  async (req, res): Promise<void> => {
+    const campaignId = parseInt(req.body.campaign_id ?? req.body.campaignId, 10);
+    if (isNaN(campaignId)) {
+      res.status(400).json({ error: "campaign_id is required" });
+      return;
+    }
+
+    if (!req.file) {
+      res.status(400).json({ error: "No file uploaded. Send a CSV or XLSX file in the 'file' field." });
+      return;
+    }
+
+    const campaign = await getCampaign(campaignId);
+    if (!campaign) {
+      res.status(404).json({ error: "Campaign not found" });
+      return;
+    }
+
+    // Detect format by MIME type or original name
+    const mime = req.file.mimetype.toLowerCase();
+    const ext = (req.file.originalname ?? "").split(".").pop()?.toLowerCase();
+    const isExcel =
+      mime.includes("spreadsheet") ||
+      mime.includes("excel") ||
+      mime.includes("officedocument") ||
+      ext === "xlsx" ||
+      ext === "xls" ||
+      ext === "ods";
+
+    let rawRows: Record<string, unknown>[];
+    try {
+      rawRows = isExcel ? parseExcel(req.file.buffer) : parseCsv(req.file.buffer);
+    } catch (err) {
+      logger.warn({ err }, "File parse error");
+      res.status(400).json({ error: "Could not parse file. Ensure it is a valid CSV or XLSX." });
+      return;
+    }
+
+    // Extract + validate
+    const validRows: NormalisedLead[] = [];
+    let invalidCount = 0;
+    for (const row of rawRows) {
+      const { name, phone, email } = extractRow(row);
+      if (!phone) { invalidCount++; continue; }
+      validRows.push({ name, phone, email });
+    }
+
+    // Deduplicate
+    const { valid, skipped } = await deduplicateBatch(validRows, campaignId);
+    const totalSkipped = invalidCount + skipped;
+
+    if (valid.length === 0) {
+      res.json({ total_uploaded: 0, total_skipped: totalSkipped });
+      return;
+    }
+
+    const inserted = await db
+      .insert(leadsTable)
+      .values(valid.map((r) => ({ name: r.name, phone: r.phone, email: r.email, campaignId, source: "csv" as const })))
+      .returning();
+
+    logger.info({ campaignId, uploaded: inserted.length, skipped: totalSkipped }, "Bulk CSV/XLSX upload");
+    res.status(201).json({ total_uploaded: inserted.length, total_skipped: totalSkipped });
+  }
+);
+
+// ── POST /leads/import-sheet ────────────────────────────────────────────────
+// Google Sheets public import — fetches CSV export from a Sheets URL
+const importSheetSchema = z.object({
+  sheet_url: z.string().url(),
+  campaign_id: z.coerce.number().int().positive(),
+});
+
+router.post("/leads/import-sheet", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const parsed = importSheetSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "sheet_url and campaign_id are required" });
+    return;
+  }
+
+  const { sheet_url, campaign_id } = parsed.data;
+
+  // Extract sheet ID from any Google Sheets URL format
+  const idMatch = sheet_url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (!idMatch) {
+    res.status(400).json({ error: "Invalid Google Sheets URL. Expected: https://docs.google.com/spreadsheets/d/{sheet_id}/..." });
+    return;
+  }
+
+  const campaign = await getCampaign(campaign_id);
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+
+  const sheetId = idMatch[1];
+  const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+
+  let rawRows: Record<string, unknown>[];
+  try {
+    const response = await axios.get<Buffer>(csvUrl, { responseType: "arraybuffer", timeout: 15000 });
+    rawRows = parseCsv(Buffer.from(response.data));
+  } catch (err) {
+    logger.warn({ err, sheetId }, "Google Sheets fetch failed");
+    res.status(400).json({
+      error: "Could not fetch the Google Sheet. Make sure the sheet is public (Anyone with link → Viewer).",
+    });
+    return;
+  }
+
+  // Extract + validate
+  const validRows: NormalisedLead[] = [];
+  let invalidCount = 0;
+  for (const row of rawRows) {
+    const { name, phone, email } = extractRow(row);
+    if (!phone) { invalidCount++; continue; }
+    validRows.push({ name, phone, email });
+  }
+
+  const { valid, skipped } = await deduplicateBatch(validRows, campaign_id);
+  const totalSkipped = invalidCount + skipped;
+
+  if (valid.length === 0) {
+    res.json({ total_uploaded: 0, total_skipped: totalSkipped });
+    return;
+  }
+
+  const inserted = await db
+    .insert(leadsTable)
+    .values(valid.map((r) => ({ name: r.name, phone: r.phone, email: r.email, campaignId: campaign_id, source: "sheet" as const })))
+    .returning();
+
+  logger.info({ campaign_id, uploaded: inserted.length, skipped: totalSkipped, sheetId }, "Google Sheets import");
+  res.status(201).json({ total_uploaded: inserted.length, total_skipped: totalSkipped });
+});
+
+// ── GET /leads/:campaign_id ─────────────────────────────────────────────────
+// List leads for a campaign. Optional ?source=manual|csv|sheet filter.
+router.get("/leads/:campaign_id", authenticate, async (req, res): Promise<void> => {
+  const campaignId = parseInt(req.params.campaign_id, 10);
+  if (isNaN(campaignId)) {
+    res.status(400).json({ error: "Invalid campaign_id" });
+    return;
+  }
+
+  const sourceFilter = req.query.source as string | undefined;
+  const allowedSources = ["manual", "csv", "sheet"] as const;
+
+  let leads;
+  if (sourceFilter && allowedSources.includes(sourceFilter as typeof allowedSources[number])) {
+    leads = await db
+      .select()
+      .from(leadsTable)
+      .where(and(
+        eq(leadsTable.campaignId, campaignId),
+        eq(leadsTable.source, sourceFilter as typeof allowedSources[number])
+      ))
+      .orderBy(leadsTable.createdAt);
+  } else {
+    leads = await db
+      .select()
+      .from(leadsTable)
+      .where(eq(leadsTable.campaignId, campaignId))
+      .orderBy(leadsTable.createdAt);
+  }
+
+  res.json(
+    leads.map((l) => ({
+      id: l.id,
+      name: l.name,
+      phone_number: l.phone,
+      email: l.email,
+      campaign_id: l.campaignId,
+      source: l.source,
+      status: l.status,
+      created_at: l.createdAt,
+    }))
+  );
+});
+
+// ── GET /leads (legacy — kept for backward compat) ───────────────────────────
 router.get("/leads", authenticate, async (req, res): Promise<void> => {
-  const campaignIdRaw = req.query.campaignId;
-  
+  const campaignIdRaw = req.query.campaignId ?? req.query.campaign_id;
   if (campaignIdRaw) {
     const campaignId = parseInt(String(campaignIdRaw), 10);
     if (!isNaN(campaignId)) {
-      const leads = await db.select().from(leadsTable).where(eq(leadsTable.campaignId, campaignId));
-      res.json(leads);
+      const leads = await db
+        .select()
+        .from(leadsTable)
+        .where(eq(leadsTable.campaignId, campaignId))
+        .orderBy(leadsTable.createdAt);
+      res.json(leads.map((l) => ({
+        id: l.id, name: l.name, phone_number: l.phone, email: l.email,
+        campaign_id: l.campaignId, source: l.source, status: l.status, created_at: l.createdAt,
+      })));
       return;
     }
   }
-
-  const leads = await db.select().from(leadsTable);
-  res.json(leads);
+  const leads = await db.select().from(leadsTable).orderBy(leadsTable.createdAt);
+  res.json(leads.map((l) => ({
+    id: l.id, name: l.name, phone_number: l.phone, email: l.email,
+    campaign_id: l.campaignId, source: l.source, status: l.status, created_at: l.createdAt,
+  })));
 });
 
 export default router;
