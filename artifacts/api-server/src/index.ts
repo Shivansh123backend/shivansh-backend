@@ -5,7 +5,7 @@ import { initWebSocket } from "./websocket/index.js";
 import { getCallQueue } from "./queue/callQueue.js";
 import { closeRedis } from "./lib/redis.js";
 import { closeQueue } from "./queue/callQueue.js";
-import { ensureAdminUser } from "./lib/startup.js";
+import { ensureAdminUser, ensurePhoneNumbers } from "./lib/startup.js";
 
 const rawPort = process.env["PORT"];
 
@@ -41,6 +41,11 @@ if (process.env.REDIS_HOST || process.env.REDIS_URL) {
 // Ensure admin user exists (safe to call on every boot — checks first)
 ensureAdminUser().catch((err) => {
   logger.warn({ err }, "ensureAdminUser failed — continuing anyway");
+});
+
+// Ensure real Telnyx phone numbers are seeded
+ensurePhoneNumbers().catch((err) => {
+  logger.warn({ err }, "ensurePhoneNumbers failed — continuing anyway");
 });
 
 httpServer.listen(port, () => {

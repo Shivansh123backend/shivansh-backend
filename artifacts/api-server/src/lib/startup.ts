@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
-import { usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { usersTable, phoneNumbersTable } from "@workspace/db";
+import { eq, count } from "drizzle-orm";
 import bcrypt from "bcrypt";
 import { logger } from "./logger.js";
 
@@ -36,6 +36,40 @@ const DEFAULT_USERS = [
   { name: "Admin Shivansh", email: "admin@shivansh.com", password: "Admin@123", role: "admin" as const },
   { name: "Shivansh Agent", email: "agent@shivansh.com", password: "Agent@123", role: "agent" as const },
 ];
+
+// ── Real Telnyx phone numbers ─────────────────────────────────────────────────
+const REAL_TELNYX_NUMBERS = [
+  "+12039199980", "+12038848654", "+12037913991", "+12037913988",
+  "+12037913985", "+12037913971", "+12037913963", "+12037148373",
+  "+12036642119", "+12035680709", "+12035680211", "+12034058605",
+  "+12034052971", "+12034052961", "+12034037573",
+];
+
+export async function ensurePhoneNumbers(): Promise<void> {
+  try {
+    const [{ total }] = await db
+      .select({ total: count() })
+      .from(phoneNumbersTable)
+      .where(eq(phoneNumbersTable.provider, "telnyx"));
+
+    if (Number(total) > 0) {
+      logger.info({ count: total }, "Phone numbers already seeded");
+      return;
+    }
+
+    const values = REAL_TELNYX_NUMBERS.map((phoneNumber, i) => ({
+      phoneNumber,
+      provider: "telnyx" as const,
+      priority: i === 0 ? 1 : 2,
+      status: "active" as const,
+    }));
+
+    await db.insert(phoneNumbersTable).values(values);
+    logger.info({ count: values.length }, "Seeded real Telnyx phone numbers");
+  } catch (err) {
+    logger.error({ err }, "Failed to seed phone numbers");
+  }
+}
 
 async function ensureDefaultUsers(): Promise<void> {
   for (const u of DEFAULT_USERS) {

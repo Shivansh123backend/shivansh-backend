@@ -1,8 +1,8 @@
 import { Router, type IRouter } from "express";
 import axios from "axios";
 import { db } from "@workspace/db";
-import { smsLogsTable, leadsTable, campaignsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { smsLogsTable, leadsTable, campaignsTable, phoneNumbersTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { logger } from "../lib/logger.js";
 import { z } from "zod";
@@ -82,9 +82,20 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const sendSmsSchema = z.object({
   to: z.string().min(1),
-  from: z.string().min(1),
+  from: z.string().optional(),
   message: z.string().min(1),
 });
+
+/** Pick an active Telnyx number from DB, priority 1 first. */
+async function pickFromNumber(): Promise<string | null> {
+  const [row] = await db
+    .select({ phoneNumber: phoneNumbersTable.phoneNumber })
+    .from(phoneNumbersTable)
+    .where(and(eq(phoneNumbersTable.provider, "telnyx"), eq(phoneNumbersTable.status, "active")))
+    .orderBy(phoneNumbersTable.priority)
+    .limit(1);
+  return row?.phoneNumber ?? null;
+}
 
 router.post("/sms/send", authenticate, async (req, res): Promise<void> => {
   if (!TELNYX_API_KEY) {
@@ -98,7 +109,12 @@ router.post("/sms/send", authenticate, async (req, res): Promise<void> => {
     return;
   }
 
-  const { to, from, message } = parsed.data;
+  const { to, message } = parsed.data;
+  const from = parsed.data.from ?? await pickFromNumber();
+  if (!from) {
+    res.status(503).json({ error: "No active Telnyx phone number available for sending" });
+    return;
+  }
   const result = await sendViaTelnyx(to, from, message);
 
   await logSms({
@@ -126,7 +142,7 @@ router.post("/sms/send", authenticate, async (req, res): Promise<void> => {
 // Send personalised SMS to every lead in a campaign
 
 const campaignSmsSchema = z.object({
-  from: z.string().min(1),
+  from: z.string().optional(),
   message: z.string().min(1), // supports {{name}}, {{phone_number}}, {{email}}
 });
 
@@ -152,7 +168,12 @@ router.post(
       return;
     }
 
-    const { from, message: template } = parsed.data;
+    const from = parsed.data.from ?? await pickFromNumber();
+    if (!from) {
+      res.status(503).json({ error: "No active Telnyx phone number available for sending" });
+      return;
+    }
+    const { message: template } = parsed.data;
 
     // Verify campaign exists
     const [campaign] = await db
