@@ -2,7 +2,7 @@ import { useListCampaigns, useListCalls, useGetLiveCalls } from "@workspace/api-
 import { Layout, PageHeader } from "@/components/layout";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Layers, CheckCircle, Clock, AlertCircle, Info } from "lucide-react";
+import { Layers, CheckCircle, Clock, AlertCircle } from "lucide-react";
 
 export default function QueuesPage() {
   const { data: campaigns, isLoading: campLoading } = useListCampaigns();
@@ -20,13 +20,6 @@ export default function QueuesPage() {
     <Layout>
       <PageHeader title="Queues" subtitle="Call queue status and throughput" />
       <div className="p-6 space-y-4">
-        <div className="border border-yellow-500/20 rounded bg-yellow-500/5 px-4 py-3 flex items-start gap-3">
-          <Info className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs font-mono text-yellow-400/80 leading-relaxed">
-            Redis queue is disabled — set the <span className="font-bold text-yellow-400">REDIS_HOST</span> environment variable to enable BullMQ-powered queuing with retry logic, concurrency control, and priority scheduling.
-          </p>
-        </div>
-
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {isLoading ? (
             [...Array(4)].map((_, i) => <Skeleton key={i} className="h-20 rounded" />)
