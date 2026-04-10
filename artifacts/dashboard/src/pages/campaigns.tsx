@@ -148,7 +148,23 @@ function LaunchModal({
   const [selectedNumber, setSelectedNumber] = useState(campaign.fromNumber ?? "");
   const [selectedVoice, setSelectedVoice] = useState(campaign.voice ?? "");
   const [prompt, setPrompt] = useState(
-    campaign.agentPrompt ?? "Hello, this is an AI assistant calling on behalf of our team. How can I help you today?"
+    campaign.agentPrompt ?? `You are a professional AI voice agent making an outbound call. Follow these steps:
+
+1. GREETING: Introduce yourself warmly — "Hello, I'm an AI assistant calling on behalf of our team. Am I speaking with [Lead Name]?"
+
+2. CONFIRM DETAILS: Verify the contact's information one by one:
+   - Full name: "Could you please confirm your full name?"
+   - Phone number: "Is this still the best number to reach you?"
+   - Email address: "Could you confirm or provide your email address?"
+   - Address: "Could you confirm your current mailing or home address?"
+
+3. PURPOSE: After confirming their details, proceed with the reason for your call and assist them.
+
+4. TONE: Always be warm, professional, and concise. Never rush the contact.
+
+5. OPT-OUT: If the contact asks to be removed from the list, acknowledge immediately, apologise for the interruption, and end the call respectfully.
+
+6. UNAVAILABLE: If the contact is unavailable or requests a callback, note their preferred time and close politely.`
   );
   const [isLaunching, setIsLaunching] = useState(false);
 
@@ -283,7 +299,7 @@ function LaunchModal({
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               className="font-mono text-xs min-h-[100px] resize-none"
-              placeholder="Enter the AI agent's script or prompt..."
+              placeholder="Describe what the agent should do — e.g. greet the contact, confirm their name / phone / email / address, then explain the purpose of the call..."
             />
             <p className="text-[10px] text-muted-foreground font-mono">
               This is what the AI will say when the call connects

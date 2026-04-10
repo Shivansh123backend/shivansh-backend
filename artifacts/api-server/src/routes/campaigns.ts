@@ -202,7 +202,23 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
 
 async function resolveCampaignAssets(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
   // Campaign's own fields take priority over linked AI agent values
-  let script = campaign.agentPrompt ?? "Hello, this is an AI assistant calling on behalf of our team.";
+  let script = campaign.agentPrompt ?? `You are a professional AI voice agent making an outbound call. Follow these steps:
+
+1. GREETING: Introduce yourself warmly — "Hello, I'm an AI assistant calling on behalf of our team. Am I speaking with [Lead Name]?"
+
+2. CONFIRM DETAILS: Verify the contact's information one by one:
+   - Full name: "Could you please confirm your full name?"
+   - Phone number: "Is this still the best number to reach you?"
+   - Email address: "Could you confirm or provide your email address?"
+   - Address: "Could you confirm your current mailing or home address?"
+
+3. PURPOSE: After confirming their details, proceed with the reason for your call and assist them.
+
+4. TONE: Always be warm, professional, and concise. Never rush the contact.
+
+5. OPT-OUT: If the contact asks to be removed from the list, acknowledge immediately, apologise for the interruption, and end the call respectfully.
+
+6. UNAVAILABLE: If the contact is unavailable or requests a callback, note their preferred time and close politely.`;
   let voiceName = campaign.voice ?? "default";
   let fromNumber = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
   const transferNumber = campaign.transferNumber ?? campaign.transferRules ?? undefined;
