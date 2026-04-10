@@ -370,7 +370,7 @@ export const useCreateUser = <
  * @summary List AI agents
  */
 export const getListAgentsUrl = () => {
-  return `/api/agents`;
+  return `/api/ai-agents`;
 };
 
 export const listAgents = async (options?: RequestInit): Promise<AiAgent[]> => {
@@ -381,7 +381,7 @@ export const listAgents = async (options?: RequestInit): Promise<AiAgent[]> => {
 };
 
 export const getListAgentsQueryKey = () => {
-  return [`/api/agents`] as const;
+  return [`/api/ai-agents`] as const;
 };
 
 export const getListAgentsQueryOptions = <
@@ -443,7 +443,7 @@ export function useListAgents<
  * @summary Create AI agent
  */
 export const getCreateAgentUrl = () => {
-  return `/api/agents/create`;
+  return `/api/ai-agents/create`;
 };
 
 export const createAgent = async (
@@ -529,7 +529,7 @@ export const useCreateAgent = <
  * @summary Get voices assigned to an agent
  */
 export const getGetAgentVoicesUrl = (id: number) => {
-  return `/api/agents/${id}/voices`;
+  return `/api/ai-agents/${id}/voices`;
 };
 
 export const getAgentVoices = async (
@@ -543,7 +543,7 @@ export const getAgentVoices = async (
 };
 
 export const getGetAgentVoicesQueryKey = (id: number) => {
-  return [`/api/agents/${id}/voices`] as const;
+  return [`/api/ai-agents/${id}/voices`] as const;
 };
 
 export const getGetAgentVoicesQueryOptions = <
@@ -616,7 +616,7 @@ export function useGetAgentVoices<
  * @summary Assign voice to agent
  */
 export const getAddAgentVoiceUrl = (id: number) => {
-  return `/api/agents/${id}/voices`;
+  return `/api/ai-agents/${id}/voices`;
 };
 
 export const addAgentVoice = async (

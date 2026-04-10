@@ -6,3 +6,4 @@ export * from "./phone_numbers";
 export * from "./leads";
 export * from "./calls";
 export * from "./call_logs";
+export * from "./human_agents";

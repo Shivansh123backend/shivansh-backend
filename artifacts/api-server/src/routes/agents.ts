@@ -19,7 +19,7 @@ const addVoiceSchema = z.object({
   priority: z.number().default(1),
 });
 
-router.post("/agents/create", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+router.post("/ai-agents/create", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const parsed = createAgentSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -30,12 +30,12 @@ router.post("/agents/create", authenticate, requireRole("admin"), async (req, re
   res.status(201).json(agent);
 });
 
-router.get("/agents", authenticate, async (req, res): Promise<void> => {
+router.get("/ai-agents", authenticate, async (req, res): Promise<void> => {
   const agents = await db.select().from(aiAgentsTable);
   res.json(agents);
 });
 
-router.post("/agents/:id/voices", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+router.post("/ai-agents/:id/voices", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const agentId = parseInt(rawId, 10);
   if (isNaN(agentId)) {
@@ -63,7 +63,7 @@ router.post("/agents/:id/voices", authenticate, requireRole("admin"), async (req
   res.status(201).json(agentVoice);
 });
 
-router.get("/agents/:id/voices", authenticate, async (req, res): Promise<void> => {
+router.get("/ai-agents/:id/voices", authenticate, async (req, res): Promise<void> => {
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const agentId = parseInt(rawId, 10);
   if (isNaN(agentId)) {

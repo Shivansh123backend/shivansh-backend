@@ -12,6 +12,7 @@ import agentStatusRouter from "./agentStatus.js";
 import manualCallRouter from "./manualCall.js";
 import callLogsRouter from "./callLogs.js";
 import dashboardRouter from "./dashboard.js";
+import humanAgentsRouter from "./humanAgents.js";
 import { globalErrorHandler } from "../lib/errors.js";
 import type { Request, Response, NextFunction } from "express";
 
@@ -30,6 +31,7 @@ router.use(agentStatusRouter);
 router.use(manualCallRouter);
 router.use(callLogsRouter);
 router.use(dashboardRouter);
+router.use(humanAgentsRouter);
 
 router.use((err: Error, req: Request, res: Response, next: NextFunction) => globalErrorHandler(err, req, res, next));
 
