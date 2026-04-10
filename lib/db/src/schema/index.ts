@@ -7,3 +7,4 @@ export * from "./leads";
 export * from "./calls";
 export * from "./call_logs";
 export * from "./human_agents";
+export * from "./sms_logs";
