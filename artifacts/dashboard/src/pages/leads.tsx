@@ -1,11 +1,11 @@
 import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useListLeads,
-  useUploadLeads,
   useListCampaigns,
   getListLeadsQueryKey,
+  customFetch,
 } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
 import { Layout, PageHeader } from "@/components/layout";
 import { StatusBadge } from "./dashboard";
 import { Button } from "@/components/ui/button";
@@ -19,24 +19,44 @@ import { Plus, X, Filter } from "lucide-react";
 function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [campaignId, setCampaignId] = useState("");
-  const uploadLeads = useUploadLeads();
   const qc = useQueryClient();
   const { toast } = useToast();
 
+  const addLead = useMutation({
+    mutationFn: async () => {
+      const res = await customFetch("/api/leads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          phone_number: phone,
+          email: email || undefined,
+          campaign_id: parseInt(campaignId),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? "Failed to add lead");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      toast({ title: "Lead added successfully" });
+      onClose();
+    },
+    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+  });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    uploadLeads.mutate(
-      { data: { leads: [{ name, phone }], campaignId: parseInt(campaignId) } },
-      {
-        onSuccess: () => {
-          qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
-          toast({ title: "Lead added" });
-          onClose();
-        },
-        onError: () => toast({ title: "Failed to add lead", variant: "destructive" }),
-      }
-    );
+    if (!campaignId) {
+      toast({ title: "Please select a campaign", variant: "destructive" });
+      return;
+    }
+    addLead.mutate();
   };
 
   return (
@@ -49,15 +69,19 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           <div className="space-y-1.5">
             <Label className="text-[10px] font-mono uppercase text-muted-foreground">Full Name</Label>
-            <Input value={name} onChange={e => setName(e.target.value)} className="font-mono text-sm" required />
+            <Input value={name} onChange={e => setName(e.target.value)} className="font-mono text-sm" placeholder="John Smith" required />
           </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] font-mono uppercase text-muted-foreground">Phone Number</Label>
             <Input value={phone} onChange={e => setPhone(e.target.value)} className="font-mono text-sm" placeholder="+14155550100" required />
           </div>
           <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">Email <span className="text-muted-foreground/50 normal-case">(optional)</span></Label>
+            <Input value={email} onChange={e => setEmail(e.target.value)} className="font-mono text-sm" placeholder="john@example.com" type="email" />
+          </div>
+          <div className="space-y-1.5">
             <Label className="text-[10px] font-mono uppercase text-muted-foreground">Campaign</Label>
-            <Select value={campaignId} onValueChange={setCampaignId} required>
+            <Select value={campaignId} onValueChange={setCampaignId}>
               <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="Select campaign" /></SelectTrigger>
               <SelectContent>
                 {campaigns.map(c => (
@@ -66,8 +90,8 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
               </SelectContent>
             </Select>
           </div>
-          <Button type="submit" className="w-full font-mono text-xs uppercase tracking-wider" disabled={uploadLeads.isPending}>
-            {uploadLeads.isPending ? "Adding..." : "Add Lead"}
+          <Button type="submit" className="w-full font-mono text-xs uppercase tracking-wider" disabled={addLead.isPending}>
+            {addLead.isPending ? "Adding..." : "Add Lead"}
           </Button>
         </form>
       </div>
