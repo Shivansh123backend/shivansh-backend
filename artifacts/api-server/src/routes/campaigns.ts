@@ -14,7 +14,7 @@ import { eq, and } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { emitToSupervisors } from "../websocket/index.js";
-import { triggerCall, delay } from "../services/workerService.js";
+import { enqueueCall, delay } from "../services/workerService.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -171,13 +171,13 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
       .values({ phoneNumber: lead.phone, campaignId, status: "initiated" })
       .returning();
 
-    const result = await triggerCall({
-      to: lead.phone,
-      from: fromNumber,
-      script,
+    const result = await enqueueCall({
+      phone: lead.phone,
+      from_number: fromNumber,
+      agent_prompt: script,
       voice: voiceName,
       transfer_number: transferNumber,
-      campaign_id: campaignId,
+      campaign_id: String(campaignId),
       campaign_name: campaign.name,
     });
 
