@@ -39,7 +39,7 @@ if (process.env.NODE_ENV === "production") {
   // with index.html fallback for client-side routing (SPA)
   const dashboardDist = path.join(process.cwd(), "artifacts/dashboard/dist/public");
   app.use(express.static(dashboardDist));
-  app.get("*", (_req, res) => {
+  app.get("/{*path}", (_req, res) => {
     res.sendFile(path.join(dashboardDist, "index.html"));
   });
 } else {
