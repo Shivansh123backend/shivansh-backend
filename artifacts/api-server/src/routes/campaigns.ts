@@ -61,6 +61,51 @@ router.get("/campaigns", authenticate, async (req, res): Promise<void> => {
   res.json(campaigns);
 });
 
+const updateCampaignSchema = z.object({
+  name: z.string().min(1).optional(),
+  agentPrompt: z.string().optional(),
+  voice: z.string().optional(),
+  fromNumber: z.string().optional(),
+  transferNumber: z.string().optional(),
+  maxConcurrentCalls: z.number().min(1).max(100).optional(),
+});
+
+router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(rawId, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid campaign ID" });
+    return;
+  }
+
+  const parsed = updateCampaignSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, id));
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+
+  const [updated] = await db
+    .update(campaignsTable)
+    .set(parsed.data)
+    .where(eq(campaignsTable.id, id))
+    .returning();
+
+  await createAuditLog({
+    userId: req.user?.userId,
+    action: "update",
+    resource: "campaign",
+    resourceId: id,
+  });
+
+  res.json(updated);
+});
+
 router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(rawId, 10);
