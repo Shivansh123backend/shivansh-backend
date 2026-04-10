@@ -66,9 +66,7 @@ export default function CallsPage() {
       const params = logFilterCampaign !== "__all__"
         ? `?campaignId=${logFilterCampaign}`
         : "";
-      const res = await customFetch(`/api/call-logs${params}`);
-      if (!res.ok) throw new Error("Failed to fetch call logs");
-      return res.json();
+      return await customFetch<CallLog[]>(`/api/call-logs${params}`);
     },
     enabled: activeTab === "call-logs",
     refetchInterval: activeTab === "call-logs" ? 10000 : false,

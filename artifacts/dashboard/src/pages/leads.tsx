@@ -26,7 +26,7 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
 
   const addLead = useMutation({
     mutationFn: async () => {
-      const res = await customFetch("/api/leads", {
+      return await customFetch("/api/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -36,11 +36,6 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
           campaign_id: parseInt(campaignId),
         }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error ?? "Failed to add lead");
-      }
-      return res.json();
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
