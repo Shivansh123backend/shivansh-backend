@@ -15,6 +15,11 @@ export const campaignsTable = pgTable("campaigns", {
   routingType: routingTypeEnum("routing_type").notNull().default("ai"),
   maxConcurrentCalls: integer("max_concurrent_calls").notNull().default(5),
   transferRules: text("transfer_rules"),
+  // AI calling configuration — used directly by worker service
+  agentPrompt: text("agent_prompt"),
+  voice: text("voice"),
+  fromNumber: text("from_number"),
+  transferNumber: text("transfer_number"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

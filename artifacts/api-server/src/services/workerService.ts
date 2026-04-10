@@ -9,6 +9,7 @@ export interface TriggerCallPayload {
   script: string;
   voice: string;
   transfer_number?: string;
+  campaign_id: number;
 }
 
 export interface TriggerCallResult {
@@ -19,9 +20,9 @@ export interface TriggerCallResult {
 
 export async function triggerCall(payload: TriggerCallPayload): Promise<TriggerCallResult> {
   try {
-    logger.info({ to: payload.to, from: payload.from }, `Call triggered to ${payload.to}`);
+    logger.info({ to: payload.to, from: payload.from, campaignId: payload.campaign_id }, `Call triggered to ${payload.to}`);
 
-    const response = await axios.post(`${WORKER_URL}/call`, payload, {
+    const response = await axios.post(`${WORKER_URL}/start-call`, payload, {
       headers: { "Content-Type": "application/json" },
       timeout: 15000,
     });
