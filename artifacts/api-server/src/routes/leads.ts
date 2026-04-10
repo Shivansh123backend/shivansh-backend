@@ -117,14 +117,26 @@ async function getCampaign(campaignId: number) {
 
 // ── POST /leads/add ─────────────────────────────────────────────────────────
 // Manual single-lead entry
+// Accept both snake_case and camelCase field names from any client
 const addLeadSchema = z.object({
   name: z.string().min(1),
-  phone_number: z.string().min(1),
+  phone_number: z.string().min(1).optional(),
+  phone: z.string().min(1).optional(),
+  phoneNumber: z.string().min(1).optional(),
   email: z.string().email().optional().nullable(),
-  campaign_id: z.coerce.number().int().positive(),
-});
+  campaign_id: z.coerce.number().int().positive().optional(),
+  campaignId: z.coerce.number().int().positive().optional(),
+}).transform((d) => ({
+  name: d.name,
+  phone_number: d.phone_number ?? d.phone ?? d.phoneNumber ?? "",
+  email: d.email,
+  campaign_id: d.campaign_id ?? d.campaignId ?? 0,
+}));
 
-router.post("/leads/add", authenticate, async (req, res): Promise<void> => {
+async function handleAddLead(
+  req: import("express").Request,
+  res: import("express").Response,
+): Promise<void> {
   const parsed = addLeadSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" });
@@ -133,9 +145,14 @@ router.post("/leads/add", authenticate, async (req, res): Promise<void> => {
 
   const { name, phone_number, email, campaign_id } = parsed.data;
 
+  if (!campaign_id) {
+    res.status(400).json({ error: "campaign_id is required" });
+    return;
+  }
+
   const phone = normalisePhone(phone_number);
   if (!phone) {
-    res.status(400).json({ error: "Invalid phone_number" });
+    res.status(400).json({ error: "Invalid phone number" });
     return;
   }
 
@@ -145,7 +162,6 @@ router.post("/leads/add", authenticate, async (req, res): Promise<void> => {
     return;
   }
 
-  // Duplicate check (same phone + campaign)
   const [dup] = await db
     .select({ id: leadsTable.id })
     .from(leadsTable)
@@ -171,7 +187,13 @@ router.post("/leads/add", authenticate, async (req, res): Promise<void> => {
     status: lead.status,
     created_at: lead.createdAt,
   });
-});
+}
+
+// POST /leads — standard REST endpoint (JSON single lead)
+router.post("/leads", authenticate, handleAddLead);
+
+// POST /leads/add — original endpoint kept for compatibility
+router.post("/leads/add", authenticate, handleAddLead);
 
 // ── POST /leads/upload ──────────────────────────────────────────────────────
 // CSV or Excel bulk upload — multipart/form-data field: "file" + "campaign_id"
@@ -188,6 +210,12 @@ router.post(
     }
 
     if (!req.file) {
+      // No file — if the body has JSON lead fields, handle as a single lead add
+      const contentType = req.headers["content-type"] ?? "";
+      if (contentType.includes("application/json") || req.body?.name) {
+        await handleAddLead(req, res);
+        return;
+      }
       res.status(400).json({ error: "No file uploaded. Send a CSV or XLSX file in the 'file' field." });
       return;
     }
