@@ -20,19 +20,29 @@ export interface TriggerCallResult {
   error?: string;
 }
 
+function isHtmlResponse(data: unknown): boolean {
+  return typeof data === "string" && data.trimStart().startsWith("<");
+}
+
 export async function triggerCall(payload: TriggerCallPayload): Promise<TriggerCallResult> {
   try {
-    logger.info({ to: payload.to, from: payload.from, campaignId: payload.campaign_id }, `Call triggered to ${payload.to}`);
+    logger.info({ to: payload.to, from: payload.from, campaignId: payload.campaign_id }, `Triggering call to ${payload.to}`);
 
     const response = await axios.post(`${WORKER_URL}/start-call`, payload, {
       headers: { "Content-Type": "application/json" },
       timeout: 15000,
     });
 
+    if (isHtmlResponse(response.data)) {
+      logger.warn(
+        { to: payload.to, workerUrl: WORKER_URL },
+        `Worker returned HTML for ${payload.to} — endpoint not configured`,
+      );
+      return { success: false, error: "Worker endpoint /start-call is not configured (returned HTML). Check WORKER_URL." };
+    }
+
     logger.info({ to: payload.to, status: response.status }, `Worker accepted call to ${payload.to}`);
 
-    // Track the live call in Redis so the dashboard can show it in real time.
-    // Use phone+timestamp as call_id since we don't have an external call ID yet.
     const callId = `${payload.campaign_id}-${payload.to.replace(/\D/g, "")}-${Date.now()}`;
     await setActiveCall({
       call_id: callId,

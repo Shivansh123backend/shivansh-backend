@@ -13,7 +13,7 @@ const manualCallSchema = z.object({
   campaign_id: z.number().int().positive(),
 });
 
-router.post("/call/manual", authenticate, async (req, res): Promise<void> => {
+async function handleManualCall(req: import("express").Request, res: import("express").Response): Promise<void> {
   const parsed = manualCallSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "phone and campaign_id are required" });
@@ -87,6 +87,10 @@ router.post("/call/manual", authenticate, async (req, res): Promise<void> => {
   } else {
     res.status(502).json({ error: `Worker error for ${phone}: ${result.error}` });
   }
-});
+}
+
+// Both /call/manual and /calls/manual are accepted
+router.post("/call/manual", authenticate, handleManualCall);
+router.post("/calls/manual", authenticate, handleManualCall);
 
 export default router;

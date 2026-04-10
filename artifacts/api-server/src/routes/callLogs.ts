@@ -48,7 +48,29 @@ router.post("/calls/log", async (req, res): Promise<void> => {
   res.status(201).json(log);
 });
 
-// GET /call-logs/:campaign_id — return all logs for a campaign
+// GET /call-logs — return all call logs (optionally filtered by ?campaignId=)
+router.get("/call-logs", authenticate, async (req, res): Promise<void> => {
+  const campaignId = req.query.campaignId ? parseInt(req.query.campaignId as string, 10) : null;
+
+  let logs;
+  if (campaignId && !isNaN(campaignId)) {
+    logs = await db
+      .select()
+      .from(callLogsTable)
+      .where(eq(callLogsTable.campaignId, campaignId))
+      .orderBy(desc(callLogsTable.timestamp));
+  } else {
+    logs = await db
+      .select()
+      .from(callLogsTable)
+      .orderBy(desc(callLogsTable.timestamp))
+      .limit(500);
+  }
+
+  res.json(logs);
+});
+
+// GET /call-logs/:campaign_id — return all logs for a campaign (legacy route)
 router.get("/call-logs/:campaign_id", authenticate, async (req, res): Promise<void> => {
   const rawId = Array.isArray(req.params.campaign_id) ? req.params.campaign_id[0] : req.params.campaign_id;
   const campaignId = parseInt(rawId, 10);

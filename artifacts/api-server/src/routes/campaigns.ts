@@ -4,6 +4,7 @@ import {
   campaignsTable,
   campaignAgentsTable,
   leadsTable,
+  callLogsTable,
   usersTable,
   aiAgentsTable,
   voicesTable,
@@ -153,8 +154,7 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
 });
 
 async function triggerCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
-  // Resolve agent, voice, and caller phone number
-  const { script, voiceName, fromNumber } = await resolveCampaignAssets(campaignId, campaign);
+  const { script, voiceName, fromNumber, transferNumber } = await resolveCampaignAssets(campaignId, campaign);
 
   const pendingLeads = await db
     .select()
@@ -162,17 +162,30 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
     .where(and(eq(leadsTable.campaignId, campaignId), eq(leadsTable.status, "pending")))
     .limit(DEMO_LEAD_LIMIT);
 
-  logger.info(`Campaign ${campaignId}: triggering calls to ${pendingLeads.length} leads (limit ${DEMO_LEAD_LIMIT})`);
+  logger.info({ campaignId, count: pendingLeads.length, limit: DEMO_LEAD_LIMIT }, `Campaign starting — triggering calls`);
 
   for (const lead of pendingLeads) {
-    await triggerCall({
+    // Log call attempt immediately so CDR shows it even before worker responds
+    const [logEntry] = await db
+      .insert(callLogsTable)
+      .values({ phoneNumber: lead.phone, campaignId, status: "initiated" })
+      .returning();
+
+    const result = await triggerCall({
       to: lead.phone,
       from: fromNumber,
       script,
       voice: voiceName,
       transfer_number: transferNumber,
       campaign_id: campaignId,
+      campaign_name: campaign.name,
     });
+
+    // Update call log with outcome
+    await db
+      .update(callLogsTable)
+      .set({ status: result.success ? "completed" : "failed" })
+      .where(eq(callLogsTable.id, logEntry.id));
 
     // Mark lead as called regardless of worker outcome
     await db
@@ -180,12 +193,11 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
       .set({ status: "called" })
       .where(eq(leadsTable.id, lead.id));
 
-    // Small delay between calls to avoid rate limits
     const jitter = 500 + Math.floor(Math.random() * 500);
     await delay(jitter);
   }
 
-  logger.info(`Campaign ${campaignId}: finished dispatching ${pendingLeads.length} calls`);
+  logger.info({ campaignId, count: pendingLeads.length }, `Campaign finished dispatching calls`);
 }
 
 async function resolveCampaignAssets(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
