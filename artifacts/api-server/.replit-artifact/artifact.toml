@@ -15,14 +15,17 @@ run = "pnpm --filter @workspace/api-server run dev"
 [services.production]
 
 [services.production.build]
-args = ["sh", "-c", "pnpm --filter @workspace/dashboard run build && pnpm --filter @workspace/api-server run build && pnpm --filter @workspace/db run push-force"]
+# Schema push is intentionally excluded from build — DATABASE_URL is only
+# available at runtime (not during Docker build). It runs as part of the
+# start command below instead.
+args = ["sh", "-c", "pnpm --filter @workspace/dashboard run build && pnpm --filter @workspace/api-server run build"]
 
 [services.production.build.env]
 NODE_ENV = "production"
 
 [services.production.run]
-# we don't run through pnpm to make startup faster in production
-args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+# Push schema first (DATABASE_URL is injected at runtime), then start server.
+args = ["sh", "-c", "pnpm --filter @workspace/db run push-force && node --enable-source-maps ./artifacts/api-server/dist/index.mjs"]
 
 [services.production.run.env]
 PORT = "8080"

@@ -20,3 +20,7 @@ run = "pnpm --filter @workspace/dashboard run dev"
 [services.env]
 PORT = "23183"
 BASE_PATH = "/"
+
+# In production, the api-server artifact serves the compiled dashboard
+# as static files on port 8080. This artifact has no production service.
+[services.production]
