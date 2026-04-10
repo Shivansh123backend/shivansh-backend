@@ -1,5 +1,6 @@
 import axios from "axios";
 import { logger } from "../lib/logger.js";
+import { setActiveCall } from "../lib/redis.js";
 
 const WORKER_URL = process.env.WORKER_URL ?? "https://ai-voice-worker1.replit.app";
 
@@ -10,6 +11,7 @@ export interface TriggerCallPayload {
   voice: string;
   transfer_number?: string;
   campaign_id: number;
+  campaign_name?: string;
 }
 
 export interface TriggerCallResult {
@@ -28,6 +30,18 @@ export async function triggerCall(payload: TriggerCallPayload): Promise<TriggerC
     });
 
     logger.info({ to: payload.to, status: response.status }, `Worker accepted call to ${payload.to}`);
+
+    // Track the live call in Redis so the dashboard can show it in real time.
+    // Use phone+timestamp as call_id since we don't have an external call ID yet.
+    const callId = `${payload.campaign_id}-${payload.to.replace(/\D/g, "")}-${Date.now()}`;
+    await setActiveCall({
+      call_id: callId,
+      phone_number: payload.to,
+      campaign_id: payload.campaign_id,
+      campaign_name: payload.campaign_name,
+      status: "ringing",
+      started_at: new Date().toISOString(),
+    });
 
     return { success: true, data: response.data };
   } catch (err) {
