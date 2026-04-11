@@ -128,4 +128,42 @@ router.post("/voices/elevenlabs/sync", authenticate, requireRole("admin"), async
   }
 });
 
+// ── POST /voices/:id/sample — stream a short TTS preview via ElevenLabs ──────
+router.post("/voices/:id/sample", authenticate, async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id as string, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid voice ID" }); return; }
+
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) { res.status(503).json({ error: "ELEVENLABS_API_KEY not configured" }); return; }
+
+  const [voice] = await db.select().from(voicesTable).where(eq(voicesTable.id, id)).limit(1);
+  if (!voice) { res.status(404).json({ error: "Voice not found" }); return; }
+
+  const sampleText = req.body?.text ?? "Hello! I'm your AI voice assistant. I'm here to help you with your calls today.";
+
+  try {
+    const ttsRes = await axios.post(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voice.voiceId}`,
+      {
+        text: sampleText,
+        model_id: "eleven_turbo_v2",
+        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+      },
+      {
+        headers: { "xi-api-key": apiKey, Accept: "audio/mpeg", "Content-Type": "application/json" },
+        responseType: "stream",
+        timeout: 30_000,
+      }
+    );
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Transfer-Encoding", "chunked");
+    (ttsRes.data as NodeJS.ReadableStream).pipe(res);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err: msg, voiceId: voice.voiceId }, "TTS sample failed");
+    res.status(502).json({ error: "TTS generation failed", detail: msg });
+  }
+});
+
 export default router;
