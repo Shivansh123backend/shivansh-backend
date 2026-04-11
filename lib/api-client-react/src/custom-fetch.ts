@@ -17,6 +17,15 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
+let _onUnauthorized: (() => void) | null = null;
+
+/**
+ * Register a callback that is invoked whenever any API response returns 401.
+ * Use this to implement global session expiry handling (e.g. clear token + redirect).
+ */
+export function setOnUnauthorized(handler: (() => void) | null): void {
+  _onUnauthorized = handler;
+}
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -363,6 +372,9 @@ export async function customFetch<T = unknown>(
   const response = await fetch(input, { ...init, method, headers });
 
   if (!response.ok) {
+    if (response.status === 401 && _onUnauthorized) {
+      _onUnauthorized();
+    }
     const errorData = await parseErrorBody(response, method);
     throw new ApiError(response, errorData, requestInfo);
   }

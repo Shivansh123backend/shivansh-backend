@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { AlertTriangle } from "lucide-react";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -15,6 +16,7 @@ export default function Login() {
   const [, setLocation] = useLocation();
   const loginMutation = useLogin();
   const { toast } = useToast();
+  const reason = new URLSearchParams(window.location.search).get("reason");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,6 +41,16 @@ export default function Login() {
   return (
     <div className="min-h-screen w-full flex flex-col items-center justify-center bg-background p-4 relative overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-primary/10 via-background to-background pointer-events-none" />
+      <div className="w-full max-w-sm z-10 mb-3">
+        {reason === "session_expired" && (
+          <div className="flex items-start gap-2.5 bg-yellow-500/10 border border-yellow-500/30 rounded px-3 py-2.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs font-mono text-yellow-300">
+              Your session expired. Please log in again to continue.
+            </p>
+          </div>
+        )}
+      </div>
       <Card className="w-full max-w-sm z-10 border-primary/20 bg-card/50 backdrop-blur-xl">
         <CardHeader className="space-y-2 text-center">
           <div className="mx-auto w-12 h-12 bg-primary/20 rounded-xl flex items-center justify-center mb-2 border border-primary/30">

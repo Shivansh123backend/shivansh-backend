@@ -1,9 +1,15 @@
 import { createContext, useContext, useState } from "react";
-import { setAuthTokenGetter } from "@workspace/api-client-react";
+import { setAuthTokenGetter, setOnUnauthorized } from "@workspace/api-client-react";
 
 const TOKEN_KEY = "auth_token";
 
 setAuthTokenGetter(() => localStorage.getItem(TOKEN_KEY));
+
+setOnUnauthorized(() => {
+  localStorage.removeItem(TOKEN_KEY);
+  const base = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
+  window.location.href = `${base}/login?reason=session_expired`;
+});
 
 export interface AuthContextType {
   token: string | null;

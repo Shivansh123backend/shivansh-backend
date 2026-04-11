@@ -1,7 +1,7 @@
 export const config = {
   jwt: {
     secret: process.env.SESSION_SECRET ?? "change-me-in-production",
-    expiresIn: "24h",
+    expiresIn: "7d",
   },
   redis: {
     host: process.env.REDIS_HOST ?? "localhost",
