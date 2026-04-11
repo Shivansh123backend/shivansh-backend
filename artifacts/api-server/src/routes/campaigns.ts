@@ -170,13 +170,15 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
     .from(leadsTable)
     .where(and(eq(leadsTable.campaignId, campaignId), eq(leadsTable.status, "pending")));
 
-  logger.info({ campaignId, count: pendingLeads.length }, `Campaign starting — triggering calls for ${pendingLeads.length} pending leads`);
+  const concurrency = Math.min(campaign.maxConcurrentCalls ?? 5, 20);
 
-  for (const lead of pendingLeads) {
-    // Log call attempt immediately so CDR shows it even before worker responds
+  logger.info({ campaignId, count: pendingLeads.length, concurrency }, `Campaign starting — triggering calls concurrently (${concurrency} at a time)`);
+
+  // Process leads in concurrent batches
+  async function processLead(lead: typeof pendingLeads[0]): Promise<void> {
     const [logEntry] = await db
       .insert(callLogsTable)
-      .values({ phoneNumber: lead.phone, campaignId, status: "initiated" })
+      .values({ phoneNumber: lead.phone, campaignId, status: "initiated", direction: "outbound" })
       .returning();
 
     const result = await enqueueCall({
@@ -191,25 +193,48 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
       hold_music_url: holdMusicUrl ?? undefined,
     });
 
-    // Update call log with outcome
     await db
       .update(callLogsTable)
       .set({ status: result.success ? "completed" : "failed" })
       .where(eq(callLogsTable.id, logEntry.id));
 
-    // Mark lead as called regardless of worker outcome
     await db
       .update(leadsTable)
       .set({ status: "called" })
       .where(eq(leadsTable.id, lead.id));
-
-    const jitter = 500 + Math.floor(Math.random() * 500);
-    await delay(jitter);
   }
 
-  logger.info({ campaignId, count: pendingLeads.length }, `Campaign finished dispatching calls`);
+  // Concurrency pool — run `concurrency` leads simultaneously
+  let index = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const lead = pendingLeads[index++];
+      if (!lead) break;
 
-  // Auto-stop campaign when all leads have been called
+      // Re-check if campaign is still active before each call
+      const [current] = await db
+        .select({ status: campaignsTable.status })
+        .from(campaignsTable)
+        .where(eq(campaignsTable.id, campaignId))
+        .limit(1);
+      if (current?.status !== "active") break;
+
+      await processLead(lead).catch((err) => {
+        logger.error({ err, leadId: lead.id, phone: lead.phone, campaignId }, "Call dispatch failed for lead");
+      });
+
+      // Small jitter between calls in the same worker to avoid burst
+      const jitter = 200 + Math.floor(Math.random() * 300);
+      await delay(jitter);
+    }
+  }
+
+  // Launch `concurrency` workers in parallel
+  const workers = Array.from({ length: concurrency }, () => worker());
+  await Promise.allSettled(workers);
+
+  logger.info({ campaignId, count: pendingLeads.length }, `Campaign finished dispatching all calls`);
+
   await db
     .update(campaignsTable)
     .set({ status: "paused" })

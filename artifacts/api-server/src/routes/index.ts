@@ -15,6 +15,7 @@ import dashboardRouter from "./dashboard.js";
 import humanAgentsRouter from "./humanAgents.js";
 import smsRouter from "./sms.js";
 import webhooksRouter from "./webhooks.js";
+import exportRouter from "./export.js";
 import { globalErrorHandler } from "../lib/errors.js";
 import type { Request, Response, NextFunction } from "express";
 
@@ -36,6 +37,7 @@ router.use(dashboardRouter);
 router.use(humanAgentsRouter);
 router.use(smsRouter);
 router.use(webhooksRouter);
+router.use(exportRouter);
 
 router.use((err: Error, req: Request, res: Response, next: NextFunction) => globalErrorHandler(err, req, res, next));
 

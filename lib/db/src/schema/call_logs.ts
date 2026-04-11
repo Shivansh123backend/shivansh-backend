@@ -8,6 +8,12 @@ export const callLogsTable = pgTable("call_logs", {
   campaignId: integer("campaign_id").notNull(),
   status: text("status").notNull().default("initiated"),
   disposition: text("disposition"),
+  direction: text("direction").notNull().default("outbound"),
+  duration: integer("duration"),
+  recordingUrl: text("recording_url"),
+  transcript: text("transcript"),
+  summary: text("summary"),
+  callControlId: text("call_control_id"),
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
 });
 

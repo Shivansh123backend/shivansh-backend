@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { phoneNumbersTable, campaignsTable, aiAgentsTable } from "@workspace/db";
+import { phoneNumbersTable, campaignsTable, aiAgentsTable, callLogsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import axios from "axios";
@@ -8,7 +8,7 @@ import OpenAI from "openai";
 
 const router: IRouter = Router();
 
-// ── OpenAI client (Replit AI integration) ─────────────────────────────────────
+// ── OpenAI client ─────────────────────────────────────────────────────────────
 const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? "placeholder",
@@ -17,7 +17,7 @@ const openai = new OpenAI({
 const TELNYX_API_BASE = "https://api.telnyx.com/v2";
 const MAX_TURNS = 12;
 
-// ── Conversation state per active inbound call ────────────────────────────────
+// ── Per-call conversation state ───────────────────────────────────────────────
 interface Message {
   role: "system" | "user" | "assistant";
   content: string;
@@ -29,9 +29,11 @@ interface InboundCallState {
   agentName: string;
   agentPrompt: string;
   callerNumber: string;
+  calledNumber: string;
   messages: Message[];
   turnCount: number;
-  greetingDone: boolean;
+  startedAt: Date;
+  recordingUrl?: string;
 }
 
 const activeCalls = new Map<string, InboundCallState>();
@@ -44,15 +46,11 @@ async function telnyxAction(
 ): Promise<void> {
   const apiKey = process.env.TELNYX_API_KEY;
   if (!apiKey) throw new Error("TELNYX_API_KEY not configured");
-
   await axios.post(
     `${TELNYX_API_BASE}/calls/${callControlId}/actions/${action}`,
     payload,
     {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       timeout: 10_000,
     }
   );
@@ -60,6 +58,14 @@ async function telnyxAction(
 
 async function answerCall(callControlId: string): Promise<void> {
   await telnyxAction(callControlId, "answer", {});
+}
+
+async function startRecording(callControlId: string): Promise<void> {
+  await telnyxAction(callControlId, "record_start", {
+    format: "mp3",
+    channels: "dual",
+    play_beep: false,
+  });
 }
 
 async function speak(callControlId: string, text: string): Promise<void> {
@@ -83,42 +89,84 @@ async function gatherSpeech(callControlId: string): Promise<void> {
   });
 }
 
-async function hangupCall(callControlId: string): Promise<void> {
-  await telnyxAction(callControlId, "hangup", {});
-}
-
-// ── Generate AI response using OpenAI ─────────────────────────────────────────
+// ── OpenAI helpers ────────────────────────────────────────────────────────────
 async function generateAiResponse(messages: Message[]): Promise<string> {
   const response = await openai.chat.completions.create({
     model: "gpt-5-mini",
     max_completion_tokens: 8192,
     messages,
   });
-
   const content = response.choices[0]?.message?.content?.trim();
-  if (!content) return "I'm sorry, I didn't catch that. Could you please repeat?";
+  if (!content) return "I'm sorry, could you please repeat that?";
   return content;
 }
 
-// ── Detect if the caller wants to end the call ────────────────────────────────
+async function generateSummaryAndDisposition(
+  messages: Message[],
+  campaignName: string
+): Promise<{ summary: string; disposition: string; transcript: string }> {
+  // Build readable transcript from conversation
+  const transcript = messages
+    .filter((m) => m.role !== "system")
+    .map((m) => `${m.role === "assistant" ? "AI Agent" : "Caller"}: ${m.content}`)
+    .join("\n");
+
+  if (!transcript.trim()) {
+    return { summary: "No conversation recorded.", disposition: "no_answer", transcript: "" };
+  }
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-5-mini",
+      max_completion_tokens: 8192,
+      messages: [
+        {
+          role: "system",
+          content: `You are a call center quality analyst. Analyze this phone call transcript for campaign "${campaignName}" and return a JSON object with exactly these fields:
+{
+  "summary": "2-3 sentence summary of what was discussed and outcome",
+  "disposition": one of: "interested" | "not_interested" | "vm" | "no_answer" | "busy" | "connected" | "callback_requested" | "transferred" | "completed"
+}
+Choose disposition based on: interested=caller wants product/service, not_interested=caller declined, vm=voicemail, callback_requested=wants callback later, connected=brief conversation, completed=full successful interaction.
+Return ONLY valid JSON, no markdown.`,
+        },
+        {
+          role: "user",
+          content: `CALL TRANSCRIPT:\n${transcript}`,
+        },
+      ],
+    });
+
+    const raw = response.choices[0]?.message?.content?.trim() ?? "{}";
+    const parsed = JSON.parse(raw);
+    return {
+      summary: parsed.summary ?? "Call completed.",
+      disposition: parsed.disposition ?? "connected",
+      transcript,
+    };
+  } catch {
+    return {
+      summary: "Call completed successfully.",
+      disposition: "connected",
+      transcript,
+    };
+  }
+}
+
+// ── Goodbye detection ─────────────────────────────────────────────────────────
 function isGoodbye(text: string): boolean {
   const lower = text.toLowerCase();
-  return ["goodbye", "bye", "hang up", "that's all", "no thanks", "i'm done", "end call", "thanks bye"].some(
-    phrase => lower.includes(phrase)
+  return ["goodbye", "bye", "hang up", "that's all", "no thanks", "i'm done", "end call", "thanks bye", "have a good day"].some(
+    (phrase) => lower.includes(phrase)
   );
 }
 
-// ── Lookup campaign by inbound phone number ───────────────────────────────────
+// ── Campaign lookup by called number ─────────────────────────────────────────
 async function getCampaignByNumber(toNumber: string) {
   const [phoneRow] = await db
     .select()
     .from(phoneNumbersTable)
-    .where(
-      and(
-        eq(phoneNumbersTable.phoneNumber, toNumber),
-        eq(phoneNumbersTable.status, "active")
-      )
-    )
+    .where(and(eq(phoneNumbersTable.phoneNumber, toNumber), eq(phoneNumbersTable.status, "active")))
     .limit(1);
 
   if (!phoneRow?.campaignId) return null;
@@ -146,18 +194,51 @@ async function getCampaignByNumber(toNumber: string) {
     }
   }
 
-  // Build system prompt for inbound calls
   const systemPrompt = agentPrompt
-    ? `${agentPrompt}\n\nYou are handling an inbound callback call for the campaign "${campaign.name}". You are ${agentName}. Keep responses concise and conversational — 1-2 sentences max since this is a phone call.`
-    : `You are ${agentName}, an AI voice assistant handling an inbound callback call for "${campaign.name}". Be professional, helpful, and concise. Keep responses to 1-2 sentences since this is a phone call. Gather the caller's needs and assist them appropriately.`;
+    ? `${agentPrompt}\n\nYou are handling an inbound call for "${campaign.name}". You are ${agentName}. Keep responses concise — 1-2 sentences for a phone call.`
+    : `You are ${agentName}, an AI voice assistant for "${campaign.name}". Be professional and helpful. Keep responses to 1-2 sentences for a phone call.`;
 
   return { campaign, agentName, systemPrompt };
 }
 
-// ── POST /webhooks/telnyx — Telnyx Call Control event handler ─────────────────
-// No auth — Telnyx sends events here directly.
+// ── Finalize inbound call — save to DB with all data ─────────────────────────
+async function finalizeInboundCall(
+  callControlId: string,
+  state: InboundCallState,
+  recordingUrl?: string
+): Promise<void> {
+  try {
+    const durationSecs = Math.round((Date.now() - state.startedAt.getTime()) / 1000);
+    const { summary, disposition, transcript } = await generateSummaryAndDisposition(
+      state.messages,
+      state.campaignName
+    );
+
+    await db.insert(callLogsTable).values({
+      phoneNumber: state.callerNumber,
+      campaignId: state.campaignId,
+      status: "completed",
+      disposition,
+      direction: "inbound",
+      duration: durationSecs,
+      recordingUrl: recordingUrl ?? state.recordingUrl ?? null,
+      transcript,
+      summary,
+      callControlId,
+    });
+
+    logger.info(
+      { callControlId, campaignId: state.campaignId, disposition, durationSecs, turns: state.turnCount },
+      "Inbound call finalized and saved to DB"
+    );
+  } catch (err) {
+    logger.error({ err, callControlId }, "Failed to finalize inbound call");
+  }
+}
+
+// ── POST /webhooks/telnyx ─────────────────────────────────────────────────────
 router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
-  // Always respond 200 immediately — Telnyx will retry if we don't
+  // Always respond 200 immediately
   res.status(200).json({ received: true });
 
   const event = req.body?.data;
@@ -173,68 +254,61 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
   logger.info({ eventType, direction, to: toNumber, from: fromNumber, callControlId }, "Telnyx event");
 
   try {
-    // ── 1. Inbound call arrives ─────────────────────────────────────────────
+    // ── 1. Inbound call arrives ──────────────────────────────────────────────
     if (eventType === "call.initiated" && direction === "incoming") {
       const result = await getCampaignByNumber(toNumber);
 
       if (!result) {
-        // No campaign for this number — answer briefly and close
         await answerCall(callControlId);
-        await speak(
-          callControlId,
-          "Thank you for calling. We are unable to connect your call at this time. Please try again later. Goodbye."
-        );
+        await speak(callControlId, "Thank you for calling. We are unable to connect your call at this time. Goodbye.");
         return;
       }
 
       const { campaign, agentName, systemPrompt } = result;
       const greeting = `Thank you for calling ${campaign.name}. This is ${agentName}. How may I help you today?`;
 
-      // Store call state with conversation history
       activeCalls.set(callControlId, {
         campaignId: campaign.id,
         campaignName: campaign.name,
         agentName,
         agentPrompt: systemPrompt,
         callerNumber: fromNumber,
+        calledNumber: toNumber,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "assistant", content: greeting },
         ],
         turnCount: 0,
-        greetingDone: false,
+        startedAt: new Date(),
       });
 
       logger.info({ callControlId, campaignId: campaign.id, agentName }, "Answering inbound call");
 
       await answerCall(callControlId);
+      await startRecording(callControlId).catch((err) =>
+        logger.warn({ err, callControlId }, "Recording start failed — continuing without recording")
+      );
       await speak(callControlId, greeting);
       return;
     }
 
-    // ── 2. Greeting (or AI response) finished speaking — start listening ────
+    // ── 2. Greeting/response done → listen ──────────────────────────────────
     if (eventType === "call.speak.ended") {
       const state = activeCalls.get(callControlId);
       if (!state) return;
 
-      state.greetingDone = true;
-
-      // If we've hit the turn limit, close gracefully
       if (state.turnCount >= MAX_TURNS) {
-        await speak(
-          callControlId,
-          "Thank you for calling. I've noted your inquiry and someone from our team will follow up with you. Have a great day. Goodbye!"
-        );
+        await speak(callControlId, "Thank you for calling. Someone from our team will follow up with you soon. Have a great day! Goodbye!");
+        await finalizeInboundCall(callControlId, state);
         activeCalls.delete(callControlId);
         return;
       }
 
-      // Listen for the caller's response
       await gatherSpeech(callControlId);
       return;
     }
 
-    // ── 3. Caller spoke — get transcript, generate AI response ──────────────
+    // ── 3. Caller spoke → generate AI response ───────────────────────────────
     if (eventType === "call.gather.ended") {
       const state = activeCalls.get(callControlId);
       if (!state) return;
@@ -243,16 +317,15 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       const digits: string = payload.digits ?? "";
       const reason: string = payload.reason ?? "";
 
-      // If no speech gathered (timeout/silence), prompt again
       if (!speechText && !digits) {
         if (reason === "timeout") {
-          // Caller went silent — prompt once, then hang up
           if (state.turnCount >= 1) {
             await speak(callControlId, "I didn't hear anything. Thank you for calling. Goodbye!");
+            await finalizeInboundCall(callControlId, state);
             activeCalls.delete(callControlId);
           } else {
             state.turnCount++;
-            await speak(callControlId, "I'm sorry, I didn't hear you. Could you please say something?");
+            await speak(callControlId, "I'm sorry, I didn't catch that. Could you please say something?");
           }
           return;
         }
@@ -260,58 +333,78 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       }
 
       const callerInput = speechText || `Pressed ${digits}`;
-      logger.info({ callControlId, callerInput, turn: state.turnCount }, "Caller input received");
+      logger.info({ callControlId, callerInput, turn: state.turnCount }, "Caller input");
 
-      // Check for goodbye intent
       if (isGoodbye(callerInput)) {
         await speak(callControlId, "Thank you for calling. Have a wonderful day. Goodbye!");
+        state.messages.push({ role: "user", content: callerInput });
+        await finalizeInboundCall(callControlId, state);
         activeCalls.delete(callControlId);
         return;
       }
 
-      // Add caller's message to conversation history
       state.messages.push({ role: "user", content: callerInput });
       state.turnCount++;
 
-      // Generate AI response
       let aiResponse: string;
       try {
         aiResponse = await generateAiResponse(state.messages);
       } catch (err) {
         logger.error({ err, callControlId }, "OpenAI response failed");
-        aiResponse = "I'm sorry, I'm having trouble processing that. Could you please repeat your request?";
+        aiResponse = "I'm sorry, I'm having trouble processing that. Could you please repeat?";
       }
 
-      // Add AI response to history
       state.messages.push({ role: "assistant", content: aiResponse });
-
       logger.info({ callControlId, aiResponse, turn: state.turnCount }, "AI response generated");
-
-      // Speak the AI response (will trigger call.speak.ended → gather again)
       await speak(callControlId, aiResponse);
       return;
     }
 
-    // ── 4. Call ended — clean up ─────────────────────────────────────────────
-    if (eventType === "call.hangup") {
-      const state = activeCalls.get(callControlId);
-      if (state) {
-        logger.info(
-          { callControlId, campaignId: state.campaignId, turns: state.turnCount },
-          "Inbound call ended"
-        );
-        activeCalls.delete(callControlId);
+    // ── 4. Recording saved — update DB record ────────────────────────────────
+    if (eventType === "call.recording.saved") {
+      const recordingUrl: string = payload.recording_urls?.mp3 ?? payload.public_recording_urls?.mp3 ?? "";
+      logger.info({ callControlId, recordingUrl }, "Recording saved");
+
+      if (recordingUrl) {
+        // Update existing call log if it exists
+        const [existing] = await db
+          .select({ id: callLogsTable.id })
+          .from(callLogsTable)
+          .where(eq(callLogsTable.callControlId, callControlId))
+          .limit(1);
+
+        if (existing) {
+          await db
+            .update(callLogsTable)
+            .set({ recordingUrl })
+            .where(eq(callLogsTable.id, existing.id));
+          logger.info({ callControlId, callLogId: existing.id }, "Recording URL saved to DB");
+        } else {
+          // Store on active call state so it gets saved when call ends
+          const state = activeCalls.get(callControlId);
+          if (state) state.recordingUrl = recordingUrl;
+        }
       }
       return;
     }
 
+    // ── 5. Call hung up — finalize ───────────────────────────────────────────
+    if (eventType === "call.hangup") {
+      const state = activeCalls.get(callControlId);
+      if (state) {
+        logger.info({ callControlId, campaignId: state.campaignId, turns: state.turnCount }, "Inbound call ended");
+        await finalizeInboundCall(callControlId, state);
+        activeCalls.delete(callControlId);
+      }
+      return;
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ eventType, callControlId, err: msg }, "Error handling Telnyx webhook");
   }
 });
 
-// ── GET /webhooks/telnyx/config ────────────────────────────────────────────────
+// ── GET /webhooks/telnyx/config ───────────────────────────────────────────────
 router.get("/webhooks/telnyx/config", async (_req, res): Promise<void> => {
   res.json({
     webhookUrl: "https://shivanshbackend.replit.app/api/webhooks/telnyx",
@@ -321,7 +414,7 @@ router.get("/webhooks/telnyx/config", async (_req, res): Promise<void> => {
       "3. Under Voice Settings, set Connection to 'Call Control'",
       "4. Paste the webhook URL above into the 'Webhook URL' field",
       "5. Set Webhook API Version to v2 and save",
-      "6. Assign the number to an Inbound campaign below",
+      "6. Assign the number to an Inbound campaign in the dashboard",
     ],
   });
 });
