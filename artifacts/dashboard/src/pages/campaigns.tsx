@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   useListCampaigns,
   useStartCampaign,
@@ -23,7 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Play, Square, Plus, X, Rocket, Phone, Mic2, Users, FileText,
   ChevronRight, ChevronLeft, BookOpen, Upload, Volume2, Pause,
-  Check, RefreshCw, Brain, Music
+  Check, RefreshCw, Brain, Music, Zap, Activity, AlertCircle, CheckCircle2, Clock
 } from "lucide-react";
 
 type Campaign = {
@@ -789,6 +789,214 @@ function LaunchModal({
   );
 }
 
+// ── Test Call Modal ─────────────────────────────────────────────────────────────
+type CallLog = { id: number; phoneNumber: string | null; status: string; campaignId: number | null; timestamp: string | null };
+type TestResult = { success: boolean; jobId?: string; fromNumber?: string; voice?: string; error?: string; phone?: string };
+
+function TestCallModal({ campaign, onClose }: { campaign: Campaign; onClose: () => void }) {
+  const [phone, setPhone] = useState("+13079999564");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<TestResult | null>(null);
+  const [logs, setLogs] = useState<CallLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(true);
+  const [workerOk, setWorkerOk] = useState<boolean | null>(null);
+
+  // Load call logs for this campaign
+  const fetchLogs = useCallback(async () => {
+    try {
+      const data = await customFetch(`/api/call-logs?campaignId=${campaign.id}`) as CallLog[];
+      setLogs((Array.isArray(data) ? data : []).slice(0, 15));
+    } catch { setLogs([]); }
+    setLogsLoading(false);
+  }, [campaign.id]);
+
+  // Check worker health
+  useEffect(() => {
+    customFetch("/api/healthz").then(() => setWorkerOk(true)).catch(() => setWorkerOk(false));
+    fetchLogs();
+  }, [fetchLogs]);
+
+  const handleFire = async () => {
+    if (!phone.trim()) return;
+    setLoading(true);
+    setResult(null);
+    try {
+      const data = await customFetch(`/api/campaigns/${campaign.id}/test-call`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: phone.trim() }),
+      }) as TestResult;
+      setResult({ ...data, phone: phone.trim() });
+      await fetchLogs();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Call failed";
+      setResult({ success: false, error: msg, phone: phone.trim() });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const statusIcon = (s: string) => {
+    if (s === "completed") return <CheckCircle2 className="w-3 h-3 text-green-400" />;
+    if (s === "failed") return <AlertCircle className="w-3 h-3 text-red-400" />;
+    if (s === "initiated") return <Clock className="w-3 h-3 text-yellow-400" />;
+    return <Activity className="w-3 h-3 text-blue-400" />;
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-lg flex flex-col max-h-[90vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+          <div className="flex items-center gap-2">
+            <Zap className="w-3.5 h-3.5 text-yellow-400" />
+            <p className="text-xs font-mono uppercase tracking-widest text-foreground">Test Call</p>
+            <span className="text-[10px] font-mono text-muted-foreground">— {campaign.name}</span>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* System status */}
+          <div className="flex items-center gap-4 text-[10px] font-mono">
+            <span className="flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${workerOk === null ? "bg-yellow-400 animate-pulse" : workerOk ? "bg-green-400" : "bg-red-400"}`} />
+              <span className="text-muted-foreground">API Server: </span>
+              <span className={workerOk === null ? "text-yellow-400" : workerOk ? "text-green-400" : "text-red-400"}>
+                {workerOk === null ? "checking..." : workerOk ? "online" : "unreachable"}
+              </span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+              <span className="text-muted-foreground">Worker: </span>
+              <span className="text-green-400">ai-voice-worker1.replit.app</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Phone className="w-2.5 h-2.5 text-muted-foreground" />
+              <span className="text-muted-foreground">From: </span>
+              <span className="text-foreground">{campaign.fromNumber ?? "default"}</span>
+            </span>
+          </div>
+
+          {/* Phone input */}
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">Target Phone Number</Label>
+            <div className="flex gap-2">
+              <Input
+                value={phone}
+                onChange={e => setPhone(e.target.value)}
+                className="font-mono text-sm flex-1"
+                placeholder="+1XXXXXXXXXX"
+                disabled={loading}
+              />
+              <Button
+                onClick={handleFire}
+                disabled={loading || !phone.trim()}
+                className="font-mono text-xs uppercase tracking-wider bg-yellow-500 hover:bg-yellow-600 text-black shrink-0"
+              >
+                {loading ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-black animate-pulse" /> Firing...
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5">
+                    <Zap className="w-3 h-3" /> Fire Call
+                  </span>
+                )}
+              </Button>
+            </div>
+            <p className="text-[10px] font-mono text-muted-foreground">Uses the full campaign config (prompt, voice, background sound, hold music)</p>
+          </div>
+
+          {/* Result */}
+          {result && (
+            <div className={`rounded border px-3 py-2.5 space-y-1 ${result.success ? "border-green-500/30 bg-green-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+              <div className="flex items-center gap-2">
+                {result.success
+                  ? <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0" />
+                  : <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+                <span className={`text-xs font-mono font-medium ${result.success ? "text-green-400" : "text-red-400"}`}>
+                  {result.success ? "Call queued successfully" : "Call failed"}
+                </span>
+              </div>
+              {result.success && (
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] font-mono text-muted-foreground pl-5">
+                  <span>Job ID: <span className="text-foreground">{result.jobId ?? "—"}</span></span>
+                  <span>To: <span className="text-foreground">{result.phone}</span></span>
+                  <span>From: <span className="text-foreground">{result.fromNumber}</span></span>
+                  <span>Voice: <span className="text-foreground">{result.voice ?? "default"}</span></span>
+                </div>
+              )}
+              {!result.success && (
+                <p className="text-[10px] font-mono text-red-300 pl-5">{result.error}</p>
+              )}
+            </div>
+          )}
+
+          {/* Call logs for this campaign */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
+                <Activity className="w-3 h-3" /> Recent Calls — {campaign.name}
+              </Label>
+              <button onClick={fetchLogs} className="text-[10px] font-mono text-muted-foreground hover:text-foreground flex items-center gap-1">
+                <RefreshCw className="w-2.5 h-2.5" /> Refresh
+              </button>
+            </div>
+            <div className="border border-border rounded overflow-hidden">
+              {logsLoading ? (
+                <div className="px-3 py-4 text-center text-[10px] font-mono text-muted-foreground">Loading logs...</div>
+              ) : logs.length === 0 ? (
+                <div className="px-3 py-4 text-center text-[10px] font-mono text-muted-foreground">No calls yet for this campaign</div>
+              ) : (
+                <table className="w-full text-[10px] font-mono">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left px-3 py-1.5 text-muted-foreground uppercase tracking-wider">#</th>
+                      <th className="text-left px-3 py-1.5 text-muted-foreground uppercase tracking-wider">Phone</th>
+                      <th className="text-left px-3 py-1.5 text-muted-foreground uppercase tracking-wider">Status</th>
+                      <th className="text-left px-3 py-1.5 text-muted-foreground uppercase tracking-wider">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {logs.map(log => (
+                      <tr key={log.id} className="border-b border-border/30 hover:bg-white/[0.02]">
+                        <td className="px-3 py-1.5 text-muted-foreground">{log.id}</td>
+                        <td className="px-3 py-1.5 text-foreground">{log.phoneNumber ?? "—"}</td>
+                        <td className="px-3 py-1.5">
+                          <span className="flex items-center gap-1">
+                            {statusIcon(log.status)}
+                            <span className={
+                              log.status === "completed" ? "text-green-400" :
+                              log.status === "failed" ? "text-red-400" :
+                              log.status === "initiated" ? "text-yellow-400" : "text-blue-400"
+                            }>{log.status}</span>
+                          </span>
+                        </td>
+                        <td className="px-3 py-1.5 text-muted-foreground">
+                          {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="px-4 py-3 border-t border-border shrink-0">
+          <Button variant="outline" className="w-full font-mono text-xs uppercase tracking-wider" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Campaigns Page ─────────────────────────────────────────────────────────────
 export default function CampaignsPage() {
   const { data: campaigns, isLoading } = useListCampaigns();
@@ -797,6 +1005,7 @@ export default function CampaignsPage() {
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [launchingCampaign, setLaunchingCampaign] = useState<Campaign | null>(null);
+  const [testingCampaign, setTestingCampaign] = useState<Campaign | null>(null);
 
   const handleStop = (id: number) => {
     stopCampaign.mutate(
@@ -823,6 +1032,12 @@ export default function CampaignsPage() {
           campaign={launchingCampaign}
           onClose={() => setLaunchingCampaign(null)}
           onLaunched={handleLaunched}
+        />
+      )}
+      {testingCampaign && (
+        <TestCallModal
+          campaign={testingCampaign}
+          onClose={() => setTestingCampaign(null)}
         />
       )}
       <PageHeader
@@ -875,6 +1090,12 @@ export default function CampaignsPage() {
                   <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        onClick={() => setTestingCampaign(c)}
+                        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] border border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10 transition-colors"
+                      >
+                        <Zap className="w-2.5 h-2.5" /> Test
+                      </button>
                       {c.status !== "active" ? (
                         <button
                           onClick={() => setLaunchingCampaign(c)}
