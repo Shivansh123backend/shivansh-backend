@@ -390,6 +390,49 @@ router.post("/campaigns/stop/:id", authenticate, requireRole("admin"), async (re
   res.json(updated);
 });
 
+// ── POST /campaigns/:id/test-call — fire a single test call ──────────────────
+router.post("/campaigns/:id/test-call", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(rawId, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
+
+  const phone: string | undefined = req.body?.phone;
+  if (!phone) { res.status(400).json({ error: "phone is required" }); return; }
+
+  const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, id)).limit(1);
+  if (!campaign) { res.status(404).json({ error: "Campaign not found" }); return; }
+
+  const { script, voiceName, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(id, campaign);
+
+  const [logEntry] = await db
+    .insert(callLogsTable)
+    .values({ phoneNumber: phone, campaignId: id, status: "initiated" })
+    .returning();
+
+  const result = await enqueueCall({
+    phone,
+    from_number: fromNumber,
+    agent_prompt: script,
+    voice: voiceName,
+    transfer_number: transferNumber,
+    campaign_id: String(id),
+    campaign_name: `[TEST] ${campaign.name}`,
+    background_sound: backgroundSound !== "none" ? backgroundSound : undefined,
+    hold_music_url: holdMusicUrl ?? undefined,
+  });
+
+  await db
+    .update(callLogsTable)
+    .set({ status: result.success ? "completed" : "failed" })
+    .where(eq(callLogsTable.id, logEntry.id));
+
+  if (result.success) {
+    res.json({ success: true, jobId: (result.data as { jobId?: string })?.jobId, phone, fromNumber, voice: voiceName, workerResponse: result.data });
+  } else {
+    res.status(502).json({ success: false, error: result.error, phone, fromNumber });
+  }
+});
+
 // ── POST /campaigns/:id/reset-leads — reset all leads back to pending ─────────
 router.post("/campaigns/:id/reset-leads", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
