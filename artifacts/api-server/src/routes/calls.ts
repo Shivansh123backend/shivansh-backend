@@ -179,6 +179,48 @@ router.get("/calls/stats/today", authenticate, async (req, res): Promise<void> =
   res.json({ total, completed, failed, successRate: total > 0 ? Math.round((completed / total) * 100) : 0 });
 });
 
+// ── Telnyx WebRTC token — must be before /:id ──────────────────────────────
+const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
+const TELNYX_WEBRTC_CONNECTION_ID = "2935198916355818730"; // aiagentshivansh credential connection
+
+router.get("/calls/webrtc-token", authenticate, async (req, res): Promise<void> => {
+  if (!TELNYX_API_KEY) {
+    res.status(503).json({ error: "TELNYX_API_KEY not configured" });
+    return;
+  }
+  try {
+    const credRes = await fetch("https://api.telnyx.com/v2/telephony_credentials", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TELNYX_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        connection_id: TELNYX_WEBRTC_CONNECTION_ID,
+        name: `nexuscall-agent-${req.user!.userId}-${Date.now()}`,
+      }),
+    });
+    if (!credRes.ok) {
+      const err = await credRes.json() as { errors?: Array<{ detail: string }> };
+      res.status(502).json({ error: err.errors?.[0]?.detail ?? "Failed to create Telnyx credential" });
+      return;
+    }
+    const credData = await credRes.json() as { data: { id: string } };
+    const credId = credData.data.id;
+
+    const tokenRes = await fetch(`https://api.telnyx.com/v2/telephony_credentials/${credId}/token`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TELNYX_API_KEY}` },
+    });
+    if (!tokenRes.ok) {
+      res.status(502).json({ error: "Failed to get Telnyx WebRTC token" });
+      return;
+    }
+    const token = await tokenRes.text();
+    res.json({ token });
+  } catch (err) {
+    logger.error({ err }, "webrtc-token error");
+    res.status(500).json({ error: "Internal error generating WebRTC token" });
+  }
+});
+
 router.get("/calls/:id", authenticate, async (req, res): Promise<void> => {
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(rawId, 10);

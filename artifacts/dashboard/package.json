@@ -75,6 +75,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@telnyx/webrtc": "^2.26.0",
     "socket.io-client": "^4.8.3"
   }
 }
