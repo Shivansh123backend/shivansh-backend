@@ -5,7 +5,7 @@ import { initWebSocket } from "./websocket/index.js";
 import { getCallQueue } from "./queue/callQueue.js";
 import { closeRedis } from "./lib/redis.js";
 import { closeQueue } from "./queue/callQueue.js";
-import { ensureAdminUser, ensurePhoneNumbers } from "./lib/startup.js";
+import { ensureAdminUser, ensurePhoneNumbers, ensureElevenLabsVoices } from "./lib/startup.js";
 
 const rawPort = process.env["PORT"];
 
@@ -46,6 +46,11 @@ ensureAdminUser().catch((err) => {
 // Ensure real Telnyx phone numbers are seeded
 ensurePhoneNumbers().catch((err) => {
   logger.warn({ err }, "ensurePhoneNumbers failed — continuing anyway");
+});
+
+// Sync ElevenLabs voices on startup (no-op if API key missing)
+ensureElevenLabsVoices().catch((err) => {
+  logger.warn({ err }, "ensureElevenLabsVoices failed — continuing anyway");
 });
 
 httpServer.listen(port, () => {

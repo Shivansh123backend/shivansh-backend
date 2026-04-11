@@ -1,7 +1,8 @@
 import { db } from "@workspace/db";
-import { usersTable, phoneNumbersTable } from "@workspace/db";
+import { usersTable, phoneNumbersTable, voicesTable } from "@workspace/db";
 import { eq, count } from "drizzle-orm";
 import bcrypt from "bcrypt";
+import axios from "axios";
 import { logger } from "./logger.js";
 
 export async function ensureAdminUser(): Promise<void> {
@@ -68,6 +69,46 @@ export async function ensurePhoneNumbers(): Promise<void> {
     logger.info({ count: values.length }, "Seeded real Telnyx phone numbers");
   } catch (err) {
     logger.error({ err }, "Failed to seed phone numbers");
+  }
+}
+
+export async function ensureElevenLabsVoices(): Promise<void> {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) {
+    logger.info("ELEVENLABS_API_KEY not set — skipping voice sync");
+    return;
+  }
+  try {
+    const response = await axios.get("https://api.elevenlabs.io/v1/voices", {
+      headers: { "xi-api-key": apiKey },
+      timeout: 15000,
+    });
+    const elVoices: Array<{
+      voice_id: string;
+      name: string;
+      preview_url?: string;
+      labels?: Record<string, string>;
+    }> = response.data?.voices ?? [];
+
+    let synced = 0;
+    for (const v of elVoices) {
+      const gender = v.labels?.gender === "male" ? "male" : "female";
+      const accentRaw = (v.labels?.accent ?? "us").toLowerCase();
+      const accentMap: Record<string, string> = { american: "us", british: "uk", indian: "indian", australian: "australian", canadian: "canadian" };
+      const accent = (accentMap[accentRaw] ?? (["us","uk","indian","australian","canadian"].includes(accentRaw) ? accentRaw : "other")) as "us"|"uk"|"indian"|"australian"|"canadian"|"other";
+      const description = [v.labels?.description, v.labels?.use_case, v.labels?.age].filter(Boolean).join(", ");
+
+      const existing = await db.select({ id: voicesTable.id }).from(voicesTable).where(eq(voicesTable.voiceId, v.voice_id)).limit(1);
+      if (existing.length > 0) {
+        await db.update(voicesTable).set({ name: v.name, previewUrl: v.preview_url ?? null, description: description || null }).where(eq(voicesTable.voiceId, v.voice_id));
+      } else {
+        await db.insert(voicesTable).values({ name: v.name, provider: "elevenlabs", voiceId: v.voice_id, gender, accent, language: "en", previewUrl: v.preview_url ?? null, description: description || null });
+        synced++;
+      }
+    }
+    logger.info({ synced, total: elVoices.length }, "ElevenLabs voices synced on startup");
+  } catch (err) {
+    logger.warn({ err }, "ElevenLabs voice sync failed on startup — continuing");
   }
 }
 
