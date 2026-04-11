@@ -11,6 +11,8 @@ export const voicesTable = pgTable("voices", {
   name: text("name").notNull(),
   provider: voiceProviderEnum("provider").notNull(),
   voiceId: text("voice_id").notNull(),
+  previewUrl: text("preview_url"),
+  description: text("description"),
   gender: voiceGenderEnum("gender").notNull(),
   accent: voiceAccentEnum("accent").notNull().default("us"),
   language: text("language").notNull().default("en"),

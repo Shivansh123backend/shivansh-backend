@@ -17,6 +17,8 @@ export const campaignsTable = pgTable("campaigns", {
   transferRules: text("transfer_rules"),
   // AI calling configuration — used directly by worker service
   agentPrompt: text("agent_prompt"),
+  knowledgeBase: text("knowledge_base"),
+  recordingNotes: text("recording_notes"),
   voice: text("voice"),
   fromNumber: text("from_number"),
   transferNumber: text("transfer_number"),

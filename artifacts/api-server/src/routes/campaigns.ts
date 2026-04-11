@@ -28,6 +28,8 @@ const createCampaignSchema = z.object({
   maxConcurrentCalls: z.number().min(1).max(100).default(5),
   transferRules: z.string().optional(),
   agentPrompt: z.string().optional(),
+  knowledgeBase: z.string().optional(),
+  recordingNotes: z.string().optional(),
   voice: z.string().optional(),
   fromNumber: z.string().optional(),
   transferNumber: z.string().optional(),
@@ -64,6 +66,8 @@ router.get("/campaigns", authenticate, async (req, res): Promise<void> => {
 const updateCampaignSchema = z.object({
   name: z.string().min(1).optional(),
   agentPrompt: z.string().optional(),
+  knowledgeBase: z.string().optional(),
+  recordingNotes: z.string().optional(),
   voice: z.string().optional(),
   fromNumber: z.string().optional(),
   transferNumber: z.string().optional(),
@@ -206,8 +210,7 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
 }
 
 async function resolveCampaignAssets(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
-  // Campaign's own fields take priority over linked AI agent values
-  let script = campaign.agentPrompt ?? `You are a professional AI voice agent making an outbound call. Follow these steps:
+  const DEFAULT_PROMPT = `You are a professional AI voice agent making an outbound call. Follow these steps:
 
 1. GREETING: Introduce yourself warmly — "Hello, I'm an AI assistant calling on behalf of our team. Am I speaking with [Lead Name]?"
 
@@ -224,6 +227,20 @@ async function resolveCampaignAssets(campaignId: number, campaign: typeof campai
 5. OPT-OUT: If the contact asks to be removed from the list, acknowledge immediately, apologise for the interruption, and end the call respectfully.
 
 6. UNAVAILABLE: If the contact is unavailable or requests a callback, note their preferred time and close politely.`;
+
+  // Campaign's own fields take priority over linked AI agent values
+  let basePrompt = campaign.agentPrompt ?? DEFAULT_PROMPT;
+
+  // Build combined script: knowledge base → main prompt → recording learnings
+  const parts: string[] = [];
+  if (campaign.knowledgeBase?.trim()) {
+    parts.push(`=== KNOWLEDGE BASE & SOPs ===\n${campaign.knowledgeBase.trim()}\n=== END KNOWLEDGE BASE ===`);
+  }
+  parts.push(basePrompt.trim());
+  if (campaign.recordingNotes?.trim()) {
+    parts.push(`=== LEARNING FROM RECORDINGS ===\n${campaign.recordingNotes.trim()}\n=== END LEARNING ===`);
+  }
+  let script = parts.join("\n\n");
   let voiceName = campaign.voice ?? "default";
   let fromNumber = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
   const transferNumber = campaign.transferNumber ?? campaign.transferRules ?? undefined;
