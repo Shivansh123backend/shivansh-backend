@@ -19,6 +19,8 @@ import CallsPage from "@/pages/calls";
 import AnalyticsPage from "@/pages/analytics";
 import SettingsPage from "@/pages/settings";
 import VoicesPage from "@/pages/voices";
+import DialerPage from "@/pages/dialer";
+import CallbacksPage from "@/pages/callbacks";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,17 +32,28 @@ const queryClient = new QueryClient({
   },
 });
 
-function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
-  const { token } = useAuth();
+function ProtectedRoute({
+  component: Component,
+  adminOnly = false,
+}: {
+  component: React.ComponentType;
+  adminOnly?: boolean;
+}) {
+  const { token, user } = useAuth();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
     if (!token) {
       setLocation("/login");
+      return;
     }
-  }, [token, setLocation]);
+    if (adminOnly && user?.role === "agent") {
+      setLocation("/");
+    }
+  }, [token, user, adminOnly, setLocation]);
 
   if (!token) return null;
+  if (adminOnly && user?.role === "agent") return null;
 
   return <Component />;
 }
@@ -52,44 +65,52 @@ function Router() {
       <Route path="/">
         <ProtectedRoute component={DashboardPage} />
       </Route>
-      <Route path="/campaigns">
-        <ProtectedRoute component={CampaignsPage} />
+      {/* Agent-accessible routes */}
+      <Route path="/dialer">
+        <ProtectedRoute component={DialerPage} />
       </Route>
-      <Route path="/agents">
-        <ProtectedRoute component={AgentsPage} />
-      </Route>
-      <Route path="/leads">
-        <ProtectedRoute component={LeadsPage} />
-      </Route>
-      <Route path="/dispositions">
-        <ProtectedRoute component={DispositionsPage} />
-      </Route>
-      <Route path="/users">
-        <ProtectedRoute component={UsersPage} />
-      </Route>
-      <Route path="/queues">
-        <ProtectedRoute component={QueuesPage} />
-      </Route>
-      <Route path="/live-monitor">
-        <ProtectedRoute component={LiveMonitorPage} />
-      </Route>
-      <Route path="/numbers">
-        <ProtectedRoute component={NumbersPage} />
-      </Route>
-      <Route path="/inbound-routes">
-        <ProtectedRoute component={InboundRoutesPage} />
+      <Route path="/callbacks">
+        <ProtectedRoute component={CallbacksPage} />
       </Route>
       <Route path="/calls">
         <ProtectedRoute component={CallsPage} />
       </Route>
+      {/* Admin-only routes */}
+      <Route path="/campaigns">
+        <ProtectedRoute component={CampaignsPage} adminOnly />
+      </Route>
+      <Route path="/agents">
+        <ProtectedRoute component={AgentsPage} adminOnly />
+      </Route>
+      <Route path="/leads">
+        <ProtectedRoute component={LeadsPage} adminOnly />
+      </Route>
+      <Route path="/dispositions">
+        <ProtectedRoute component={DispositionsPage} adminOnly />
+      </Route>
+      <Route path="/users">
+        <ProtectedRoute component={UsersPage} adminOnly />
+      </Route>
+      <Route path="/queues">
+        <ProtectedRoute component={QueuesPage} adminOnly />
+      </Route>
+      <Route path="/live-monitor">
+        <ProtectedRoute component={LiveMonitorPage} adminOnly />
+      </Route>
+      <Route path="/numbers">
+        <ProtectedRoute component={NumbersPage} adminOnly />
+      </Route>
+      <Route path="/inbound-routes">
+        <ProtectedRoute component={InboundRoutesPage} adminOnly />
+      </Route>
       <Route path="/analytics">
-        <ProtectedRoute component={AnalyticsPage} />
+        <ProtectedRoute component={AnalyticsPage} adminOnly />
       </Route>
       <Route path="/voices">
-        <ProtectedRoute component={VoicesPage} />
+        <ProtectedRoute component={VoicesPage} adminOnly />
       </Route>
       <Route path="/settings">
-        <ProtectedRoute component={SettingsPage} />
+        <ProtectedRoute component={SettingsPage} adminOnly />
       </Route>
       <Route>
         <div className="flex h-screen items-center justify-center font-mono text-sm text-muted-foreground">

@@ -79,4 +79,21 @@ router.get("/users", authenticate, requireRole("admin", "supervisor"), async (re
   res.json(users);
 });
 
+// PATCH /users/me/status — agent updates their own status
+router.patch("/users/me/status", authenticate, async (req, res): Promise<void> => {
+  const VALID = ["available", "busy", "break", "offline"] as const;
+  const status = req.body?.status as string;
+  if (!VALID.includes(status as typeof VALID[number])) {
+    res.status(400).json({ error: `status must be one of: ${VALID.join(", ")}` });
+    return;
+  }
+  const userId = req.user!.userId;
+  const [updated] = await db
+    .update(usersTable)
+    .set({ status: status as typeof VALID[number] })
+    .where(eq(usersTable.id, userId))
+    .returning({ id: usersTable.id, name: usersTable.name, email: usersTable.email, role: usersTable.role, status: usersTable.status });
+  res.json(updated);
+});
+
 export default router;

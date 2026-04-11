@@ -24,7 +24,8 @@ export default function Login() {
       { data: { email, password } },
       {
         onSuccess: (data) => {
-          setAuthToken(data.token);
+          const d = data as { token: string; user: { id: number; name: string; email: string; role: "admin" | "supervisor" | "agent"; status: string } };
+          setAuthToken(d.token, d.user);
           setLocation("/");
         },
         onError: () => {
