@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { callsTable, leadsTable, campaignsTable, aiAgentsTable, phoneNumbersTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gte, count, sql } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { enqueueCall } from "../queue/callQueue.js";
 import { selectVoice, selectPhoneNumber, selectProvider } from "../services/selectionService.js";
@@ -144,6 +144,39 @@ router.get("/calls", authenticate, async (req, res): Promise<void> => {
 
   const calls = await query;
   res.json(calls);
+});
+
+// ── GET /calls/live — active calls snapshot ───────────────────────────────────
+router.get("/calls/live", authenticate, async (req, res): Promise<void> => {
+  const liveCalls = await db
+    .select()
+    .from(callsTable)
+    .where(sql`status IN ('initiated', 'ringing', 'in_progress', 'queued')`)
+    .orderBy(desc(callsTable.createdAt))
+    .limit(50);
+  res.json(liveCalls);
+});
+
+// ── GET /calls/stats/today — today's call stats ───────────────────────────────
+router.get("/calls/stats/today", authenticate, async (req, res): Promise<void> => {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const rows = await db
+    .select({ status: callsTable.status, cnt: count() })
+    .from(callsTable)
+    .where(gte(callsTable.createdAt, startOfDay))
+    .groupBy(callsTable.status);
+
+  let total = 0;
+  let completed = 0;
+  let failed = 0;
+  for (const r of rows) {
+    total += Number(r.cnt);
+    if (r.status === "completed") completed += Number(r.cnt);
+    if (r.status === "failed" || r.status === "no_answer") failed += Number(r.cnt);
+  }
+  res.json({ total, completed, failed, successRate: total > 0 ? Math.round((completed / total) * 100) : 0 });
 });
 
 router.get("/calls/:id", authenticate, async (req, res): Promise<void> => {
