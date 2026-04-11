@@ -69,12 +69,19 @@ function useVoicePlayer(toast: ReturnType<typeof useToast>["toast"]) {
 
     try {
       let src: string;
+      const token = localStorage.getItem("auth_token");
+      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
 
       if (voice.previewUrl) {
-        src = voice.previewUrl;
+        // Proxy through backend to ensure correct Content-Type (audio/mpeg)
+        const response = await fetch(`${baseUrl}/api/voices/${voice.id}/preview`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!response.ok) throw new Error("Preview unavailable");
+        const blob = await response.blob();
+        src = URL.createObjectURL(blob);
+        blobUrlRef.current = src;
       } else {
-        const token = localStorage.getItem("auth_token");
-        const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
         const response = await fetch(`${baseUrl}/api/voices/${voice.id}/sample`, {
           method: "POST",
           headers: {

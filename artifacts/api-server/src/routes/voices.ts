@@ -128,6 +128,32 @@ router.post("/voices/elevenlabs/sync", authenticate, requireRole("admin"), async
   }
 });
 
+// ── GET /voices/:id/preview — proxy the stored previewUrl with correct Content-Type ──
+router.get("/voices/:id/preview", authenticate, async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id as string, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid voice ID" }); return; }
+
+  const [voice] = await db.select().from(voicesTable).where(eq(voicesTable.id, id)).limit(1);
+  if (!voice) { res.status(404).json({ error: "Voice not found" }); return; }
+  if (!voice.previewUrl) { res.status(404).json({ error: "No preview available for this voice" }); return; }
+
+  try {
+    const upstream = await axios.get(voice.previewUrl, {
+      responseType: "stream",
+      timeout: 15_000,
+      headers: { "User-Agent": "NexusCall/1.0" },
+    });
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    (upstream.data as NodeJS.ReadableStream).pipe(res);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err: msg, voiceId: voice.voiceId }, "Preview proxy failed");
+    res.status(502).json({ error: "Preview fetch failed", detail: msg });
+  }
+});
+
 // ── POST /voices/:id/sample — stream a short TTS preview via ElevenLabs ──────
 router.post("/voices/:id/sample", authenticate, async (req, res): Promise<void> => {
   const id = parseInt(req.params.id as string, 10);
