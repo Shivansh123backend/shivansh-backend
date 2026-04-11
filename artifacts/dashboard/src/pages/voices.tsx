@@ -118,6 +118,11 @@ function useVoicePlayer(toast: ReturnType<typeof useToast>["toast"]) {
   return { playing, loading, play, stop };
 }
 
+// Real ElevenLabs voice IDs are 20+ alphanumeric chars with no underscores
+function isRealVoiceId(voiceId: string) {
+  return /^[a-zA-Z0-9]{15,}$/.test(voiceId);
+}
+
 // ── Voice card ─────────────────────────────────────────────────────────────────
 function VoiceCard({
   voice,
@@ -133,6 +138,8 @@ function VoiceCard({
   onStop: () => void;
 }) {
   const hasPreview = !!voice.previewUrl;
+  const canGenerate = !hasPreview && voice.provider === "elevenlabs" && isRealVoiceId(voice.voiceId);
+  const canPlay = hasPreview || canGenerate;
 
   return (
     <div className={cn(
@@ -200,25 +207,31 @@ function VoiceCard({
       )}
 
       {/* Play / Stop button */}
-      <button
-        onClick={playing ? onStop : onPlay}
-        disabled={loading}
-        className={cn(
-          "w-full flex items-center justify-center gap-1.5 py-1.5 rounded text-[11px] font-mono border transition-all",
-          playing
-            ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15"
-            : "border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10",
-          loading && "opacity-70 cursor-not-allowed"
-        )}
-      >
-        {loading ? (
-          <><Loader2 className="w-3 h-3 animate-spin" />Generating…</>
-        ) : playing ? (
-          <><Square className="w-3 h-3" />Stop</>
-        ) : (
-          <><Play className="w-3 h-3" />{hasPreview ? "Play Sample" : "Generate Sample"}</>
-        )}
-      </button>
+      {canPlay ? (
+        <button
+          onClick={playing ? onStop : onPlay}
+          disabled={loading}
+          className={cn(
+            "w-full flex items-center justify-center gap-1.5 py-1.5 rounded text-[11px] font-mono border transition-all",
+            playing
+              ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15"
+              : "border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10",
+            loading && "opacity-70 cursor-not-allowed"
+          )}
+        >
+          {loading ? (
+            <><Loader2 className="w-3 h-3 animate-spin" />Generating…</>
+          ) : playing ? (
+            <><Square className="w-3 h-3" />Stop</>
+          ) : (
+            <><Play className="w-3 h-3" />{hasPreview ? "Play Sample" : "Generate Sample"}</>
+          )}
+        </button>
+      ) : (
+        <div className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded text-[11px] font-mono border border-border/30 text-muted-foreground/40 cursor-not-allowed select-none">
+          <Mic2 className="w-3 h-3" />No preview available
+        </div>
+      )}
     </div>
   );
 }
