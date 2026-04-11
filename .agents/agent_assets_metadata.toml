@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "xTGVF4abVgt5dmCyTxC8t"
+uri = "file://LOVABLE_PROMPT.md"
+type = "text"
+title = "Shivansh — Lovable Frontend Wiring Prompt"

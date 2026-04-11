@@ -5,7 +5,7 @@
  * GET /api/call-logs/:id/export?format=txt|pdf
  */
 
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Response } from "express";
 import { db } from "@workspace/db";
 import { callsTable, callLogsTable, campaignsTable, leadsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -46,38 +46,72 @@ function buildTxt(sections: Array<{ heading: string; content: string }>): string
 }
 
 function buildPdf(
-  res: import("express").Response,
+  res: Response,
   title: string,
   sections: Array<{ heading: string; content: string }>
-): void {
-  const doc = new PDFDocument({ margin: 50, size: "A4" });
-  res.setHeader("Content-Type", "application/pdf");
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ margin: 50, size: "A4", bufferPages: true });
 
-  doc.pipe(res);
+      doc.on("error", (err: Error) => {
+        reject(err);
+      });
 
-  // Header
-  doc.fontSize(20).font("Helvetica-Bold").text("SHIVANSH AI CALLING", { align: "center" });
-  doc.fontSize(13).font("Helvetica").text("Call Report", { align: "center" });
-  doc.moveDown(0.5);
-  doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-  doc.moveDown(1);
+      res.on("error", (err: Error) => {
+        doc.destroy?.();
+        reject(err);
+      });
 
-  // Title
-  doc.fontSize(16).font("Helvetica-Bold").text(title);
-  doc.moveDown(0.5);
+      res.setHeader("Content-Type", "application/pdf");
+      doc.pipe(res);
 
-  // Sections
-  for (const { heading, content } of sections) {
-    doc.fontSize(12).font("Helvetica-Bold").fillColor("#333").text(heading.toUpperCase());
-    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke("#ccc");
-    doc.moveDown(0.3);
-    doc.fontSize(10).font("Helvetica").fillColor("#000").text(content, { lineGap: 3 });
-    doc.moveDown(1);
-  }
+      // Header
+      doc
+        .fontSize(20)
+        .font("Helvetica-Bold")
+        .text("SHIVANSH AI CALLING", { align: "center" });
+      doc
+        .fontSize(13)
+        .font("Helvetica")
+        .text("Call Report", { align: "center" });
+      doc.moveDown(0.5);
+      doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+      doc.moveDown(1);
 
-  // Footer
-  doc.fontSize(8).fillColor("#888").text(`Generated: ${new Date().toISOString()}`, { align: "center" });
-  doc.end();
+      // Title
+      doc.fontSize(16).font("Helvetica-Bold").text(title);
+      doc.moveDown(0.5);
+
+      // Sections
+      for (const { heading, content } of sections) {
+        doc
+          .fontSize(12)
+          .font("Helvetica-Bold")
+          .fillColor("#333333")
+          .text(heading.toUpperCase());
+        doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke("#cccccc");
+        doc.moveDown(0.3);
+        doc
+          .fontSize(10)
+          .font("Helvetica")
+          .fillColor("#000000")
+          .text(content, { lineGap: 3 });
+        doc.moveDown(1);
+      }
+
+      // Footer
+      doc
+        .fontSize(8)
+        .fillColor("#888888")
+        .text(`Generated: ${new Date().toISOString()}`, { align: "center" });
+
+      doc.on("end", () => resolve());
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 
 // ── GET /calls/:id/export ─────────────────────────────────────────────────────
@@ -90,16 +124,23 @@ router.get("/calls/:id/export", authenticate, async (req, res): Promise<void> =>
   const [call] = await db.select().from(callsTable).where(eq(callsTable.id, id)).limit(1);
   if (!call) { res.status(404).json({ error: "Call not found" }); return; }
 
-  // Enrich with campaign and lead names
   let campaignName = `Campaign #${call.campaignId}`;
   let leadName = "Unknown";
   let leadPhone = "Unknown";
 
-  const [campaign] = await db.select({ name: campaignsTable.name }).from(campaignsTable).where(eq(campaignsTable.id, call.campaignId)).limit(1);
+  const [campaign] = await db
+    .select({ name: campaignsTable.name })
+    .from(campaignsTable)
+    .where(eq(campaignsTable.id, call.campaignId))
+    .limit(1);
   if (campaign) campaignName = campaign.name;
 
   if (call.leadId && call.leadId > 0) {
-    const [lead] = await db.select({ name: leadsTable.name, phone: leadsTable.phone }).from(leadsTable).where(eq(leadsTable.id, call.leadId)).limit(1);
+    const [lead] = await db
+      .select({ name: leadsTable.name, phone: leadsTable.phone })
+      .from(leadsTable)
+      .where(eq(leadsTable.id, call.leadId))
+      .limit(1);
     if (lead) { leadName = lead.name; leadPhone = lead.phone; }
   }
 
@@ -134,7 +175,13 @@ router.get("/calls/:id/export", authenticate, async (req, res): Promise<void> =>
 
   if (format === "pdf") {
     res.setHeader("Content-Disposition", `attachment; filename="${filename}.pdf"`);
-    buildPdf(res, `Outbound Call #${id} — ${campaignName}`, sections);
+    try {
+      await buildPdf(res, `Outbound Call #${id} — ${campaignName}`, sections);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: "PDF generation failed" });
+      }
+    }
   } else {
     const txt = buildTxt(sections);
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -150,11 +197,19 @@ router.get("/call-logs/:id/export", authenticate, async (req, res): Promise<void
 
   const format = (req.query.format as string ?? "txt").toLowerCase();
 
-  const [log] = await db.select().from(callLogsTable).where(eq(callLogsTable.id, id)).limit(1);
+  const [log] = await db
+    .select()
+    .from(callLogsTable)
+    .where(eq(callLogsTable.id, id))
+    .limit(1);
   if (!log) { res.status(404).json({ error: "Call log not found" }); return; }
 
   let campaignName = `Campaign #${log.campaignId}`;
-  const [campaign] = await db.select({ name: campaignsTable.name }).from(campaignsTable).where(eq(campaignsTable.id, log.campaignId)).limit(1);
+  const [campaign] = await db
+    .select({ name: campaignsTable.name })
+    .from(campaignsTable)
+    .where(eq(campaignsTable.id, log.campaignId))
+    .limit(1);
   if (campaign) campaignName = campaign.name;
 
   const metaContent = [
@@ -182,7 +237,17 @@ router.get("/call-logs/:id/export", authenticate, async (req, res): Promise<void
 
   if (format === "pdf") {
     res.setHeader("Content-Disposition", `attachment; filename="${filename}.pdf"`);
-    buildPdf(res, `${log.direction === "inbound" ? "Inbound" : "Outbound"} Call Log #${id} — ${campaignName}`, sections);
+    try {
+      await buildPdf(
+        res,
+        `${log.direction === "inbound" ? "Inbound" : "Outbound"} Call Log #${id} — ${campaignName}`,
+        sections
+      );
+    } catch (err) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: "PDF generation failed" });
+      }
+    }
   } else {
     const txt = buildTxt(sections);
     res.setHeader("Content-Type", "text/plain; charset=utf-8");

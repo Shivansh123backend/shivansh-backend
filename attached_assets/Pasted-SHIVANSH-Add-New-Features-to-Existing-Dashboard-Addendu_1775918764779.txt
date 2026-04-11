@@ -1,0 +1,83 @@
+SHIVANSH — Add New Features to Existing Dashboard (Addendum)
+
+Backend: https://shivanshbackend.replit.app/api — all requests need Authorization: Bearer <token>
+
+Add the following to the existing Shivansh dashboard UI:
+
+1. CALL LOGS & CALLS — Add Download, Transcript, Summary, Disposition
+In the Call Logs table (GET /api/call-logs), add a new column Actions with two download buttons per row:
+
+TXT button → opens GET /api/call-logs/:id/export?format=txt with auth header → triggers browser file download named call-log-{id}.txt
+PDF button → opens GET /api/call-logs/:id/export?format=pdf with auth header → triggers browser file download named call-log-{id}.pdf
+To download with auth (since the header can't be sent via <a href>), use this pattern:
+
+const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+const blob = await res.blob();
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = filename;
+a.click();
+
+Add a Direction column to both Call Logs and Calls tables — badge: inbound (cyan) | outbound (purple).
+
+Disposition column — show as a colored badge:
+
+interested → green
+not_interested → red
+vm → amber
+no_answer → grey
+busy → orange
+connected → blue
+callback_requested → cyan
+transferred → purple
+completed → teal
+Clickable row / detail drawer — clicking any call log row opens a side drawer with:
+
+All metadata (phone, campaign, direction, status, disposition, duration, timestamp)
+Recording section: if recording_url is not null, show an HTML5 <audio controls> player with the recording URL. If null, show "No recording available"
+AI Summary section: show summary text in a card. If null, show "Summary not yet generated"
+Transcript section: show transcript text in a scrollable code-style block (monospace, dark background). Format as readable conversation if it contains AI Agent: / Caller: lines. If null, show "Transcript not available"
+Manually Tag Disposition button → opens a small dropdown/popover with disposition options → on select: PATCH /api/call-logs/:id/disposition body: { "disposition": "interested" } → update row in table immediately
+Same drawer for Calls table (GET /api/calls) — same fields, but download uses /api/calls/:id/export?format=txt|pdf and disposition update uses PATCH /api/calls/:id/disposition.
+
+2. CAMPAIGNS — Show Concurrency Setting & Live Progress
+In the Campaign list cards/rows, show the maxConcurrentCalls value as a badge: e.g. "⚡ 5 concurrent"
+
+When a campaign is Active, show a live call count chip that auto-refreshes every 10 seconds:
+
+Fetch GET /api/calls/live and count rows where campaignId matches
+Show as: "🔴 3 calls live" (pulsing red dot)
+Campaign detail — in the edit form, ensure the Max Concurrent Calls slider/input (1–20) is visible and editable. Save with PATCH /api/campaigns/:id body { "maxConcurrentCalls": N }.
+
+3. CALLS / CALL LOGS — Add Filter Bar
+Above both tables, add a filter bar with:
+
+Direction toggle: All | Inbound | Outbound
+Disposition dropdown: All | Interested | Not Interested | Voicemail | No Answer | Busy | etc.
+Campaign dropdown: populated from GET /api/campaigns
+Date range (optional): from/to date pickers
+Apply filters client-side on the fetched data (no need for new API endpoints).
+
+4. INBOUND ROUTES — Add Live Inbound Call Monitor
+On the Inbound Routes page, add a Live Inbound Calls section below the setup guide:
+
+Auto-refresh every 8 seconds with GET /api/call-logs?direction=inbound filtered client-side for recent (last 24h) records:
+
+Table: Phone Number | Campaign | Status | Disposition | Duration | Transcript (icon button to expand) | Download (TXT/PDF buttons)
+If a call has no disposition yet (null), show a "Tag" button
+5. DASHBOARD — Add Disposition Breakdown Chart
+Below the stat cards on the main dashboard, add a Call Outcomes horizontal bar chart showing disposition counts across all recent calls:
+
+Fetch GET /api/call-logs?limit=500, group by disposition client-side, render as a simple horizontal bar chart using any chart library already in the project (Recharts / Chart.js):
+
+Interested 🟢
+Not Interested 🔴
+Voicemail 🟡
+No Answer ⬜
+Completed 🟦
+Connected 🟣
+Also add two new stat cards:
+
+Inbound Today — count of call-logs where direction === "inbound" and timestamp is today
+Outbound Today — count where direction === "outbound" and timestamp is today
+That's everything new from the latest backend update. The key additions are: download TXT/PDF per call, recording audio playback, transcript + summary viewer, manual disposition tagging, concurrent calls indicator on campaigns, and direction filter (inbound vs outbound) across all call views.
