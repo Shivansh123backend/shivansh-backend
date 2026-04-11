@@ -22,6 +22,8 @@ export interface EnqueueCallPayload {
   transfer_number?: string;
   campaign_id: string;
   campaign_name?: string;
+  background_sound?: string;
+  hold_music_url?: string;
 }
 
 export interface TriggerCallResult {

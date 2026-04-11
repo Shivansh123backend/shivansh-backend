@@ -22,6 +22,9 @@ export const campaignsTable = pgTable("campaigns", {
   voice: text("voice"),
   fromNumber: text("from_number"),
   transferNumber: text("transfer_number"),
+  backgroundSound: text("background_sound").default("none"),
+  holdMusic: text("hold_music").default("none"),
+  humanLike: text("human_like").default("true"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

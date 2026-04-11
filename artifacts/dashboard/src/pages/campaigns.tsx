@@ -38,6 +38,9 @@ type Campaign = {
   agentPrompt?: string;
   knowledgeBase?: string;
   recordingNotes?: string;
+  backgroundSound?: string;
+  holdMusic?: string;
+  humanLike?: string;
 };
 
 type ElevenLabsVoice = {
@@ -225,10 +228,13 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const [knowledgeBase, setKnowledgeBase] = useState("");
   const [agentPrompt, setAgentPrompt] = useState("");
   const [recordingNotes, setRecordingNotes] = useState("");
+  const [humanLike, setHumanLike] = useState("true");
 
   // Step 3 — Voice & Number
   const [selectedVoice, setSelectedVoice] = useState("default");
   const [selectedNumber, setSelectedNumber] = useState("");
+  const [backgroundSound, setBackgroundSound] = useState("none");
+  const [holdMusic, setHoldMusic] = useState("none");
 
   const { data: dbVoices } = useListVoices() as { data: Array<{ id: number; name: string; voiceId: string; gender: string; accent: string; previewUrl?: string; description?: string }> | undefined };
   const { data: numbers } = useListNumbers() as { data: Array<{ id: number; phoneNumber: string; provider: string; status: string }> | undefined };
@@ -255,6 +261,9 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           recordingNotes: recordingNotes || undefined,
           voice: selectedVoice !== "default" ? selectedVoice : undefined,
           fromNumber: selectedNumber || undefined,
+          backgroundSound: backgroundSound as "none" | "office" | "typing" | "cafe",
+          holdMusic: holdMusic as "none" | "jazz" | "corporate" | "smooth" | "classical",
+          humanLike,
         } as Parameters<typeof createCampaign.mutate>[0]["data"],
       },
       {
@@ -405,6 +414,21 @@ function CreateModal({ onClose }: { onClose: () => void }) {
                   placeholder="Describe ideal call patterns, tone, pace from your best recordings...&#10;&#10;Example: 'Best performers pause 2s after greeting, mirror the customer's tone, handle objections by asking a clarifying question first.'"
                 />
               </div>
+
+              {/* Human-like toggle */}
+              <div className="flex items-center justify-between rounded border border-border px-3 py-2.5">
+                <div>
+                  <p className="text-xs font-mono font-medium text-foreground">Human-Like Conversation Mode</p>
+                  <p className="text-[10px] font-mono text-muted-foreground mt-0.5">Uses natural fillers, pauses, empathy phrases — never sounds scripted</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHumanLike(h => h === "true" ? "false" : "true")}
+                  className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors ${humanLike === "true" ? "bg-primary" : "bg-muted"}`}
+                >
+                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${humanLike === "true" ? "translate-x-4" : "translate-x-0"}`} />
+                </button>
+              </div>
             </>
           )}
 
@@ -444,6 +468,40 @@ function CreateModal({ onClose }: { onClose: () => void }) {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
+                    <Volume2 className="w-3 h-3" /> Background Ambience
+                  </Label>
+                  <Select value={backgroundSound} onValueChange={setBackgroundSound}>
+                    <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None (silent)</SelectItem>
+                      <SelectItem value="office">Office Environment</SelectItem>
+                      <SelectItem value="typing">Typing Sounds</SelectItem>
+                      <SelectItem value="cafe">Café Background</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] font-mono text-muted-foreground">Subtle ambient sounds make the agent feel like a real person in an office</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
+                    <Music className="w-3 h-3" /> Transfer Hold Music
+                  </Label>
+                  <Select value={holdMusic} onValueChange={setHoldMusic}>
+                    <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None (silence)</SelectItem>
+                      <SelectItem value="jazz">Smooth Jazz</SelectItem>
+                      <SelectItem value="corporate">Corporate Upbeat</SelectItem>
+                      <SelectItem value="smooth">Relaxing Ambient</SelectItem>
+                      <SelectItem value="classical">Light Classical</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] font-mono text-muted-foreground">Plays while the caller waits for a human agent to pick up on transfer</p>
+                </div>
               </div>
             </>
           )}
@@ -513,6 +571,9 @@ function LaunchModal({
   const [isLaunching, setIsLaunching] = useState(false);
   const [resetLeads, setResetLeads] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
+  const [backgroundSound, setBackgroundSound] = useState(campaign.backgroundSound ?? "none");
+  const [holdMusic, setHoldMusic] = useState(campaign.holdMusic ?? "none");
+  const [humanLike, setHumanLike] = useState(campaign.humanLike ?? "true");
 
   const pendingLeads = (leads ?? []).filter((l: { status: string }) => l.status === "pending");
   const calledLeads = (leads ?? []).filter((l: { status: string }) => ["called", "callback", "completed"].includes(l.status));
@@ -530,6 +591,9 @@ function LaunchModal({
           voice: selectedVoice !== "default" ? selectedVoice : undefined,
           fromNumber: selectedNumber || undefined,
           agentPrompt: prompt || undefined,
+          backgroundSound,
+          holdMusic,
+          humanLike,
         }),
       });
       if (resetLeads && calledLeads.length > 0) {
@@ -628,6 +692,54 @@ function LaunchModal({
               elVoices={elVoices}
               elLoading={elLoading}
             />
+          </div>
+
+          {/* Background sound + Hold music */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
+                <Volume2 className="w-3 h-3" /> Background Ambience
+              </Label>
+              <Select value={backgroundSound} onValueChange={setBackgroundSound}>
+                <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None (silent)</SelectItem>
+                  <SelectItem value="office">Office Environment</SelectItem>
+                  <SelectItem value="typing">Typing Sounds</SelectItem>
+                  <SelectItem value="cafe">Café Background</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
+                <Music className="w-3 h-3" /> Transfer Hold Music
+              </Label>
+              <Select value={holdMusic} onValueChange={setHoldMusic}>
+                <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None (silence)</SelectItem>
+                  <SelectItem value="jazz">Smooth Jazz</SelectItem>
+                  <SelectItem value="corporate">Corporate Upbeat</SelectItem>
+                  <SelectItem value="smooth">Relaxing Ambient</SelectItem>
+                  <SelectItem value="classical">Light Classical</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Human-like toggle */}
+          <div className="flex items-center justify-between rounded border border-border px-3 py-2.5">
+            <div>
+              <p className="text-xs font-mono font-medium text-foreground">Human-Like Mode</p>
+              <p className="text-[10px] font-mono text-muted-foreground mt-0.5">Natural fillers, pauses &amp; empathy — sounds like a real person</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setHumanLike(h => h === "true" ? "false" : "true")}
+              className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors ${humanLike === "true" ? "bg-primary" : "bg-muted"}`}
+            >
+              <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${humanLike === "true" ? "translate-x-4" : "translate-x-0"}`} />
+            </button>
           </div>
 
           {/* Collapsible prompt */}

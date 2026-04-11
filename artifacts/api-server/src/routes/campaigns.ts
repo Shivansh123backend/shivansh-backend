@@ -33,6 +33,9 @@ const createCampaignSchema = z.object({
   voice: z.string().optional(),
   fromNumber: z.string().optional(),
   transferNumber: z.string().optional(),
+  backgroundSound: z.enum(["none", "office", "typing", "cafe"]).default("none"),
+  holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).default("none"),
+  humanLike: z.string().default("true"),
 });
 
 const assignAgentSchema = z.object({
@@ -72,6 +75,9 @@ const updateCampaignSchema = z.object({
   fromNumber: z.string().optional(),
   transferNumber: z.string().optional(),
   maxConcurrentCalls: z.number().min(1).max(100).optional(),
+  backgroundSound: z.enum(["none", "office", "typing", "cafe"]).optional(),
+  holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).optional(),
+  humanLike: z.string().optional(),
 });
 
 router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
@@ -157,7 +163,7 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
 });
 
 async function triggerCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
-  const { script, voiceName, fromNumber, transferNumber } = await resolveCampaignAssets(campaignId, campaign);
+  const { script, voiceName, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(campaignId, campaign);
 
   const pendingLeads = await db
     .select()
@@ -181,6 +187,8 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
       transfer_number: transferNumber,
       campaign_id: String(campaignId),
       campaign_name: campaign.name,
+      background_sound: backgroundSound !== "none" ? backgroundSound : undefined,
+      hold_music_url: holdMusicUrl ?? undefined,
     });
 
     // Update call log with outcome
@@ -209,32 +217,87 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
   emitToSupervisors("campaign:stopped", { campaignId, name: campaign.name, reason: "all_leads_called" });
 }
 
+// Hold music URL map — royalty-free audio hosted on reliable CDNs
+const HOLD_MUSIC_URLS: Record<string, string | null> = {
+  none: null,
+  jazz: "https://cdn.pixabay.com/download/audio/2022/03/10/audio_c6b38e0e2e.mp3",
+  corporate: "https://cdn.pixabay.com/download/audio/2022/08/02/audio_884fe92c21.mp3",
+  smooth: "https://cdn.pixabay.com/download/audio/2021/04/07/audio_9f72b85a8a.mp3",
+  classical: "https://cdn.pixabay.com/download/audio/2022/01/20/audio_d0c6ff1fca.mp3",
+};
+
+// Human-like conversation instructions injected when humanLike = true
+const HUMAN_LIKE_INSTRUCTIONS = `
+=== CONVERSATION STYLE INSTRUCTIONS ===
+Sound completely natural and human — never robotic or scripted. Follow these rules:
+
+SPEECH PATTERNS:
+- Use natural fillers occasionally: "uh", "um", "you know", "right", "sure"
+- Add brief thinking pauses: "Let me just check that..." / "Give me one moment..."
+- Vary your sentence length — mix short punchy lines with longer explanations
+- Use contractions always: "I'm", "we're", "it's", "that's", "don't"
+- React naturally to what the person says before moving on
+
+EMPATHY & WARMTH:
+- Mirror the caller's energy — if they're warm, be warm back; if formal, stay professional
+- Acknowledge feelings: "I completely understand", "That makes total sense", "Of course"
+- Celebrate small wins: "Perfect!", "Great, that's exactly right", "Wonderful"
+- If they seem busy: "I'll keep this brief" / "This will only take a minute"
+
+PACING:
+- Don't rush — leave natural silence for the person to think or respond
+- After asking a question, WAIT — don't fill every gap with words
+- If they haven't understood, rephrase simply rather than repeating word-for-word
+
+NEVER DO:
+- Never say "As an AI..." or reveal you are an AI unless directly asked
+- Never use overly formal phrases like "Certainly!" or "Absolutely!" repeatedly
+- Never read from a script in a monotone — vary your tone with the conversation
+=== END STYLE INSTRUCTIONS ===
+`;
+
 async function resolveCampaignAssets(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
-  const DEFAULT_PROMPT = `You are a professional AI voice agent making an outbound call. Follow these steps:
+  const DEFAULT_PROMPT = `You are a friendly, professional voice agent making an outbound call. Here's how you handle the call:
 
-1. GREETING: Introduce yourself warmly — "Hello, I'm an AI assistant calling on behalf of our team. Am I speaking with [Lead Name]?"
+OPENING — be warm and natural:
+"Hey, is this [Lead Name]? Hey! This is [Name] calling from our team — hope I'm not catching you at a bad time?"
 
-2. CONFIRM DETAILS: Verify the contact's information one by one:
-   - Full name: "Could you please confirm your full name?"
-   - Phone number: "Is this still the best number to reach you?"
-   - Email address: "Could you confirm or provide your email address?"
-   - Address: "Could you confirm your current mailing or home address?"
+Wait for their response. If they sound rushed: "I'll keep it super quick, I promise."
 
-3. PURPOSE: After confirming their details, proceed with the reason for your call and assist them.
+CONFIRM THEIR DETAILS — one at a time, conversationally:
+"Just want to make sure I've got the right person — could you confirm your full name for me?"
+[pause, listen]
+"And the best number to reach you — is this still it?"
+[pause, listen]
+"Perfect. And an email address I can send anything over to?"
+[pause, listen]
 
-4. TONE: Always be warm, professional, and concise. Never rush the contact.
+PURPOSE — natural transition:
+"So the reason I'm reaching out today..." [explain the purpose of the call clearly and briefly]
 
-5. OPT-OUT: If the contact asks to be removed from the list, acknowledge immediately, apologise for the interruption, and end the call respectfully.
+CLOSE — genuine and warm:
+"Is there anything else I can help you with while I have you?" 
+[listen]
+"Brilliant, I really appreciate your time. Have a great rest of your day!"
 
-6. UNAVAILABLE: If the contact is unavailable or requests a callback, note their preferred time and close politely.`;
+HANDLING OBJECTIONS:
+- "Not interested" → "Totally fair, I appreciate your honesty. Is it okay if I just leave a quick note in case things change?"
+- "Call back later" → "Of course — what time works best for you?"
+- "Remove me from list" → "Absolutely, I'll take care of that right now. Sorry for the interruption and have a great day!"
+
+TONE: Be a real person having a real conversation. Stay warm, listen actively, and never rush.`;
 
   // Campaign's own fields take priority over linked AI agent values
   let basePrompt = campaign.agentPrompt ?? DEFAULT_PROMPT;
 
-  // Build combined script: knowledge base → main prompt → recording learnings
+  // Build combined script: knowledge base → human-like style → main prompt → recording learnings
   const parts: string[] = [];
   if (campaign.knowledgeBase?.trim()) {
     parts.push(`=== KNOWLEDGE BASE & SOPs ===\n${campaign.knowledgeBase.trim()}\n=== END KNOWLEDGE BASE ===`);
+  }
+  // Inject human-like instructions when enabled (default: true)
+  if (campaign.humanLike !== "false") {
+    parts.push(HUMAN_LIKE_INSTRUCTIONS.trim());
   }
   parts.push(basePrompt.trim());
   if (campaign.recordingNotes?.trim()) {
@@ -244,6 +307,13 @@ async function resolveCampaignAssets(campaignId: number, campaign: typeof campai
   let voiceName = campaign.voice ?? "default";
   let fromNumber = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
   const transferNumber = campaign.transferNumber ?? campaign.transferRules ?? undefined;
+
+  // Background sound to pass to worker
+  const backgroundSound = campaign.backgroundSound ?? "none";
+
+  // Hold music URL resolved from preset name
+  const holdMusicPreset = campaign.holdMusic ?? "none";
+  const holdMusicUrl = HOLD_MUSIC_URLS[holdMusicPreset] ?? null;
 
   // Supplement from linked AI agent only when campaign fields are absent
   if ((!campaign.agentPrompt || !campaign.voice) && campaign.agentId) {
@@ -279,7 +349,7 @@ async function resolveCampaignAssets(campaignId: number, campaign: typeof campai
     if (phoneRow) fromNumber = phoneRow.phoneNumber;
   }
 
-  return { script, voiceName, fromNumber, transferNumber };
+  return { script, voiceName, fromNumber, transferNumber, backgroundSound, holdMusicUrl };
 }
 
 // Shared logger (pino-style simple wrapper)
