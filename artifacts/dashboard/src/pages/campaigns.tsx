@@ -167,9 +167,14 @@ function LaunchModal({
 6. UNAVAILABLE: If the contact is unavailable or requests a callback, note their preferred time and close politely.`
   );
   const [isLaunching, setIsLaunching] = useState(false);
+  const [resetLeads, setResetLeads] = useState(false);
 
   const pendingLeads = (leads ?? []).filter((l: { status: string }) => l.status === "pending");
+  const calledLeads = (leads ?? []).filter((l: { status: string }) => ["called", "callback", "completed"].includes(l.status));
   const totalLeads = (leads ?? []).length;
+
+  const effectivePending = resetLeads ? pendingLeads.length + calledLeads.length : pendingLeads.length;
+  const canLaunch = effectivePending > 0;
 
   const handleLaunch = async () => {
     setIsLaunching(true);
@@ -184,6 +189,10 @@ function LaunchModal({
         }),
       });
 
+      if (resetLeads && calledLeads.length > 0) {
+        await customFetch(`/api/campaigns/${campaign.id}/reset-leads`, { method: "POST" });
+      }
+
       await new Promise<void>((resolve, reject) => {
         startCampaign.mutate(
           { id: campaign.id },
@@ -194,7 +203,7 @@ function LaunchModal({
         );
       });
 
-      toast({ title: `Campaign "${campaign.name}" launched`, description: `Calling ${pendingLeads.length} pending leads` });
+      toast({ title: `Campaign "${campaign.name}" launched`, description: `Calling ${effectivePending} leads` });
       onLaunched();
       onClose();
     } catch {
@@ -232,9 +241,25 @@ function LaunchModal({
             </div>
           </div>
 
-          {pendingLeads.length === 0 && (
+          {pendingLeads.length === 0 && totalLeads > 0 && (
+            <div className="border border-yellow-500/20 bg-yellow-500/5 rounded p-3 space-y-2">
+              <p className="text-xs font-mono text-yellow-400">
+                All {calledLeads.length} leads have already been called. Enable "Re-call all leads" to call them again.
+              </p>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={resetLeads}
+                  onChange={e => setResetLeads(e.target.checked)}
+                  className="accent-primary"
+                />
+                <span className="text-xs font-mono text-foreground">Re-call all leads (reset to pending)</span>
+              </label>
+            </div>
+          )}
+          {pendingLeads.length === 0 && totalLeads === 0 && (
             <div className="border border-yellow-500/20 bg-yellow-500/5 rounded p-3 text-xs font-mono text-yellow-400">
-              No pending leads in this campaign. Import leads first or all leads have already been called.
+              No leads in this campaign yet. Add leads from the Leads page first.
             </div>
           )}
 
@@ -318,7 +343,7 @@ function LaunchModal({
             <Button
               className="flex-1 font-mono text-xs uppercase tracking-wider bg-green-600 hover:bg-green-700 text-white"
               onClick={handleLaunch}
-              disabled={isLaunching || pendingLeads.length === 0}
+              disabled={isLaunching || !canLaunch}
             >
               {isLaunching ? (
                 <span className="flex items-center gap-1.5">

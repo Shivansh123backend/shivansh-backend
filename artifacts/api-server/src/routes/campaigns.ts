@@ -10,7 +10,7 @@ import {
   voicesTable,
   phoneNumbersTable,
 } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { emitToSupervisors } from "../websocket/index.js";
@@ -19,7 +19,6 @@ import { z } from "zod";
 
 const router: IRouter = Router();
 
-const DEMO_LEAD_LIMIT = 5;
 
 const createCampaignSchema = z.object({
   name: z.string().min(1),
@@ -159,10 +158,9 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
   const pendingLeads = await db
     .select()
     .from(leadsTable)
-    .where(and(eq(leadsTable.campaignId, campaignId), eq(leadsTable.status, "pending")))
-    .limit(DEMO_LEAD_LIMIT);
+    .where(and(eq(leadsTable.campaignId, campaignId), eq(leadsTable.status, "pending")));
 
-  logger.info({ campaignId, count: pendingLeads.length, limit: DEMO_LEAD_LIMIT }, `Campaign starting — triggering calls`);
+  logger.info({ campaignId, count: pendingLeads.length }, `Campaign starting — triggering calls for ${pendingLeads.length} pending leads`);
 
   for (const lead of pendingLeads) {
     // Log call attempt immediately so CDR shows it even before worker responds
@@ -198,6 +196,13 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
   }
 
   logger.info({ campaignId, count: pendingLeads.length }, `Campaign finished dispatching calls`);
+
+  // Auto-stop campaign when all leads have been called
+  await db
+    .update(campaignsTable)
+    .set({ status: "paused" })
+    .where(eq(campaignsTable.id, campaignId));
+  emitToSupervisors("campaign:stopped", { campaignId, name: campaign.name, reason: "all_leads_called" });
 }
 
 async function resolveCampaignAssets(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
@@ -296,6 +301,38 @@ router.post("/campaigns/stop/:id", authenticate, requireRole("admin"), async (re
   });
 
   res.json(updated);
+});
+
+// ── POST /campaigns/:id/reset-leads — reset all leads back to pending ─────────
+router.post("/campaigns/:id/reset-leads", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(rawId, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid campaign ID" });
+    return;
+  }
+
+  const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, id));
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+
+  if (campaign.status === "active") {
+    res.status(400).json({ error: "Stop the campaign before resetting leads" });
+    return;
+  }
+
+  const result = await db
+    .update(leadsTable)
+    .set({ status: "pending" })
+    .where(and(
+      eq(leadsTable.campaignId, id),
+      inArray(leadsTable.status, ["called", "callback", "completed"]),
+    ))
+    .returning({ id: leadsTable.id });
+
+  res.json({ reset: result.length, campaignId: id });
 });
 
 router.post("/campaigns/:id/agents", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
