@@ -180,11 +180,14 @@ async function handleAddLead(
   res.status(201).json({
     id: lead.id,
     name: lead.name,
+    phone: lead.phone,
     phone_number: lead.phone,
     email: lead.email,
+    campaignId: lead.campaignId,
     campaign_id: lead.campaignId,
     source: lead.source,
     status: lead.status,
+    createdAt: lead.createdAt,
     created_at: lead.createdAt,
   });
 }
@@ -388,28 +391,38 @@ router.get("/leads/:campaign_id", authenticate, async (req, res): Promise<void> 
   );
 });
 
-// ── GET /leads (legacy — kept for backward compat) ───────────────────────────
+// ── GET /leads ────────────────────────────────────────────────────────────────
 router.get("/leads", authenticate, async (req, res): Promise<void> => {
   const campaignIdRaw = req.query.campaignId ?? req.query.campaign_id;
+  const statusRaw = req.query.status ? String(req.query.status) : undefined;
+
+  const conditions = [];
   if (campaignIdRaw) {
     const campaignId = parseInt(String(campaignIdRaw), 10);
-    if (!isNaN(campaignId)) {
-      const leads = await db
-        .select()
-        .from(leadsTable)
-        .where(eq(leadsTable.campaignId, campaignId))
-        .orderBy(leadsTable.createdAt);
-      res.json(leads.map((l) => ({
-        id: l.id, name: l.name, phone_number: l.phone, email: l.email,
-        campaign_id: l.campaignId, source: l.source, status: l.status, created_at: l.createdAt,
-      })));
-      return;
-    }
+    if (!isNaN(campaignId)) conditions.push(eq(leadsTable.campaignId, campaignId));
   }
-  const leads = await db.select().from(leadsTable).orderBy(leadsTable.createdAt);
+  if (statusRaw) {
+    conditions.push(eq(leadsTable.status, statusRaw as "pending" | "called" | "callback" | "do_not_call" | "completed"));
+  }
+
+  const query = db.select().from(leadsTable);
+  const leads = await (conditions.length > 0
+    ? query.where(conditions.length === 1 ? conditions[0] : and(...conditions))
+    : query
+  ).orderBy(leadsTable.createdAt);
+
   res.json(leads.map((l) => ({
-    id: l.id, name: l.name, phone_number: l.phone, email: l.email,
-    campaign_id: l.campaignId, source: l.source, status: l.status, created_at: l.createdAt,
+    id: l.id,
+    name: l.name,
+    phone: l.phone,
+    phone_number: l.phone,
+    email: l.email,
+    campaignId: l.campaignId,
+    campaign_id: l.campaignId,
+    source: l.source,
+    status: l.status,
+    createdAt: l.createdAt,
+    created_at: l.createdAt,
   })));
 });
 

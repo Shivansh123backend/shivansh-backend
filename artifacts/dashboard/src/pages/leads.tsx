@@ -163,15 +163,19 @@ export default function LeadsPage() {
                     ))}
                   </tr>
                 ))
-              ) : (leads ?? []).map((l: { id: number; name: string; phone: string; campaignId?: number; status: string }) => (
+              ) : (leads ?? []).map((l: { id: number; name: string; phone?: string; phone_number?: string; campaignId?: number; campaign_id?: number; status: string; email?: string | null }) => {
+                const phone = l.phone || l.phone_number || "-";
+                const campaignId = l.campaignId ?? l.campaign_id;
+                return (
                 <tr key={l.id} className="border-b border-border/30 hover:bg-white/2 transition-colors">
                   <td className="px-4 py-3 text-muted-foreground">#{l.id}</td>
                   <td className="px-4 py-3 text-foreground font-medium">{l.name}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{l.phone}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{l.campaignId ? campaignMap[l.campaignId] ?? `#${l.campaignId}` : "-"}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{phone}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{campaignId ? campaignMap[campaignId] ?? `#${campaignId}` : "-"}</td>
                   <td className="px-4 py-3"><StatusBadge status={l.status} /></td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
