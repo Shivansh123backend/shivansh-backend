@@ -12,3 +12,9 @@ id = "kQFF5KqVqmZm9Wn4nWp6T"
 uri = "file://LOVABLE_PATCH.md"
 type = "text"
 title = "Updated Lovable Patch — Patches 9, 10 & 11 added"
+
+[[outputs]]
+id = "4uSAtbyMOakp5dMgU-K9i"
+uri = "file://lib/api-spec/openapi.yaml"
+type = "unspecified"
+title = "Shivansh API Spec (OpenAPI)"
