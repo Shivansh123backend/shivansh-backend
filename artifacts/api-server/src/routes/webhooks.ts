@@ -49,13 +49,14 @@ const BACKEND_WEBHOOK_URL =
 // Default ElevenLabs voice (Rachel)
 const DEFAULT_ELEVEN_VOICE = "21m00Tcm4TlvDq8ikWAM";
 
-// ── Hold music URLs for transfer (royalty-free, Pixabay CDN) ──────────────────
+// ── Hold music URLs for transfer — reliable public-domain MP3s ────────────────
+// These must be directly fetchable by Telnyx without auth or redirects
 const HOLD_MUSIC_URLS: Record<string, string> = {
-  none:      "https://cdn.pixabay.com/download/audio/2022/08/02/audio_884fe92c21.mp3",
-  jazz:      "https://cdn.pixabay.com/download/audio/2022/03/10/audio_c6b38e0e2e.mp3",
-  corporate: "https://cdn.pixabay.com/download/audio/2022/08/02/audio_884fe92c21.mp3",
-  smooth:    "https://cdn.pixabay.com/download/audio/2021/04/07/audio_9f72b85a8a.mp3",
-  classical: "https://cdn.pixabay.com/download/audio/2022/01/20/audio_d0c6ff1fca.mp3",
+  none:      "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+  jazz:      "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
+  corporate: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+  smooth:    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+  classical: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
 };
 const DEFAULT_HOLD_MUSIC_URL = HOLD_MUSIC_URLS.corporate!;
 
@@ -109,13 +110,14 @@ function buildSystemPrompt(
 - If they say no or give a different name: say "Oh, I'm so sorry! Is this a good time?" and adapt.`
     : "";
 
-  const progressionRules = `CONVERSATION PROGRESSION (CRITICAL):
-- After each question, STOP and wait for the caller's answer.
-- When they answer (even "yes", "no", "yeah", "uh huh", "sure") — ACCEPT it and MOVE to the next question immediately.
-- NEVER repeat the same question twice. If unclear: move on with "Got it!" and the next point.
-- Keep track of what questions you've already asked. Do not loop back.
-- Treat any short response ("yes", "yeah", "ok", "fine") as confirmation and ADVANCE.
-- If they go off-topic: briefly acknowledge, then bring back: "That makes sense! Just quickly…"`;
+  const progressionRules = `CONVERSATION PROGRESSION — ABSOLUTE RULES:
+- ANY response from the caller counts as a valid answer. "Yes", "no", "yeah", "mm-hmm", "ok", "sure", "fine", "I guess" — ALL of these are complete answers. Accept them instantly and MOVE ON.
+- NEVER re-ask any question you've already asked, under any circumstances.
+- Do NOT add clarifying follow-ups to the same topic. One question = one answer = done. Move to the next.
+- If the caller gives a one-word answer: say something like "Got it!" or "Perfect!" and immediately ask the NEXT question.
+- If you've already asked 2+ questions: you are NOT allowed to return to a previous topic.
+- If they go off-topic briefly: say "Totally, and just quickly—" then your next question.
+- Never ask the same question twice. If you catch yourself about to, stop and move forward instead.`;
 
   // Substitute {{FirstName}}, {{LastName}}, {{Name}}, {{CampaignName}}, etc. in the campaign script
   const templateVars: Record<string, string> = {
@@ -227,6 +229,10 @@ const callOwnNumber        = new Map<string, string>();          // callControlI
 const missedTranscription  = new Map<string, string>();          // callControlId → transcript spoken during AI speech
 const callTurnCount        = new Map<string, number>();           // callControlId → # of completed caller turns
 const MAX_TURNS_BEFORE_CLOSE = 8;                                 // after this many turns, force script completion
+const lastAiResponse       = new Map<string, string>();           // callControlId → last AI text (to filter echo)
+const aiSpeakEndedAt       = new Map<string, number>();           // callControlId → timestamp AI finished speaking
+const lastProcessedText    = new Map<string, { text: string; ts: number }>(); // dedup window
+const AI_SPEAK_COOLDOWN_MS = 1200;                                // ignore transcriptions this many ms after AI speaks
 
 /** Stable numeric ID from a callControlId string (for live monitor without DB row) */
 function syntheticId(callControlId: string): number {
@@ -436,6 +442,7 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
 
   history.push({ role: "assistant", content: aiText });
   bridge.transcript.push(`AI Agent: ${aiText}`);
+  lastAiResponse.set(callControlId, aiText); // used by echo filter in call.transcription handler
 
   // Emit AI turn to supervisor panel
   emitToSupervisors("call:transcription", {
@@ -966,12 +973,45 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     // ── 3a. Transcription result — drive the conversation ─────────────────────
     if (eventType === "call.transcription") {
       const td = payload.transcription_data ?? {};
-      const transcript: string = td.transcript ?? "";
+      const transcript: string = (td.transcript ?? "").trim();
       const isFinal: boolean = td.is_final === true || td.is_final === "true";
 
-      if (!isFinal || transcript.trim().length < 2) return;
+      if (!isFinal || transcript.length < 3) return;
 
-      logger.info({ callControlId, transcript: transcript.slice(0, 100) }, "Final transcription received");
+      // ── Guard 1: cooldown window — ignore transcriptions that arrive right
+      //    after the AI finishes speaking (catches AI-voice echo from Telnyx STT)
+      const speakEndMs = aiSpeakEndedAt.get(callControlId) ?? 0;
+      if (Date.now() - speakEndMs < AI_SPEAK_COOLDOWN_MS) {
+        logger.debug({ callControlId, transcript: transcript.slice(0, 60) }, "Transcription in AI cooldown window — dropping");
+        return;
+      }
+
+      // ── Guard 2: AI echo filter — drop if transcript closely matches last AI reply
+      const lastAi = lastAiResponse.get(callControlId) ?? "";
+      if (lastAi.length > 5) {
+        const tLow = transcript.toLowerCase();
+        const aLow = lastAi.toLowerCase();
+        // Check if caller text appears inside AI text or vice versa (overlap > 60%)
+        const overlap = (a: string, b: string) => {
+          const shorter = a.length < b.length ? a : b;
+          const longer  = a.length < b.length ? b : a;
+          return shorter.length > 8 && longer.includes(shorter.substring(0, Math.min(30, shorter.length)));
+        };
+        if (overlap(tLow, aLow)) {
+          logger.debug({ callControlId, transcript: transcript.slice(0, 60) }, "Transcription looks like AI echo — dropping");
+          return;
+        }
+      }
+
+      // ── Guard 3: deduplication — drop exact duplicate within 5 s
+      const prev = lastProcessedText.get(callControlId);
+      if (prev && prev.text === transcript && Date.now() - prev.ts < 5_000) {
+        logger.debug({ callControlId, transcript: transcript.slice(0, 60) }, "Duplicate transcription — dropping");
+        return;
+      }
+      lastProcessedText.set(callControlId, { text: transcript, ts: Date.now() });
+
+      logger.info({ callControlId, transcript: transcript.slice(0, 100) }, "Final transcription accepted");
       handleCallerTurn(callControlId, transcript).catch((err) =>
         logger.error({ err: String(err), callControlId }, "handleCallerTurn error")
       );
@@ -982,6 +1022,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     if (eventType === "call.speak.ended" || eventType === "call.playback.ended") {
       logger.info({ callControlId, eventType }, "AI speech finished");
       aiSpeaking.delete(callControlId);
+      aiSpeakEndedAt.set(callControlId, Date.now()); // start cooldown window
 
       // Replay any caller speech that arrived while AI was talking
       const missed = missedTranscription.get(callControlId);
@@ -1086,6 +1127,9 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       callOwnNumber.delete(callControlId);
       missedTranscription.delete(callControlId);
       callTurnCount.delete(callControlId);
+      lastAiResponse.delete(callControlId);
+      aiSpeakEndedAt.delete(callControlId);
+      lastProcessedText.delete(callControlId);
       return;
     }
 

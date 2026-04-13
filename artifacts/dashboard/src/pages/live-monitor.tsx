@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Activity, Phone, Bot, Megaphone, Zap, Wifi, WifiOff,
   CheckCircle2, XCircle, PhoneIncoming, PhoneMissed, ArrowRightLeft,
-  Clock, Users, TrendingUp, MessageSquare,
+  Clock, Users, TrendingUp, MessageSquare, Volume2, VolumeX,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -62,33 +62,100 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-// ── Typing sound using Web Audio API ─────────────────────────────────────────
+// ── Audio system — Web Audio API ─────────────────────────────────────────────
+// The AudioContext must be resumed after a user gesture (browser policy).
+// We gate everything through getCtx() which resumes lazily.
 let _audioCtx: AudioContext | null = null;
-function playTypingSound() {
+let _ambientStop: (() => void) | null = null;
+
+async function getCtx(): Promise<AudioContext | null> {
   try {
     if (!_audioCtx) _audioCtx = new AudioContext();
-    const ctx = _audioCtx;
-    const bufferSize = Math.floor(ctx.sampleRate * 0.035);
-    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize) * 0.8;
-    }
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    const gain = ctx.createGain();
-    gain.gain.value = 0.04;
-    const filter = ctx.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.frequency.value = 3000;
-    filter.Q.value = 0.7;
-    src.connect(filter);
-    filter.connect(gain);
-    gain.connect(ctx.destination);
-    src.start();
-  } catch {
-    // audio not available — ignore silently
+    if (_audioCtx.state === "suspended") await _audioCtx.resume();
+    return _audioCtx;
+  } catch { return null; }
+}
+
+function playKeyClick(ctx: AudioContext, vol = 0.05) {
+  const bufSize = Math.floor(ctx.sampleRate * 0.028);
+  const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / bufSize);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const g = ctx.createGain();
+  g.gain.value = vol;
+  const f = ctx.createBiquadFilter();
+  f.type = "bandpass";
+  f.frequency.value = 2800 + Math.random() * 800;
+  f.Q.value = 0.9;
+  src.connect(f);
+  f.connect(g);
+  g.connect(ctx.destination);
+  src.start();
+}
+
+function startAmbientSound(ctx: AudioContext): () => void {
+  let stopped = false;
+
+  // Brown noise — low rumble like HVAC / office ventilation
+  const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate);
+  const noiseData = noiseBuffer.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < noiseData.length; i++) {
+    const w = Math.random() * 2 - 1;
+    noiseData[i] = last = (last + 0.015 * w) / 1.015;
   }
+  const noiseSource = ctx.createBufferSource();
+  noiseSource.buffer = noiseBuffer;
+  noiseSource.loop = true;
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.value = 0.055;
+  const noiseFilter = ctx.createBiquadFilter();
+  noiseFilter.type = "lowpass";
+  noiseFilter.frequency.value = 250;
+  noiseSource.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(ctx.destination);
+  noiseSource.start();
+
+  // Random keyboard bursts — people typing in the background
+  function scheduleTypingBurst() {
+    if (stopped) return;
+    const delay = 1200 + Math.random() * 4000;
+    setTimeout(() => {
+      if (stopped) return;
+      const count = 1 + Math.floor(Math.random() * 6);
+      for (let i = 0; i < count; i++) {
+        setTimeout(() => { if (!stopped) playKeyClick(ctx, 0.025 + Math.random() * 0.02); },
+          i * (40 + Math.random() * 70));
+      }
+      scheduleTypingBurst();
+    }, delay);
+  }
+  scheduleTypingBurst();
+
+  return () => {
+    stopped = true;
+    try { noiseSource.stop(); } catch { /* already stopped */ }
+  };
+}
+
+async function enableAmbient() {
+  const ctx = await getCtx();
+  if (!ctx || _ambientStop) return;
+  _ambientStop = startAmbientSound(ctx);
+}
+
+function disableAmbient() {
+  _ambientStop?.();
+  _ambientStop = null;
+}
+
+async function playTypingSound() {
+  const ctx = await getCtx();
+  if (!ctx) return;
+  playKeyClick(ctx, 0.06);
 }
 
 const EVENT_ICONS: Record<string, React.ElementType> = {
@@ -331,7 +398,19 @@ export default function LiveMonitorPage() {
   const [events, setEvents] = useState<EventEntry[]>([]);
   const [totalToday, setTotalToday] = useState<number>(0);
   const [completedToday, setCompletedToday] = useState<number>(0);
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const soundEnabledRef = useRef(false); // live ref for socket handlers (avoids stale closure)
   const socketRef = useRef<Socket | null>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
+
+  // Start/stop ambient sound when toggled
+  useEffect(() => {
+    if (soundEnabled) { enableAmbient(); }
+    else { disableAmbient(); }
+    return () => { disableAmbient(); };
+  }, [soundEnabled]);
 
   const campaignMap = Object.fromEntries(
     (campaigns ?? []).map((c: { id: number; name: string }) => [c.id, c.name]),
@@ -428,10 +507,10 @@ export default function LiveMonitorPage() {
       setLiveTranscripts(prev => {
         const m = new Map(prev);
         const prev_lines = m.get(ccid) ?? [];
-        m.set(ccid, [...prev_lines.slice(-29), line]); // keep last 30 lines
+        m.set(ccid, [...prev_lines.slice(-29), line]);
         return m;
       });
-      playTypingSound();
+      if (soundEnabledRef.current) playTypingSound();
     });
 
     socket.on("call:transferred", (data: { callId?: number; agentId?: number }) => {
@@ -481,9 +560,24 @@ export default function LiveMonitorPage() {
         title="Live Monitor"
         subtitle="Real-time call activity"
         action={
-          <div className={`flex items-center gap-1.5 text-[10px] font-mono ${connected ? "text-green-400" : "text-red-400"}`}>
-            {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-            {connected ? "Live · connected" : "Reconnecting…"}
+          <div className="flex items-center gap-3">
+            {/* Sound toggle — requires click to unlock browser AudioContext */}
+            <button
+              onClick={() => setSoundEnabled(v => !v)}
+              title={soundEnabled ? "Disable ambient sound" : "Enable office ambient sound + transcript clicks"}
+              className={`flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded border transition-colors ${
+                soundEnabled
+                  ? "border-primary/50 text-primary bg-primary/10 hover:bg-primary/20"
+                  : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
+              }`}
+            >
+              {soundEnabled ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
+              {soundEnabled ? "Sound on" : "Sound off"}
+            </button>
+            <div className={`flex items-center gap-1.5 text-[10px] font-mono ${connected ? "text-green-400" : "text-red-400"}`}>
+              {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+              {connected ? "Live · connected" : "Reconnecting…"}
+            </div>
           </div>
         }
       />
