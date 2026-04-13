@@ -971,9 +971,13 @@ POST   /api/campaigns/:id/reset-leads → { reset, campaignId }
 POST   /api/campaigns/:id/agents    { agentId } → Assign human agent
 
 GET    /api/leads                   ?campaignId&status → Lead[]
-POST   /api/leads                   { name, phone, email, campaignId, source? } → Lead
-POST   /api/leads/add               Same as POST /api/leads
-POST   /api/leads/import-sheet      { leads: Lead[], campaignId } → bulk import
+POST   /api/leads                   { name, phone, email, campaignId, source? } → Lead (single)
+POST   /api/leads/add               Same as POST /api/leads (alias)
+POST   /api/leads/upload            multipart { file, campaign_id } → { total_uploaded, total_skipped }
+POST   /api/leads/import-sheet      { sheet_url, campaign_id } → { total_uploaded, total_skipped }
+
+GET    /api/callbacks               ?campaignId → Lead[] (leads with status="callback")
+PATCH  /api/callbacks/:id           { status } → Lead
 
 GET    /api/calls                   → Call[]
 GET    /api/calls/live              → LiveCall[]
