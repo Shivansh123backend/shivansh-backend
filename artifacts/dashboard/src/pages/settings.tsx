@@ -130,7 +130,7 @@ export default function SettingsPage() {
                   type="password"
                   placeholder="KEY..."
                 />
-                <StatusBadge active={false} label="Not Set" />
+                <StatusBadge active={true} label="Configured" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -186,7 +186,8 @@ export default function SettingsPage() {
 
         <SettingSection title="Integrations" icon={Radio}>
           {[
-            { name: "ElevenLabs", desc: "AI voice synthesis", active: false },
+            { name: "ElevenLabs", desc: "AI voice synthesis", active: true },
+            { name: "Telnyx WebRTC", desc: "Telephony & WebRTC calling", active: true },
             { name: "PlayHT", desc: "Text-to-speech voices", active: false },
             { name: "Azure Cognitive Speech", desc: "Microsoft speech services", active: false },
             { name: "WebSocket Monitoring", desc: "Real-time supervisor monitoring via Socket.IO", active: true },

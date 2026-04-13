@@ -22,6 +22,7 @@ import {
   Phone,
   PhoneMissed,
   ChevronDown,
+  Bot,
 } from "lucide-react";
 
 // ── Navigation items ────────────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ const ADMIN_NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
   { href: "/leads", label: "Lead Lists", icon: List },
+  { href: "/agents", label: "AI Agents", icon: Bot },
   { href: "/voices", label: "Voices", icon: Mic2 },
   { href: "/dispositions", label: "Dispositions", icon: Tag },
   { href: "/users", label: "Users", icon: Users },
@@ -147,7 +149,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <Radio className="w-3.5 h-3.5 text-primary" />
           </div>
           <div>
-            <p className="text-xs font-bold tracking-widest font-mono text-primary uppercase">NexusCall</p>
+            <p className="text-xs font-bold tracking-widest font-mono text-primary uppercase">SHIVANSH</p>
             <p className="text-[9px] text-muted-foreground font-mono tracking-wider">
               {isAgent ? "Agent Console" : "AI Operations"}
             </p>
