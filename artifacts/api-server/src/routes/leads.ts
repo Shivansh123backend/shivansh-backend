@@ -347,6 +347,72 @@ router.post("/leads/import-sheet", authenticate, requireRole("admin"), async (re
   res.status(201).json({ total_uploaded: inserted.length, total_skipped: totalSkipped });
 });
 
+// ── PATCH /leads/:id ─────────────────────────────────────────────────────────
+// Update a lead: reassign to a different campaign, change status, update name/phone/email
+const updateLeadSchema = z.object({
+  campaignId:  z.coerce.number().int().positive().optional(),
+  campaign_id: z.coerce.number().int().positive().optional(),
+  status: z.enum(["pending", "called", "callback", "do_not_call", "completed"]).optional(),
+  name:  z.string().min(1).optional(),
+  phone: z.string().min(1).optional(),
+  phone_number: z.string().min(1).optional(),
+  email: z.string().email().nullable().optional(),
+});
+
+router.patch("/leads/:id", authenticate, async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id as string, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
+
+  const parsed = updateLeadSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" }); return; }
+
+  const [existing] = await db.select().from(leadsTable).where(eq(leadsTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const data = parsed.data;
+  const newCampaignId = data.campaignId ?? data.campaign_id;
+  const newPhone = data.phone ?? data.phone_number;
+
+  // Validate new campaign exists
+  if (newCampaignId) {
+    const campaign = await getCampaign(newCampaignId);
+    if (!campaign) { res.status(404).json({ error: "Campaign not found" }); return; }
+  }
+
+  // Build update payload
+  const update: Partial<typeof leadsTable.$inferInsert> = {};
+  if (newCampaignId)    update.campaignId = newCampaignId;
+  if (data.status)      update.status = data.status;
+  if (data.name)        update.name = data.name;
+  if (newPhone) {
+    const phone = normalisePhone(newPhone);
+    if (!phone) { res.status(400).json({ error: "Invalid phone number" }); return; }
+    update.phone = phone;
+  }
+  if (data.email !== undefined) update.email = data.email;
+
+  if (Object.keys(update).length === 0) {
+    res.status(400).json({ error: "No fields to update" });
+    return;
+  }
+
+  const [updated] = await db.update(leadsTable).set(update).where(eq(leadsTable.id, id)).returning();
+
+  res.json({
+    id: updated.id,
+    name: updated.name,
+    phone: updated.phone,
+    phone_number: updated.phone,
+    email: updated.email,
+    campaignId: updated.campaignId,
+    campaign_id: updated.campaignId,
+    source: updated.source,
+    status: updated.status,
+    createdAt: updated.createdAt,
+    created_at: updated.createdAt,
+  });
+});
+
 // ── GET /leads/:campaign_id ─────────────────────────────────────────────────
 // List leads for a campaign. Optional ?source=manual|csv|sheet filter.
 router.get("/leads/:campaign_id", authenticate, async (req, res): Promise<void> => {

@@ -975,6 +975,7 @@ POST   /api/leads                   { name, phone, email, campaignId, source? } 
 POST   /api/leads/add               Same as POST /api/leads (alias)
 POST   /api/leads/upload            multipart { file, campaign_id } → { total_uploaded, total_skipped }
 POST   /api/leads/import-sheet      { sheet_url, campaign_id } → { total_uploaded, total_skipped }
+PATCH  /api/leads/:id               { campaignId?, status?, name?, phone?, email? } → Lead (reassign/update)
 
 GET    /api/callbacks               ?campaignId → Lead[] (leads with status="callback")
 PATCH  /api/callbacks/:id           { status } → Lead
