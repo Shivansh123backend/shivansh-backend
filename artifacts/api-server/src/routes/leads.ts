@@ -413,6 +413,32 @@ router.patch("/leads/:id", authenticate, async (req, res): Promise<void> => {
   });
 });
 
+// ── DELETE /leads/:id ─────────────────────────────────────────────────────────
+router.delete("/leads/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id as string, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid lead ID" }); return; }
+
+  const [existing] = await db.select().from(leadsTable).where(eq(leadsTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  await db.delete(leadsTable).where(eq(leadsTable.id, id));
+  res.json({ success: true, deleted: { id, name: existing.name, phone: existing.phone } });
+});
+
+// ── DELETE /leads — bulk delete all leads for a campaign ─────────────────────
+router.delete("/leads", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const campaignIdRaw = req.query.campaignId ?? req.query.campaign_id;
+  if (!campaignIdRaw) { res.status(400).json({ error: "campaignId query param is required" }); return; }
+  const campaignId = parseInt(String(campaignIdRaw), 10);
+  if (isNaN(campaignId)) { res.status(400).json({ error: "Invalid campaignId" }); return; }
+
+  const campaign = await getCampaign(campaignId);
+  if (!campaign) { res.status(404).json({ error: "Campaign not found" }); return; }
+
+  const deleted = await db.delete(leadsTable).where(eq(leadsTable.campaignId, campaignId)).returning({ id: leadsTable.id });
+  res.json({ success: true, deleted: deleted.length, campaignId });
+});
+
 // ── GET /leads/:campaign_id ─────────────────────────────────────────────────
 // List leads for a campaign. Optional ?source=manual|csv|sheet filter.
 router.get("/leads/:campaign_id", authenticate, async (req, res): Promise<void> => {

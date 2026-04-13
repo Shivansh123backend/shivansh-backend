@@ -595,6 +595,45 @@ router.post("/campaigns/:id/stop", authenticate, requireRole("admin"), async (re
   res.json(updated);
 });
 
+// ── GET /campaigns/:id — fetch a single campaign ──────────────────────────────
+router.get("/campaigns/:id", authenticate, async (req, res): Promise<void> => {
+  const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
+  const campaign = await getCampaignOrFail(id, res);
+  if (!campaign) return;
+  res.json(campaign);
+});
+
+// ── DELETE /campaigns/:id — delete a campaign and all its leads ───────────────
+router.delete("/campaigns/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
+
+  const campaign = await getCampaignOrFail(id, res);
+  if (!campaign) return;
+
+  if (campaign.status === "active") {
+    res.status(400).json({ error: "Stop the campaign before deleting it" });
+    return;
+  }
+
+  // Delete child records first to respect foreign key constraints
+  await db.delete(leadsTable).where(eq(leadsTable.campaignId, id));
+  await db.delete(callLogsTable).where(eq(callLogsTable.campaignId, id));
+  await db.delete(campaignAgentsTable).where(eq(campaignAgentsTable.campaignId, id));
+  await db.delete(campaignsTable).where(eq(campaignsTable.id, id));
+
+  await createAuditLog({
+    userId: req.user?.userId,
+    action: "delete",
+    resource: "campaign",
+    resourceId: id,
+  });
+
+  emitToSupervisors("campaign:stopped", { campaignId: id, name: campaign.name });
+  res.json({ success: true, deleted: { id, name: campaign.name } });
+});
+
 router.post("/campaigns/:id/pause", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }

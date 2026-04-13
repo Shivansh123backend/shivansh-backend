@@ -209,6 +209,101 @@ Valid dispositions: `interested | not_interested | vm | no_answer | busy | conne
 
 ---
 
+## PATCH 9 — Edit & Delete AI Agents
+
+Each AI agent card needs two new action buttons in the footer (alongside "Agent ID #N"):
+
+- **Edit** — opens an "Edit Agent" modal pre-filled with the agent's current name, prompt, language, and default voice
+- **Delete** — shows a confirmation dialog, then deletes the agent
+
+**Edit agent:**
+```
+PATCH /api/ai-agents/:id
+Authorization: Bearer {token}
+Content-Type: application/json
+
+Body (any subset of fields):
+{
+  "name": "New Name",
+  "prompt": "Updated system prompt...",
+  "language": "en",
+  "defaultVoiceId": 3    ← number or null to unset
+}
+
+Response: updated Agent object
+```
+
+**Delete agent:**
+```
+DELETE /api/ai-agents/:id
+Authorization: Bearer {token}
+
+Response: { "success": true }
+```
+
+After delete: remove the card from local state immediately and show a toast "Agent deleted".
+After edit: update the card in local state with the returned agent and show a toast "Agent updated".
+
+**Edit modal layout** (same style as Create Agent modal):
+- Header: `<Pencil className="w-3.5 h-3.5 text-primary">` + "EDIT AI AGENT" + `<X>`
+- Same fields as create: Agent Name, Language, Default Voice, System Prompt
+- Footer: Cancel (outline) + "Save Changes" (primary)
+- Pre-fill all fields from the agent object passed to the modal
+
+---
+
+## PATCH 10 — Delete Campaigns
+
+Each campaign card needs a **Delete** button. Only show it when `status !== "active"` (you can't delete a running campaign).
+
+Placement: add a small delete icon button to the card header (top-right, next to the status badge) or as a "..." overflow menu.
+
+```
+DELETE /api/campaigns/:id
+Authorization: Bearer {token}
+
+Response: { "success": true, "deleted": { "id": 4, "name": "Campaign Name" } }
+```
+
+**Important:** This also deletes all leads and call logs for the campaign. Show a confirmation dialog first:
+
+> "Delete [Campaign Name]?"  
+> "This will permanently delete the campaign and all its leads and call history. This cannot be undone."
+>
+> [Cancel]  [Delete]
+
+After confirm: call DELETE, remove the card from local state, show toast "Campaign deleted".
+
+**Error case:** If the campaign is active, the backend returns 400 `"Stop the campaign before deleting it"` — show that error in a toast.
+
+---
+
+## PATCH 11 — Delete Leads
+
+Add a delete button (trash icon) to each lead row in the Leads table.
+
+**Single lead delete:**
+```
+DELETE /api/leads/:id
+Authorization: Bearer {token}
+
+Response: { "success": true, "deleted": { "id": 123, "name": "...", "phone": "..." } }
+```
+
+Show a brief inline confirmation (e.g. the trash icon turns red on hover) or a small confirmation toast before actually deleting. After delete: remove the row from local state.
+
+**Bulk delete all leads for a campaign** (add a "Clear All" button to the Leads page filter bar, only shown when a campaign is selected):
+```
+DELETE /api/leads?campaignId={id}
+Authorization: Bearer {token}
+
+Response: { "success": true, "deleted": 47, "campaignId": 4 }
+```
+
+Show a confirmation dialog before bulk delete: "Delete all N leads for [Campaign]? This cannot be undone."
+
+---
+
 ## Visual rules reminder (do not change these)
 
 - App name: **SHIVANSH** (not NexusCall, not Nexus AI, not anything else)
