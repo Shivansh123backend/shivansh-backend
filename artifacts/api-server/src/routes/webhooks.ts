@@ -9,10 +9,15 @@ import OpenAI from "openai";
 const router: IRouter = Router();
 
 // ── OpenAI client ─────────────────────────────────────────────────────────────
+// Replit AI Integration proxy (localhost:1106) works in both dev and production.
+// Fall back to direct OpenAI if the integration isn't set up.
 const openai = new OpenAI({
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? "placeholder",
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? undefined,
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? "placeholder",
 });
+
+// Configurable model — default to gpt-4o-mini which is fast and widely available
+const AI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 const TELNYX_API_BASE = "https://api.telnyx.com/v2";
 const MAX_TURNS = 12;
@@ -92,8 +97,8 @@ async function gatherSpeech(callControlId: string): Promise<void> {
 // ── OpenAI helpers ────────────────────────────────────────────────────────────
 async function generateAiResponse(messages: Message[]): Promise<string> {
   const response = await openai.chat.completions.create({
-    model: "gpt-5-mini",
-    max_completion_tokens: 8192,
+    model: AI_MODEL,
+    max_tokens: 300,
     messages,
   });
   const content = response.choices[0]?.message?.content?.trim();
@@ -117,8 +122,8 @@ async function generateSummaryAndDisposition(
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-5-mini",
-      max_completion_tokens: 8192,
+      model: AI_MODEL,
+      max_tokens: 500,
       messages: [
         {
           role: "system",
