@@ -221,19 +221,44 @@ router.get("/api/audio/:id", (req, res): void => {
   res.send(entry.buffer);
 });
 
+// ── Human-Like Mode instructions ─────────────────────────────────────────────
+// Injected into the system prompt when humanLikeMode is enabled for the agent/campaign.
+const HUMAN_LIKE_PROMPT_ADDON = `
+=== HUMAN-LIKE SPEECH STYLE (ENABLED) ===
+NATURAL FILLERS — use these to sound human, not robotic:
+- Use "Hmm", "Let me see", "Right", "Yeah", "Got it", "Totally", "Of course" naturally
+- Occasionally start with a small affirmation: "Oh, I see", "Ah, great!", "Sure thing"
+- Mirror the caller: if they're casual, be casual; if formal, stay professional
+
+EMPATHY FIRST:
+- Before proceeding, acknowledge what they said: "That makes total sense", "I completely understand"
+- If they sound busy: "I'll keep this really brief, I promise"
+- If they express frustration: "I really appreciate your patience" before continuing
+
+PACING & PAUSES:
+- Don't rush — leave natural space for the caller to think
+- After asking a question, STOP and wait — don't fill every gap
+- If they seem confused, rephrase simply rather than repeating word-for-word
+
+AVOID:
+- Never say "Certainly!", "Absolutely!", "Of course!" as a hollow opener every single time
+- Never sound like you're reading a script — vary your phrasing each turn
+=== END HUMAN-LIKE STYLE ===`;
+
 // ── System prompt builder ─────────────────────────────────────────────────────
-// The rawPrompt from campaigns.ts is ALREADY comprehensive (includes HUMAN_LIKE_INSTRUCTIONS,
-// knowledge base, script, etc.). We only prepend identity + critical phone rules on top.
+// Used for inbound calls and outbound fallback. Wraps rawPrompt with identity,
+// human-like style (if enabled), and critical phone-call rules.
 function buildNaturalSystemPrompt(
   rawPrompt: string,
   campaignName: string,
   agentName = "AI Assistant",
   leadName?: string,
-  transferNumber?: string
+  transferNumber?: string,
+  humanLikeMode = true
 ): string {
   const identity = leadName
-    ? `You are ${agentName}, right now making a live phone call to ${leadName} on behalf of "${campaignName}".`
-    : `You are ${agentName}, making a live outbound phone call on behalf of "${campaignName}".`;
+    ? `You are ${agentName}, right now on a live phone call with ${leadName} on behalf of "${campaignName}".`
+    : `You are ${agentName}, on a live inbound phone call on behalf of "${campaignName}".`;
 
   const transferInstruction = transferNumber
     ? `HUMAN TRANSFER: If the caller asks to speak with a human, wants to move forward, or asks to be transferred — say EXACTLY: "Let me connect you with one of our agents right now — one moment please!" and nothing else.`
@@ -242,9 +267,11 @@ function buildNaturalSystemPrompt(
   const coreScript = rawPrompt?.trim()
     || `Be helpful, warm, and professional. Guide the conversation naturally. Ask one question at a time.`;
 
+  const humanLikeSection = humanLikeMode ? HUMAN_LIKE_PROMPT_ADDON.trim() : "";
+
   return `${identity}
 
-${coreScript}
+${humanLikeSection ? humanLikeSection + "\n\n" : ""}${coreScript}
 
 CRITICAL PHONE CALL RULES (always enforce these):
 - This is a LIVE phone call. Every response must be 1-3 sentences MAX. Never write paragraphs.
@@ -394,6 +421,9 @@ async function getCampaignByNumber(toNumber: string) {
   let agentName = "AI Assistant";
   let agentPrompt: string = campaign.agentPrompt ?? "";
   let resolvedVoiceId: string = DEFAULT_ELEVEN_VOICE;
+  // Campaign humanLike ("true"/"false" string) takes precedence; agent.humanLikeMode is fallback.
+  // Default: enabled (true)
+  let humanLikeMode = campaign.humanLike !== "false";
 
   if (campaign.agentId) {
     const [agent] = await db
@@ -404,6 +434,10 @@ async function getCampaignByNumber(toNumber: string) {
     if (agent) {
       agentName = agent.name;
       if (!agentPrompt) agentPrompt = agent.prompt;
+      // If campaign doesn't override humanLike, use the agent's humanLikeMode
+      if (campaign.humanLike === null || campaign.humanLike === undefined) {
+        humanLikeMode = agent.humanLikeMode ?? true;
+      }
 
       // Resolve voice: agent's defaultVoiceId → voices table → ElevenLabs voice ID
       if (agent.defaultVoiceId) {
@@ -424,7 +458,14 @@ async function getCampaignByNumber(toNumber: string) {
     resolvedVoiceId = campaign.voice;
   }
 
-  const systemPrompt = buildNaturalSystemPrompt(agentPrompt, campaign.name, agentName, undefined, campaign.transferNumber ?? undefined);
+  const systemPrompt = buildNaturalSystemPrompt(
+    agentPrompt,
+    campaign.name,
+    agentName,
+    undefined,
+    campaign.transferNumber ?? undefined,
+    humanLikeMode
+  );
 
   return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId };
 }

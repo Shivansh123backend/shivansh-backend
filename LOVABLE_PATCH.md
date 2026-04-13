@@ -436,6 +436,77 @@ Use `text-xs font-mono text-muted-foreground`.
 
 ---
 
+## PATCH 14 — Human-Like Mode toggle (AI Agents + Campaigns)
+
+The "Human-Like Mode" toggle adds natural fillers, empathy, and pacing instructions to the AI's system prompt. When ON, the AI says things like "Hmm, let me see", "That makes total sense", and "I'll keep this brief" — making it sound like a real person.
+
+### On the AI Agent card (Create / Edit agent modals)
+
+The field name is `humanLikeMode` (boolean):
+
+```typescript
+// Create agent
+POST /api/ai-agents
+Body: {
+  name: "...",
+  prompt: "...",
+  humanLikeMode: true   // boolean, NOT a string
+}
+
+// Edit agent
+PATCH /api/ai-agents/:id
+Body: { humanLikeMode: false }   // toggle off
+```
+
+The backend returns the full agent object including `humanLikeMode: boolean`.
+
+**Toggle wire-up for agent card:**
+```tsx
+<Switch
+  checked={agent.humanLikeMode ?? true}
+  onCheckedChange={(checked) => {
+    patchAgent(agent.id, { humanLikeMode: checked });
+  }}
+/>
+```
+
+After PATCH, update the agent in local state with the returned agent object.
+
+### On the Campaign form (Create / Edit campaign)
+
+The field name is `humanLike` (string `"true"` or `"false"`, NOT a boolean):
+
+```typescript
+// Create or update campaign
+POST /api/campaigns
+PATCH /api/campaigns/:id
+Body: { humanLike: "true" }    // string, NOT boolean
+       { humanLike: "false" }
+```
+
+**Toggle wire-up for campaign form:**
+```tsx
+<Switch
+  checked={(campaign.humanLike ?? "true") !== "false"}
+  onCheckedChange={(checked) => {
+    setValue("humanLike", checked ? "true" : "false");
+  }}
+/>
+```
+
+### Display rule — show the current state on agent cards
+
+If `agent.humanLikeMode === true`, show a small badge in the agent card footer:
+```tsx
+{agent.humanLikeMode && (
+  <span className="text-xs font-mono text-primary/70 border border-primary/20 rounded px-1.5 py-0.5">
+    ✦ Human-Like
+  </span>
+)}
+```
+
+---
+
 ## Visual rules reminder (do not change these)
 
 - App name: **SHIVANSH** (not NexusCall, not Nexus AI, not anything else)

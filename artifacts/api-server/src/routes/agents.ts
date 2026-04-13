@@ -12,6 +12,7 @@ const createAgentSchema = z.object({
   prompt: z.string().min(1),
   language: z.string().default("en"),
   defaultVoiceId: z.coerce.number().int().positive().optional().nullable(),
+  humanLikeMode: z.boolean().default(true).optional(),
 });
 
 const updateAgentSchema = z.object({
@@ -19,6 +20,7 @@ const updateAgentSchema = z.object({
   prompt: z.string().min(1).optional(),
   language: z.string().optional(),
   defaultVoiceId: z.coerce.number().int().positive().optional().nullable(),
+  humanLikeMode: z.boolean().optional(),
 });
 
 const addVoiceSchema = z.object({
