@@ -223,7 +223,7 @@ async function startAIConversation(callControlId: string): Promise<void> {
   const bridge = getBridgeInfo(callControlId);
   if (!bridge) throw new Error("No bridge for " + callControlId);
 
-  // Seed conversation history with system prompt + first message
+  // Seed conversation history
   const history: ConvMessage[] = [
     { role: "system",    content: bridge.systemPrompt },
     { role: "assistant", content: bridge.firstMessage },
@@ -231,7 +231,7 @@ async function startAIConversation(callControlId: string): Promise<void> {
   callMessages.set(callControlId, history);
   bridge.transcript.push(`AI Agent: ${bridge.firstMessage}`);
 
-  // Start Telnyx real-time transcription (final results only)
+  // Start Telnyx real-time transcription (final results only) — failure is non-fatal
   await telnyxAction(callControlId, "transcription_start", {
     transcription_engine: "A",
     language: "en",
@@ -240,28 +240,54 @@ async function startAIConversation(callControlId: string): Promise<void> {
     logger.warn({ err: String(err), callControlId }, "transcription_start failed — voice input disabled")
   );
 
-  // Generate + play ElevenLabs greeting
-  const audioUrl = await generateTTS(bridge.voiceId, bridge.firstMessage);
-  aiSpeaking.add(callControlId);
-  await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl, loop: false });
-  logger.info({ callControlId, text: bridge.firstMessage }, "AI greeting sent via ElevenLabs TTS");
+  // Generate ElevenLabs greeting — log exact error if it fails
+  let audioUrl: string;
+  try {
+    audioUrl = await generateTTS(bridge.voiceId, bridge.firstMessage);
+    logger.info({ callControlId, voiceId: bridge.voiceId }, "TTS generated — starting playback");
+  } catch (err) {
+    logger.error({ callControlId, voiceId: bridge.voiceId, err: String(err) }, "TTS generation failed — call will be silent");
+    return; // Don't crash the whole call handler
+  }
+
+  // Play via Telnyx playback_start — log exact error if it fails
+  try {
+    aiSpeaking.add(callControlId);
+    await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl });
+    logger.info({ callControlId, audioUrl }, "AI greeting playing on call");
+  } catch (err) {
+    aiSpeaking.delete(callControlId);
+    const detail = axios.isAxiosError(err) && err.response
+      ? JSON.stringify(err.response.data).slice(0, 400)
+      : String(err);
+    logger.error({ callControlId, audioUrl, detail }, "playback_start failed");
+  }
 }
 
 /** Process a final transcription from the caller and speak the AI's response */
 async function handleCallerTurn(callControlId: string, callerText: string): Promise<void> {
   const bridge = getBridgeInfo(callControlId);
-  if (!bridge) return;
-
-  const clean = callerText.trim();
-  if (clean.length < 2) return;
-
-  // Don't process while AI is speaking — avoids echo
-  if (aiSpeaking.has(callControlId)) {
-    logger.debug({ callControlId, callerText }, "Transcription during AI speech — skipped");
+  if (!bridge) {
+    logger.warn({ callControlId, callerText }, "handleCallerTurn: no bridge — skipping");
     return;
   }
 
-  if (bridge.pendingTransfer) return;
+  const clean = callerText.trim();
+  if (clean.length < 2) {
+    logger.debug({ callControlId, clean }, "handleCallerTurn: text too short — skipping");
+    return;
+  }
+
+  // Don't process while AI is speaking — avoids echo
+  if (aiSpeaking.has(callControlId)) {
+    logger.info({ callControlId, callerText }, "Transcription during AI speech — skipped");
+    return;
+  }
+
+  if (bridge.pendingTransfer) {
+    logger.debug({ callControlId }, "handleCallerTurn: pending transfer — skipping");
+    return;
+  }
 
   logger.info({ callControlId, callerText }, "Caller turn — generating AI response");
   bridge.transcript.push(`Caller: ${clean}`);
@@ -271,15 +297,28 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
   callMessages.set(callControlId, history);
 
   // GPT completion (keep last 20 turns to stay within token limit)
-  const completion = await openai.chat.completions.create({
-    model: AI_MODEL,
-    max_tokens: 200,
-    temperature: 0.8,
-    messages: history.slice(-20) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
-  });
+  let aiText: string;
+  try {
+    const completion = await openai.chat.completions.create({
+      model: AI_MODEL,
+      max_tokens: 200,
+      temperature: 0.8,
+      messages: history.slice(-20) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
+    });
+    aiText = (completion.choices[0]?.message?.content ?? "").trim();
+    logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "OpenAI response received");
+  } catch (err) {
+    const detail = axios.isAxiosError(err) && err.response
+      ? JSON.stringify(err.response.data).slice(0, 400)
+      : String(err);
+    logger.error({ callControlId, detail }, "OpenAI completion failed");
+    return;
+  }
 
-  const aiText = (completion.choices[0]?.message?.content ?? "").trim();
-  if (!aiText) return;
+  if (!aiText) {
+    logger.warn({ callControlId }, "OpenAI returned empty response");
+    return;
+  }
 
   history.push({ role: "assistant", content: aiText });
   bridge.transcript.push(`AI Agent: ${aiText}`);
@@ -298,8 +337,10 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     try {
       const audioUrl = await generateTTS(bridge.voiceId, aiText);
       aiSpeaking.add(callControlId);
-      await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl, loop: false });
-    } catch { /* playback not critical — proceed to transfer */ }
+      await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl });
+    } catch (err) {
+      logger.warn({ callControlId, err: String(err) }, "Transfer TTS failed — proceeding to transfer anyway");
+    }
 
     setTimeout(async () => {
       try {
@@ -313,13 +354,28 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
   }
 
   // Normal TTS response
+  let audioUrl: string;
   try {
-    const audioUrl = await generateTTS(bridge.voiceId, aiText);
-    aiSpeaking.add(callControlId);
-    await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl, loop: false });
-    logger.info({ callControlId, aiText }, "AI response sent via ElevenLabs TTS");
+    audioUrl = await generateTTS(bridge.voiceId, aiText);
+    logger.info({ callControlId, voiceId: bridge.voiceId }, "AI TTS generated — starting playback");
   } catch (err) {
-    logger.error({ err: String(err), callControlId }, "TTS / playback failed");
+    const detail = axios.isAxiosError(err) && err.response
+      ? JSON.stringify(err.response.data).slice(0, 400)
+      : String(err);
+    logger.error({ callControlId, detail }, "AI turn TTS generation failed");
+    return;
+  }
+
+  try {
+    aiSpeaking.add(callControlId);
+    await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl });
+    logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "AI response playing on call");
+  } catch (err) {
+    aiSpeaking.delete(callControlId);
+    const detail = axios.isAxiosError(err) && err.response
+      ? JSON.stringify(err.response.data).slice(0, 400)
+      : String(err);
+    logger.error({ callControlId, audioUrl, detail }, "AI turn playback_start failed");
   }
 }
 
