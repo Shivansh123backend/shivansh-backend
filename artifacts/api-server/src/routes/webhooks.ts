@@ -25,7 +25,6 @@ import OpenAI from "openai";
 import {
   initBridge,
   getBridgeInfo,
-  getBridgeSessionToken,
   closeBridge,
   setRecordingUrl,
 } from "../services/elevenBridge.js";
@@ -45,11 +44,6 @@ const AI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 const TELNYX_API_BASE = "https://api.telnyx.com/v2";
 const BACKEND_WEBHOOK_URL =
   process.env.WEBHOOK_BASE_URL ?? "https://shivanshbackend.replit.app";
-
-// Convert https:// → wss:// for Telnyx fork target URL
-const WS_BASE_URL = BACKEND_WEBHOOK_URL.replace(/^https?:\/\//, (m) =>
-  m.startsWith("https") ? "wss://" : "ws://"
-);
 
 // Default ElevenLabs voice (Rachel)
 const DEFAULT_ELEVEN_VOICE = "21m00Tcm4TlvDq8ikWAM";
@@ -163,44 +157,160 @@ async function startRecording(callControlId: string): Promise<void> {
   });
 }
 
-/** Start Telnyx media fork → our ElevenLabs bridge WebSocket */
-async function forkMedia(callControlId: string): Promise<void> {
-  // Use a random hex session token (no special chars) instead of the raw callControlId
-  // so the URL path never contains "v3:" or other chars that confuse reverse proxies
-  const sessionToken = getBridgeSessionToken(callControlId);
-  if (!sessionToken) throw new Error(`No bridge session for ${callControlId}`);
-  const target = `${WS_BASE_URL}/ws/eleven/${sessionToken}`;
-  logger.info({ callControlId, sessionToken, target }, "Starting Telnyx media fork → ElevenLabs bridge");
+// ── In-memory TTS audio cache (served at /api/audio/:token) ─────────────────
+interface CachedAudio { data: Buffer; contentType: string; expiresAt: number; }
+const audioCache = new Map<string, CachedAudio>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of audioCache) if (v.expiresAt < now) audioCache.delete(k);
+}, 30_000);
 
-  const apiKey = process.env.TELNYX_API_KEY;
-  if (!apiKey) throw new Error("TELNYX_API_KEY not configured");
+// ── Per-call conversation history & state ────────────────────────────────────
+interface ConvMessage { role: "system" | "user" | "assistant"; content: string; }
+const callMessages  = new Map<string, ConvMessage[]>();   // callControlId → chat history
+const aiSpeaking    = new Set<string>();                  // callControlId → AI currently speaking
+const callOwnNumber = new Map<string, string>();          // callControlId → our campaign phone #
 
-  try {
-    const resp = await axios.post(
-      `${TELNYX_API_BASE}/calls/${callControlId}/actions/fork_start`,
-      {
-        target,
-        rx: "caller",
-        tx: "caller",
-        stream_track: "inbound_track",   // "both_tracks" causes 422 on this account
+function makeAudioToken(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(8)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Call ElevenLabs TTS HTTP API, cache the MP3, return a publicly reachable URL */
+async function generateTTS(voiceId: string, text: string): Promise<string> {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) throw new Error("ELEVENLABS_API_KEY not configured");
+
+  const resp = await axios.post(
+    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+    {
+      text,
+      model_id: "eleven_turbo_v2_5",
+      voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: 1.0 },
+    },
+    {
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg",
       },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 10_000,
-      }
-    );
-    logger.info({ callControlId, status: resp.status }, "fork_start accepted by Telnyx");
-  } catch (err) {
-    if (axios.isAxiosError(err) && err.response) {
-      logger.error(
-        { callControlId, status: err.response.status, body: JSON.stringify(err.response.data).slice(0, 500) },
-        "fork_start rejected by Telnyx"
-      );
+      responseType: "arraybuffer",
+      timeout: 15_000,
     }
-    throw err;
+  );
+
+  const token = makeAudioToken();
+  audioCache.set(token, {
+    data: Buffer.from(resp.data as ArrayBuffer),
+    contentType: "audio/mpeg",
+    expiresAt: Date.now() + 10 * 60_000, // 10 min TTL
+  });
+  return `${BACKEND_WEBHOOK_URL}/api/audio/${token}`;
+}
+
+/** Start the AI conversation: turn on Telnyx transcription + play the first greeting */
+async function startAIConversation(callControlId: string): Promise<void> {
+  const bridge = getBridgeInfo(callControlId);
+  if (!bridge) throw new Error("No bridge for " + callControlId);
+
+  // Seed conversation history with system prompt + first message
+  const history: ConvMessage[] = [
+    { role: "system",    content: bridge.systemPrompt },
+    { role: "assistant", content: bridge.firstMessage },
+  ];
+  callMessages.set(callControlId, history);
+  bridge.transcript.push(`AI Agent: ${bridge.firstMessage}`);
+
+  // Start Telnyx real-time transcription (final results only)
+  await telnyxAction(callControlId, "transcription_start", {
+    transcription_engine: "A",
+    language: "en",
+    interim_results: false,
+  }).catch((err) =>
+    logger.warn({ err: String(err), callControlId }, "transcription_start failed — voice input disabled")
+  );
+
+  // Generate + play ElevenLabs greeting
+  const audioUrl = await generateTTS(bridge.voiceId, bridge.firstMessage);
+  aiSpeaking.add(callControlId);
+  await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl, loop: false });
+  logger.info({ callControlId, text: bridge.firstMessage }, "AI greeting sent via ElevenLabs TTS");
+}
+
+/** Process a final transcription from the caller and speak the AI's response */
+async function handleCallerTurn(callControlId: string, callerText: string): Promise<void> {
+  const bridge = getBridgeInfo(callControlId);
+  if (!bridge) return;
+
+  const clean = callerText.trim();
+  if (clean.length < 2) return;
+
+  // Don't process while AI is speaking — avoids echo
+  if (aiSpeaking.has(callControlId)) {
+    logger.debug({ callControlId, callerText }, "Transcription during AI speech — skipped");
+    return;
+  }
+
+  if (bridge.pendingTransfer) return;
+
+  logger.info({ callControlId, callerText }, "Caller turn — generating AI response");
+  bridge.transcript.push(`Caller: ${clean}`);
+
+  const history = callMessages.get(callControlId) ?? [{ role: "system" as const, content: bridge.systemPrompt }];
+  history.push({ role: "user", content: clean });
+  callMessages.set(callControlId, history);
+
+  // GPT completion (keep last 20 turns to stay within token limit)
+  const completion = await openai.chat.completions.create({
+    model: AI_MODEL,
+    max_tokens: 200,
+    temperature: 0.8,
+    messages: history.slice(-20) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
+  });
+
+  const aiText = (completion.choices[0]?.message?.content ?? "").trim();
+  if (!aiText) return;
+
+  history.push({ role: "assistant", content: aiText });
+  bridge.transcript.push(`AI Agent: ${aiText}`);
+
+  // Detect transfer phrase before playing TTS
+  const wantsTransfer =
+    bridge.transferNumber &&
+    !bridge.pendingTransfer &&
+    (aiText.toLowerCase().includes("connect you with") || aiText.toLowerCase().includes("transfer you"));
+
+  if (wantsTransfer) {
+    bridge.pendingTransfer = true;
+    const ownNum = callOwnNumber.get(callControlId) ?? "";
+    logger.info({ callControlId, transferTo: bridge.transferNumber }, "Transfer phrase detected");
+
+    try {
+      const audioUrl = await generateTTS(bridge.voiceId, aiText);
+      aiSpeaking.add(callControlId);
+      await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl, loop: false });
+    } catch { /* playback not critical — proceed to transfer */ }
+
+    setTimeout(async () => {
+      try {
+        await executeTransfer(callControlId, bridge.transferNumber!, ownNum, bridge.holdMusicUrl);
+        await telnyxAction(callControlId, "transcription_stop", {}).catch(() => {});
+      } catch (err) {
+        logger.error({ err: String(err), callControlId }, "Transfer failed");
+      }
+    }, 2_500);
+    return;
+  }
+
+  // Normal TTS response
+  try {
+    const audioUrl = await generateTTS(bridge.voiceId, aiText);
+    aiSpeaking.add(callControlId);
+    await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl, loop: false });
+    logger.info({ callControlId, aiText }, "AI response sent via ElevenLabs TTS");
+  } catch (err) {
+    logger.error({ err: String(err), callControlId }, "TTS / playback failed");
   }
 }
 
@@ -514,12 +624,15 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         },
       });
 
+      // Store our campaign phone number (needed if transfer is requested)
+      callOwnNumber.set(callControlId, fromNumber);
+
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err: String(err), callControlId }, "Recording start failed — continuing")
       );
 
-      // Start media fork → ElevenLabs bridge WebSocket
-      await forkMedia(callControlId);
+      // Start AI conversation: Telnyx transcription + ElevenLabs TTS playback
+      await startAIConversation(callControlId);
       return;
     }
 
@@ -571,18 +684,39 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       await answerCall(callControlId);
 
+      // Store our campaign phone number (needed if transfer is requested)
+      callOwnNumber.set(callControlId, toNumber);
+
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err: String(err), callControlId }, "Inbound recording start failed — continuing")
       );
 
-      // Start media fork → ElevenLabs bridge WebSocket
-      await forkMedia(callControlId);
+      // Start AI conversation: Telnyx transcription + ElevenLabs TTS playback
+      await startAIConversation(callControlId);
       return;
     }
 
     // ── 2. Transfer bridged ───────────────────────────────────────────────────
     if (eventType === "call.bridged") {
       logger.info({ callControlId, to: toNumber, from: fromNumber }, "Call bridged — transfer successful");
+      return;
+    }
+
+    // ── 2b. Caller transcription — run the AI response turn ──────────────────
+    if (eventType === "call.transcription") {
+      const items = (payload.transcription_data ?? []) as Array<{ transcript?: string; is_final?: boolean }>;
+      for (const item of items) {
+        if (item.is_final && item.transcript?.trim()) {
+          await handleCallerTurn(callControlId, item.transcript.trim());
+        }
+      }
+      return;
+    }
+
+    // ── 2c. AI audio playback finished — open the mic again ──────────────────
+    if (eventType === "call.playback.ended" || eventType === "call.speak.ended") {
+      aiSpeaking.delete(callControlId);
+      logger.debug({ callControlId, eventType }, "AI speech ended — ready for caller input");
       return;
     }
 
@@ -686,6 +820,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       }
 
       closeBridge(callControlId);
+      // Clean up per-call state
+      callMessages.delete(callControlId);
+      aiSpeaking.delete(callControlId);
+      callOwnNumber.delete(callControlId);
       return;
     }
 
@@ -693,6 +831,19 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ eventType, callControlId, err: msg }, "Error handling Telnyx webhook");
   }
+});
+
+// ── GET /audio/:token — serve cached TTS audio to Telnyx playback_start ──────
+router.get("/audio/:token", (req, res): void => {
+  const cached = audioCache.get(req.params.token ?? "");
+  if (!cached || cached.expiresAt < Date.now()) {
+    res.status(404).send("Audio not found or expired");
+    return;
+  }
+  res.setHeader("Content-Type", cached.contentType);
+  res.setHeader("Content-Length", cached.data.length);
+  res.setHeader("Cache-Control", "no-store");
+  res.end(cached.data);
 });
 
 // ── GET /webhooks/telnyx/config ───────────────────────────────────────────────
