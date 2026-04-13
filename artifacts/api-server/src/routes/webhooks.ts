@@ -292,7 +292,7 @@ const aiSpeakEndedAt            = new Map<string, number>();          // callCon
 const lastProcessedText         = new Map<string, { text: string; ts: number }>(); // dedup window
 const pendingTransferAfterPlay  = new Set<string>();                  // callControlId → execute transfer after next playback.ended
 const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
-const AI_SPEAK_COOLDOWN_MS      = 600;                                // ignore transcriptions this many ms after AI speaks
+const AI_SPEAK_COOLDOWN_MS      = 1000;                               // ignore transcriptions this many ms after AI speaks
 
 /** Stable numeric ID from a callControlId string (for live monitor without DB row) */
 function syntheticId(callControlId: string): number {
