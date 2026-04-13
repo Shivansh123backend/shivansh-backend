@@ -31,6 +31,7 @@
     "pino": "^9",
     "pino-http": "^10",
     "socket.io": "^4.8.3",
+    "ws": "^8.20.0",
     "xlsx": "^0.18.5",
     "zod": "catalog:"
   },
@@ -42,6 +43,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.1.0",
     "@types/node": "catalog:",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.27.3",
     "esbuild-plugin-pino": "^2.3.3",
     "pino-pretty": "^13",
