@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { phoneNumbersTable, campaignsTable, aiAgentsTable, callLogsTable } from "@workspace/db";
+import { phoneNumbersTable, campaignsTable, aiAgentsTable, callLogsTable, leadsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import axios from "axios";
@@ -87,22 +87,56 @@ async function gatherSpeech(callControlId: string): Promise<void> {
   await telnyxAction(callControlId, "gather", {
     maximum_digits: 0,
     minimum_digits: 0,
-    gather_after_silence: 1500,
+    gather_after_silence: 2500,   // 2.5s — gives callers time to finish a sentence
     gather_timeout: 30000,
     voice: "female",
     language: "en-US",
   });
 }
 
+// ── Natural system prompt builder (VAPI-like) ─────────────────────────────────
+function buildNaturalSystemPrompt(
+  rawPrompt: string,
+  campaignName: string,
+  agentName = "AI Assistant",
+  leadName?: string
+): string {
+  const intro = leadName
+    ? `You are ${agentName}, calling ${leadName} on behalf of "${campaignName}".`
+    : `You are ${agentName}, an AI phone agent calling on behalf of "${campaignName}".`;
+
+  const instructions = rawPrompt?.trim()
+    ? `YOUR ROLE AND GOAL:\n${rawPrompt}\n`
+    : `Be helpful, professional, and guide the conversation naturally.\n`;
+
+  return `${intro}
+
+${instructions}
+CONVERSATION RULES — follow these at all times:
+- Sound completely natural and human. NEVER sound scripted or robotic.
+- Keep every response SHORT: 1-3 sentences maximum. This is a real phone call.
+- ALWAYS respond directly to what the caller just said before anything else.
+- If they ask an unexpected question, answer it genuinely, then gently return to your purpose.
+- If asked "are you an AI or robot?" — be honest: "Yes, I'm an AI assistant, but I'm genuinely here to help."
+- If they're not interested or want to opt out: "Absolutely, I'll remove you right away. Really sorry for the interruption — have a great day!" then wrap up.
+- If they want a callback: confirm their preferred time warmly and say someone will follow up.
+- Use natural filler language: "Got it", "Sure", "Absolutely", "Of course", "Makes sense", "Happy to help".
+- Never repeat yourself. Never read from a numbered list. Adapt to wherever the conversation goes.
+- If you learn their name, use it naturally once in a while (not every sentence).
+- Be warm, empathetic, and genuinely helpful. If you don't know something, say so honestly.
+- When wrapping up the call, give a friendly natural close like "Great talking with you, have an amazing day!"`;
+}
+
 // ── OpenAI helpers ────────────────────────────────────────────────────────────
 async function generateAiResponse(messages: Message[]): Promise<string> {
   const response = await openai.chat.completions.create({
     model: AI_MODEL,
-    max_tokens: 300,
+    max_tokens: 500,
+    temperature: 0.7,   // slightly creative for natural responses
     messages,
   });
   const content = response.choices[0]?.message?.content?.trim();
-  if (!content) return "I'm sorry, could you please repeat that?";
+  if (!content) return "Sorry, could you say that again?";
   return content;
 }
 
@@ -199,9 +233,7 @@ async function getCampaignByNumber(toNumber: string) {
     }
   }
 
-  const systemPrompt = agentPrompt
-    ? `${agentPrompt}\n\nYou are handling an inbound call for "${campaign.name}". You are ${agentName}. Keep responses concise — 1-2 sentences for a phone call.`
-    : `You are ${agentName}, an AI voice assistant for "${campaign.name}". Be professional and helpful. Keep responses to 1-2 sentences for a phone call.`;
+  const systemPrompt = buildNaturalSystemPrompt(agentPrompt, campaign.name, agentName);
 
   return { campaign, agentName, systemPrompt };
 }
@@ -263,7 +295,7 @@ function decodeClientState(raw: string): OutboundClientState | null {
   }
 }
 
-// ── Finalize outbound call — save to DB ────────────────────────────────────────
+// ── Finalize outbound call — save to DB + update lead ──────────────────────────
 async function finalizeOutboundCall(
   callControlId: string,
   state: InboundCallState,
@@ -276,11 +308,13 @@ async function finalizeOutboundCall(
       state.campaignName
     );
 
+    const finalDisposition = disposition ?? detectedDisposition;
+
     await db.insert(callLogsTable).values({
       phoneNumber: state.callerNumber,
       campaignId: state.campaignId,
       status: "completed",
-      disposition: disposition ?? detectedDisposition,
+      disposition: finalDisposition,
       direction: "outbound",
       duration: durationSecs,
       recordingUrl: state.recordingUrl ?? null,
@@ -289,9 +323,22 @@ async function finalizeOutboundCall(
       callControlId,
     });
 
+    // Mark the lead as called so it doesn't get called again
+    const leadStatus = finalDisposition === "callback_requested" ? "callback" : "called";
+    await db
+      .update(leadsTable)
+      .set({
+        status: leadStatus as "called" | "callback",
+        metadata: JSON.stringify({ lastCallSummary: summary, lastDisposition: finalDisposition }),
+      })
+      .where(and(
+        eq(leadsTable.phone, state.callerNumber),
+        eq(leadsTable.campaignId, state.campaignId)
+      ));
+
     logger.info(
-      { callControlId, campaignId: state.campaignId, disposition: disposition ?? detectedDisposition, durationSecs },
-      "Outbound call finalized"
+      { callControlId, campaignId: state.campaignId, disposition: finalDisposition, durationSecs, leadStatus },
+      "Outbound call finalized and lead updated"
     );
   } catch (err) {
     logger.error({ err, callControlId }, "Failed to finalize outbound call");
@@ -359,24 +406,40 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       }
 
       const campaignId = parseInt(ctx.campaignId, 10);
-      const greeting = `Hello! This is an AI assistant calling from ${ctx.campaignName}. Am I speaking with you? I wanted to reach out to discuss something important with you today.`;
+
+      // Look up lead name for a personalized, natural greeting
+      const [lead] = await db
+        .select({ name: leadsTable.name, id: leadsTable.id })
+        .from(leadsTable)
+        .where(and(eq(leadsTable.phone, ctx.phone), eq(leadsTable.campaignId, campaignId)))
+        .limit(1);
+
+      const leadName = lead?.name;
+      const firstName = leadName?.split(" ")[0];
+
+      // Natural greeting — personalised if we have their name
+      const greeting = firstName
+        ? `Hi ${firstName}, this is an AI assistant calling from ${ctx.campaignName}. Did I catch you at a good time?`
+        : `Hi there, this is an AI assistant calling from ${ctx.campaignName}. Is now an okay time to chat?`;
+
+      const naturalScript = buildNaturalSystemPrompt(ctx.script, ctx.campaignName, "AI Assistant", leadName);
 
       activeCalls.set(callControlId, {
         campaignId,
         campaignName: ctx.campaignName,
-        agentName: "AI Agent",
-        agentPrompt: ctx.script,
+        agentName: "AI Assistant",
+        agentPrompt: naturalScript,
         callerNumber: ctx.phone,
         calledNumber: fromNumber,
         messages: [
-          { role: "system", content: ctx.script },
+          { role: "system", content: naturalScript },
           { role: "assistant", content: greeting },
         ],
         turnCount: 0,
         startedAt: new Date(),
       });
 
-      logger.info({ callControlId, campaignId, phone: ctx.phone }, "Outbound call answered — starting AI conversation");
+      logger.info({ callControlId, campaignId, phone: ctx.phone, leadName }, "Outbound call answered — starting AI conversation");
 
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err, callControlId }, "Outbound recording start failed — continuing")

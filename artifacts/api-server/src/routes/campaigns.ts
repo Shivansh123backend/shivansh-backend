@@ -78,6 +78,8 @@ const updateCampaignSchema = z.object({
   backgroundSound: z.enum(["none", "office", "typing", "cafe"]).optional(),
   holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).optional(),
   humanLike: z.string().optional(),
+  // Allow status changes via PATCH (stop/pause/resume from frontend)
+  status: z.enum(["draft", "active", "paused", "completed"]).optional(),
 });
 
 router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
@@ -105,6 +107,15 @@ router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, r
     .set(parsed.data)
     .where(eq(campaignsTable.id, id))
     .returning();
+
+  // Emit WebSocket events when status changes so dashboard updates in real-time
+  if (parsed.data.status && parsed.data.status !== campaign.status) {
+    if (parsed.data.status === "paused" || parsed.data.status === "completed") {
+      emitToSupervisors("campaign:stopped", { campaignId: id, name: campaign.name });
+    } else if (parsed.data.status === "active") {
+      emitToSupervisors("campaign:started", { campaignId: id, name: campaign.name });
+    }
+  }
 
   await createAuditLog({
     userId: req.user?.userId,
