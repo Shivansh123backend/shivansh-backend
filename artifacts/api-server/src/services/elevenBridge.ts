@@ -95,6 +95,7 @@ export interface BridgeInfo {
   recordingUrl?: string;
   transferNumber?: string;
   holdMusicUrl?: string;
+  backgroundSound?: string;    // "office" | "typing" | "cafe" | "none" | undefined
   transcript: string[];
   voiceId: string;
   systemPrompt: string;

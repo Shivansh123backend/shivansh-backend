@@ -65,6 +65,23 @@ function resolveHoldMusicUrl(holdMusic?: string | null): string {
   return HOLD_MUSIC_URLS[holdMusic] ?? DEFAULT_HOLD_MUSIC_URL;
 }
 
+// Background sound URLs — played with overlay:true so they mix beneath the conversation audio
+const BACKGROUND_SOUND_URLS: Record<string, string> = {
+  office:  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+  typing:  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
+  cafe:    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
+};
+
+// System-prompt context injected so the AI's language matches the selected environment
+const BACKGROUND_CONTEXT_MAP: Record<string, string> = {
+  office: "ENVIRONMENT NOTE: You are calling from a busy professional call center. Keyboards and colleague conversations may be faintly audible.",
+  typing: "ENVIRONMENT NOTE: You are in a modern open-plan workspace. Light keyboard typing sounds are in the background.",
+  cafe:   "ENVIRONMENT NOTE: You are making this call from a coffee shop. Gentle background conversations and espresso machine sounds are present.",
+};
+
+// Track calls where background audio has been injected (so we can ignore its playback.ended event)
+const backgroundSoundActive = new Set<string>(); // callControlId
+
 // ── Template variable substitution ────────────────────────────────────────────
 function substituteVars(
   template: string,
@@ -330,6 +347,22 @@ async function startTranscriptionAndGreet(callControlId: string): Promise<void> 
     transcription_engine: "A",
     interim_results: false,
   });
+
+  // If a background sound is selected, inject it as an overlay audio track.
+  // overlay:true mixes the audio underneath the call rather than replacing it.
+  const bgSound = bridge.backgroundSound;
+  if (bgSound && bgSound !== "none" && BACKGROUND_SOUND_URLS[bgSound]) {
+    backgroundSoundActive.add(callControlId);
+    telnyxAction(callControlId, "playback_start", {
+      audio_url: BACKGROUND_SOUND_URLS[bgSound],
+      overlay: true,
+      loop: false,
+    }).catch((err) => {
+      logger.warn({ callControlId, bgSound, err: String(err) }, "Background sound injection failed (non-fatal)");
+      backgroundSoundActive.delete(callControlId);
+    });
+    logger.info({ callControlId, bgSound }, "Background sound injected as overlay");
+  }
 
   // Speak the greeting via ElevenLabs TTS
   aiSpeaking.add(callControlId);
@@ -784,13 +817,18 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       const callVoiceId =
         ctx.voice && ctx.voice !== "default" ? ctx.voice : DEFAULT_ELEVEN_VOICE;
 
-      const systemPrompt = buildSystemPrompt(
+      // Build system prompt, then append background sound context if set
+      let systemPrompt = buildSystemPrompt(
         ctx.script,
         ctx.campaignName,
         agentName,
         leadName,
         ctx.transferNumber ?? undefined
       );
+      const bgKey = ctx.backgroundSound && ctx.backgroundSound !== "none" ? ctx.backgroundSound : null;
+      if (bgKey && BACKGROUND_CONTEXT_MAP[bgKey]) {
+        systemPrompt = `${systemPrompt}\n\n${BACKGROUND_CONTEXT_MAP[bgKey]}`;
+      }
 
       // First message — short name-check greeting; system prompt handles the rest
       const firstMessage = firstName
@@ -798,7 +836,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         : `Hello! This is ${agentName} calling from ${ctx.campaignName}. Is this a good time?`;
 
       logger.info(
-        { callControlId, campaignId, phone: ctx.phone, leadName, agentName, voiceId: callVoiceId },
+        { callControlId, campaignId, phone: ctx.phone, leadName, agentName, voiceId: callVoiceId, backgroundSound: ctx.backgroundSound },
         "Outbound call answered — starting ElevenLabs ConvAI bridge"
       );
 
@@ -813,6 +851,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         leadId: lead?.id,
         transferNumber: ctx.transferNumber ?? undefined,
         holdMusicUrl: outboundHoldMusicUrl,
+        backgroundSound: ctx.backgroundSound ?? undefined,
         voiceId: callVoiceId,
         systemPrompt,
         firstMessage,
@@ -1020,6 +1059,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
     // ── 3b. Speak/playback ended — clear speaking flag & replay missed ────────
     if (eventType === "call.speak.ended" || eventType === "call.playback.ended") {
+      // If this event is from the background sound overlay ending, ignore it —
+      // it must not clear aiSpeaking or trigger a caller-turn replay.
+      if (eventType === "call.playback.ended" && backgroundSoundActive.has(callControlId)) {
+        backgroundSoundActive.delete(callControlId);
+        logger.info({ callControlId }, "Background sound ended — ignoring playback.ended (not AI speech)");
+        return;
+      }
+
       logger.info({ callControlId, eventType }, "AI speech finished");
       aiSpeaking.delete(callControlId);
       aiSpeakEndedAt.set(callControlId, Date.now()); // start cooldown window
@@ -1040,6 +1087,9 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     if (eventType === "call.hangup") {
       const bridge = getBridgeInfo(callControlId);
       if (!bridge) return;
+
+      // Clean up background sound tracking
+      backgroundSoundActive.delete(callControlId);
 
       const durationSecs = Math.round(
         (Date.now() - bridge.startedAt.getTime()) / 1000

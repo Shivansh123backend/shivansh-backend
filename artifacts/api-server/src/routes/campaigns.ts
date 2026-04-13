@@ -308,13 +308,13 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
   emitToSupervisors("campaign:stopped", { campaignId, name: campaign.name, reason: "all_leads_called" });
 }
 
-// Hold music URL map — royalty-free audio hosted on reliable CDNs
+// Hold music URL map — royalty-free SoundHelix MP3s (no auth, direct download)
 const HOLD_MUSIC_URLS: Record<string, string | null> = {
-  none: null,
-  jazz: "https://cdn.pixabay.com/download/audio/2022/03/10/audio_c6b38e0e2e.mp3",
-  corporate: "https://cdn.pixabay.com/download/audio/2022/08/02/audio_884fe92c21.mp3",
-  smooth: "https://cdn.pixabay.com/download/audio/2021/04/07/audio_9f72b85a8a.mp3",
-  classical: "https://cdn.pixabay.com/download/audio/2022/01/20/audio_d0c6ff1fca.mp3",
+  none:      null,
+  jazz:      "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
+  corporate: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+  smooth:    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+  classical: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
 };
 
 // Human-like conversation instructions injected when humanLike = true
