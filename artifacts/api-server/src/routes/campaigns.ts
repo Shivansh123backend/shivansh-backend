@@ -66,6 +66,38 @@ router.get("/campaigns", authenticate, async (req, res): Promise<void> => {
   res.json(campaigns);
 });
 
+// ── /campaigns/options — returns all valid enum values for campaign fields ────
+// Frontend uses this to populate Background Sound and Hold Music dropdowns.
+router.get("/campaigns/options", authenticate, (_req, res): void => {
+  res.json({
+    backgroundSound: [
+      { value: "none",   label: "None" },
+      { value: "office", label: "Office Ambience" },
+      { value: "typing", label: "Keyboard Typing" },
+      { value: "cafe",   label: "Café Background" },
+    ],
+    holdMusic: [
+      { value: "none",      label: "None" },
+      { value: "jazz",      label: "Jazz" },
+      { value: "corporate", label: "Corporate" },
+      { value: "smooth",    label: "Smooth R&B" },
+      { value: "classical", label: "Classical" },
+    ],
+    voice: [
+      { value: "default", label: "Default Voice" },
+    ],
+    routingType: [
+      { value: "ai",           label: "AI Only" },
+      { value: "human",        label: "Human Only" },
+      { value: "ai_then_human", label: "AI → Human Transfer" },
+    ],
+    type: [
+      { value: "outbound", label: "Outbound" },
+      { value: "inbound",  label: "Inbound" },
+    ],
+  });
+});
+
 const updateCampaignSchema = z.object({
   name: z.string().min(1).optional(),
   agentPrompt: z.string().optional(),

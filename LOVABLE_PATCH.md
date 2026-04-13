@@ -507,6 +507,89 @@ If `agent.humanLikeMode === true`, show a small badge in the agent card footer:
 
 ---
 
+## PATCH 15 — Campaign form: Background Sound & Hold Music dropdowns
+
+The campaign create/edit form has two audio dropdowns that must use exact string values. Wrong values are silently ignored by the backend.
+
+### API for options (dynamic)
+
+```
+GET /api/campaigns/options
+Authorization: Bearer {token}
+```
+
+Response:
+```json
+{
+  "backgroundSound": [
+    { "value": "none",   "label": "None" },
+    { "value": "office", "label": "Office Ambience" },
+    { "value": "typing", "label": "Keyboard Typing" },
+    { "value": "cafe",   "label": "Café Background" }
+  ],
+  "holdMusic": [
+    { "value": "none",      "label": "None" },
+    { "value": "jazz",      "label": "Jazz" },
+    { "value": "corporate", "label": "Corporate" },
+    { "value": "smooth",    "label": "Smooth R&B" },
+    { "value": "classical", "label": "Classical" }
+  ]
+}
+```
+
+### Hard-coded values (use if not fetching from API)
+
+**Background Sound** — field name: `backgroundSound`
+```
+"none"    → None (default)
+"office"  → Office Ambience
+"typing"  → Keyboard Typing
+"cafe"    → Café Background
+```
+
+**Hold Music** — field name: `holdMusic`
+```
+"none"       → None (default)
+"jazz"       → Jazz
+"corporate"  → Corporate
+"smooth"     → Smooth R&B
+"classical"  → Classical
+```
+
+### Save to backend
+
+```
+PATCH /api/campaigns/:id
+Authorization: Bearer {token}
+Content-Type: application/json
+
+Body: {
+  "backgroundSound": "office",
+  "holdMusic": "jazz"
+}
+```
+
+Both fields default to `"none"` if not set. Always send the exact lowercase string values above — the backend validates against the enum and will reject any other value with a 400 error.
+
+### Display in campaign card
+
+Show the current values in the card footer with small badges:
+
+```tsx
+{campaign.backgroundSound && campaign.backgroundSound !== "none" && (
+  <span className="text-xs font-mono text-muted-foreground">
+    🎵 {campaign.backgroundSound}
+  </span>
+)}
+{campaign.holdMusic && campaign.holdMusic !== "none" && (
+  <span className="text-xs font-mono text-muted-foreground">
+    ⏸ Hold: {campaign.holdMusic}
+  </span>
+)}
+```
+
+---
+
 ## Visual rules reminder (do not change these)
 
 - App name: **SHIVANSH** (not NexusCall, not Nexus AI, not anything else)
