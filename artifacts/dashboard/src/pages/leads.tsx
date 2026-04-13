@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, X, Filter, Upload, FileSpreadsheet, CheckCircle2, AlertCircle } from "lucide-react";
+import { Plus, X, Filter, Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ClipboardList } from "lucide-react";
 
 // ── Single-lead modal ──────────────────────────────────────────────────────────
 function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
@@ -250,6 +250,121 @@ function UploadModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
                 <span className="flex items-center gap-1.5"><span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" /> Uploading…</span>
               ) : (
                 <span className="flex items-center gap-1.5"><Upload className="w-3 h-3" /> Upload</span>
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Paste phone numbers modal ─────────────────────────────────────────────────
+function PasteModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
+  const [campaignId, setCampaignId] = useState("");
+  const [text, setText] = useState("");
+  const [result, setResult] = useState<UploadResult | null>(null);
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  const parsed = text
+    .split(/[\n,;]+/)
+    .map(s => s.replace(/[^\d+]/g, "").trim())
+    .filter(s => s.length >= 7);
+
+  const upload = useMutation({
+    mutationFn: async () => {
+      if (!campaignId) throw new Error("Please select a campaign");
+      if (parsed.length === 0) throw new Error("No valid phone numbers found");
+      const csv = "phone_number\n" + parsed.join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const fd = new FormData();
+      fd.append("file", blob, "leads.csv");
+      fd.append("campaign_id", campaignId);
+      const res = await fetch("/api/leads/upload", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("auth_token") ?? ""}` },
+        body: fd,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `Upload failed (${res.status})`);
+      }
+      return res.json() as Promise<UploadResult>;
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      setResult(data);
+    },
+    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-lg">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <p className="text-xs font-mono uppercase tracking-widest text-foreground">Paste Phone Numbers</p>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">Campaign</Label>
+            <Select value={campaignId} onValueChange={setCampaignId}>
+              <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="Select campaign" /></SelectTrigger>
+              <SelectContent>
+                {campaigns.map(c => (
+                  <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">
+              Phone Numbers
+              {parsed.length > 0 && (
+                <span className="ml-2 text-primary normal-case">{parsed.length} detected</span>
+              )}
+            </Label>
+            <textarea
+              value={text}
+              onChange={e => { setText(e.target.value); setResult(null); }}
+              placeholder={`+14155550100\n+14155550101\n+14155550102\n\nOne per line, or comma / semicolon separated.`}
+              rows={8}
+              className="w-full bg-background border border-border rounded px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <p className="text-[10px] font-mono text-muted-foreground/60">
+              Accepts any format — +1 (415) 555-0100, 4155550100, etc. Duplicates are skipped automatically.
+            </p>
+          </div>
+
+          {result && (
+            <div className={`flex items-start gap-2.5 rounded p-3 border text-xs font-mono
+              ${result.total_uploaded > 0 ? "bg-green-500/10 border-green-500/30 text-green-400" : "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"}`}>
+              {result.total_uploaded > 0 ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+              <div>
+                <p className="font-semibold">{result.total_uploaded} lead{result.total_uploaded !== 1 ? "s" : ""} imported</p>
+                {result.total_skipped > 0 && (
+                  <p className="text-[10px] opacity-80 mt-0.5">{result.total_skipped} skipped (invalid or duplicate)</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <Button variant="outline" className="flex-1 font-mono text-xs uppercase tracking-wider" onClick={onClose}>
+              {result ? "Done" : "Cancel"}
+            </Button>
+            <Button
+              className="flex-1 font-mono text-xs uppercase tracking-wider"
+              disabled={parsed.length === 0 || !campaignId || upload.isPending}
+              onClick={() => upload.mutate()}
+            >
+              {upload.isPending ? (
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" /> Importing…</span>
+              ) : (
+                <span className="flex items-center gap-1.5"><ClipboardList className="w-3 h-3" /> Import {parsed.length > 0 ? parsed.length : ""}</span>
               )}
             </Button>
           </div>
