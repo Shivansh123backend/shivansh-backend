@@ -28,7 +28,13 @@ interface Message {
   content: string;
 }
 
-interface InboundCallState {
+type CallStage =
+  | "waiting_for_pickup"   // outbound: waiting for caller to say anything
+  | "confirming_name"      // outbound: asked "Is this [Name]?" — waiting for yes/no
+  | "conversation"         // normal AI conversation loop
+  ;
+
+interface CallState {
   campaignId: number;
   campaignName: string;
   agentName: string;
@@ -39,9 +45,16 @@ interface InboundCallState {
   turnCount: number;
   startedAt: Date;
   recordingUrl?: string;
+  direction: "inbound" | "outbound";
+  stage: CallStage;
+  leadName?: string;
+  leadId?: number;
+  pendingHangup?: boolean;  // hang up gracefully after current speech ends
 }
 
-const activeCalls = new Map<string, InboundCallState>();
+const activeCalls = new Map<string, CallState>();
+// Keep backward-compat alias used in some helpers
+type InboundCallState = CallState;
 
 // ── Telnyx Call Control helpers ───────────────────────────────────────────────
 async function telnyxAction(
@@ -474,6 +487,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         ],
         turnCount: 0,
         startedAt: new Date(),
+        direction: "inbound",
+        stage: "conversation",
       });
 
       logger.info({ callControlId, campaignId: campaign.id, agentName }, "Answering inbound call");
