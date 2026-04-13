@@ -156,14 +156,21 @@ GENERAL PUSHBACK:
 - If they say no or give a different name: say "Oh, I'm so sorry! Is this a good time?" and adapt.`
     : "";
 
-  const progressionRules = `CONVERSATION PROGRESSION — ABSOLUTE RULES:
-- ANY response from the caller counts as a valid answer. "Yes", "no", "yeah", "mm-hmm", "ok", "sure", "fine", "I guess" — ALL of these are complete answers. Accept them instantly and MOVE ON.
+  const progressionRules = `CONVERSATION PROGRESSION — STRICT RULES:
+- ANY response from the caller counts as a valid answer. "Yes", "no", "yeah", "mm-hmm", "ok", "sure", "fine", "I guess" — ALL of these are complete answers. Accept them and move forward.
 - NEVER re-ask any question you've already asked, under any circumstances.
-- Do NOT add clarifying follow-ups to the same topic. One question = one answer = done. Move to the next.
-- If the caller gives a one-word answer: say something like "Got it!" or "Perfect!" and immediately ask the NEXT question.
-- If you've already asked 2+ questions: you are NOT allowed to return to a previous topic.
-- If they go off-topic briefly: say "Totally, and just quickly—" then your next question.
-- Never ask the same question twice. If you catch yourself about to, stop and move forward instead.`;
+- Do NOT ask multiple questions in the same turn. One turn = one main point or one question.
+- NEVER ask the same question twice. If you already asked it, skip it and advance.
+- If they go off-topic briefly: gently steer back with "Absolutely, and just on that — " then continue.
+
+ENRICHMENT — make the conversation feel genuinely helpful, not just an interrogation:
+- After the caller answers a question, briefly react to their answer with a genuine acknowledgment, relevant insight, or helpful comment BEFORE moving to the next question.
+  Example: If they say they're interested in savings → "Great, people are seeing quite a difference with this — especially on the monthly side." then ask the next question.
+- If they share something personal (tough situation, need, worry) — acknowledge it warmly before continuing.
+- Look for natural moments to offer value: a relevant tip, a short benefit they might not know, or a relatable example.
+- Upsell or cross-sell naturally if relevant: "By the way, a lot of people in similar situations also find [X] really helpful — is that something worth knowing about?"
+- Vary your fillers and transitions: "That makes a lot of sense", "Honestly, that's one of the most common things we hear", "You'd be surprised how many people feel the same way", "Really good point actually", etc.
+- After the script questions are done, do NOT immediately transfer. Have one genuine closing moment: summarise what you've learned, give the caller one key takeaway or reassurance, THEN trigger transfer.`;
 
   // Substitute {{FirstName}}, {{LastName}}, {{Name}}, {{CampaignName}}, etc. in the campaign script
   const templateVars: Record<string, string> = {
@@ -196,11 +203,12 @@ GENERAL PUSHBACK:
     templateVars
   );
 
-  const humanSection = humanLikeMode ? `SPEECH STYLE — sound human, not robotic:
-- Use natural fillers: "Hmm", "Right", "Got it", "Totally", "Of course", "Makes sense"
-- Vary your openers — don't start every reply the same way
+  const humanSection = humanLikeMode ? `SPEECH STYLE — sound human, warm, and helpful:
+- Use natural fillers: "Hmm", "Right", "Got it", "Totally", "Of course", "Makes sense", "Honestly", "Absolutely"
+- Vary your openers — never start two replies the same way
 - Mirror the caller's energy: casual if they're casual, professional if they're formal
-- Keep it brief: 1–2 sentences per response maximum\n\n` : "";
+- React to what they actually said — not just move on to the next thing
+- Keep responses focused: 2–3 sentences is ideal. Never write paragraphs.\n\n` : "";
 
   return `${identity}
 
@@ -214,18 +222,18 @@ ${objectionHandling}
 ${rudeHandling}
 
 ABSOLUTE RULES:
-- This is a LIVE phone call. 1–2 sentences MAX per response. Never write paragraphs.
+- This is a LIVE phone call. Keep responses conversational — 2–3 sentences max. No monologues.
 - Never say "As an AI" or "I'm an AI" — just be helpful and natural.
-- If they want to opt out: "Absolutely, so sorry — have a great day!" then stop.
-- If they want a callback: confirm their preferred time warmly.
+- If they want to opt out: "Absolutely, so sorry for the interruption — have a great day!" then stop.
+- If they want a callback: confirm their preferred time warmly and end.
 ${transferInstruction}
 
 SCRIPT COMPLETION — CRITICAL:
-- Once you have gone through all the campaign questions and received answers, you are DONE with the script.
-- At that point, IMMEDIATELY say: "Let me connect you with one of our agents right now — one moment please!"
-- Do NOT ask "Is there anything else?" — just trigger the transfer.
-- Do NOT loop back to any question you already asked.
-- Do NOT keep talking after the script is complete.`;
+- Once you have gone through all the campaign questions and received answers:
+  1. Give the caller ONE genuine closing moment — a brief summary, key benefit, or reassurance based on what they told you.
+  2. THEN say: "Let me get one of our team members on the line for you — one moment!"
+- Do NOT loop back to any question already asked.
+- Do NOT keep talking after triggering transfer.`;
 }
 
 // ── Telnyx Call Control helpers ───────────────────────────────────────────────
@@ -271,16 +279,18 @@ setInterval(() => {
 
 // ── Per-call conversation history & state ────────────────────────────────────
 interface ConvMessage { role: "system" | "user" | "assistant"; content: string; }
-const callMessages         = new Map<string, ConvMessage[]>();   // callControlId → chat history
-const aiSpeaking           = new Set<string>();                  // callControlId → AI currently speaking
-const callOwnNumber        = new Map<string, string>();          // callControlId → our campaign phone #
-const missedTranscription  = new Map<string, string>();          // callControlId → transcript spoken during AI speech
-const callTurnCount        = new Map<string, number>();           // callControlId → # of completed caller turns
-const MAX_TURNS_BEFORE_CLOSE = 8;                                 // after this many turns, force script completion
-const lastAiResponse       = new Map<string, string>();           // callControlId → last AI text (to filter echo)
-const aiSpeakEndedAt       = new Map<string, number>();           // callControlId → timestamp AI finished speaking
-const lastProcessedText    = new Map<string, { text: string; ts: number }>(); // dedup window
-const AI_SPEAK_COOLDOWN_MS = 1200;                                // ignore transcriptions this many ms after AI speaks
+const callMessages              = new Map<string, ConvMessage[]>();   // callControlId → chat history
+const aiSpeaking                = new Set<string>();                  // callControlId → AI currently speaking
+const processingTurn            = new Set<string>();                  // callControlId → turn processing in-flight (race guard)
+const callOwnNumber             = new Map<string, string>();          // callControlId → our campaign phone #
+const missedTranscription       = new Map<string, string>();          // callControlId → transcript spoken during AI speech
+const callTurnCount             = new Map<string, number>();          // callControlId → # of completed caller turns
+const MAX_TURNS_BEFORE_CLOSE    = 12;                                 // after this many turns, force script completion
+const lastAiResponse            = new Map<string, string>();          // callControlId → last AI text (to filter echo)
+const aiSpeakEndedAt            = new Map<string, number>();          // callControlId → timestamp AI finished speaking
+const lastProcessedText         = new Map<string, { text: string; ts: number }>(); // dedup window
+const pendingTransferAfterPlay  = new Set<string>();                  // callControlId → execute transfer after next playback.ended
+const AI_SPEAK_COOLDOWN_MS      = 1400;                               // ignore transcriptions this many ms after AI speaks
 
 /** Stable numeric ID from a callControlId string (for live monitor without DB row) */
 function syntheticId(callControlId: string): number {
@@ -421,6 +431,25 @@ async function startTranscriptionAndGreet(callControlId: string): Promise<void> 
 
 /** Process a final transcription from the caller and speak the AI's response */
 async function handleCallerTurn(callControlId: string, callerText: string): Promise<void> {
+  // ── Race guard: if a turn is already processing for this call, buffer and skip ──
+  if (processingTurn.has(callControlId)) {
+    logger.info({ callControlId, callerText: callerText.slice(0, 60) }, "Turn already processing — buffering");
+    const prev = missedTranscription.get(callControlId) ?? "";
+    if (callerText.trim().length > prev.trim().length) {
+      missedTranscription.set(callControlId, callerText.trim());
+    }
+    return;
+  }
+  processingTurn.add(callControlId); // lock this call for the duration of the turn
+
+  try {
+    await _handleCallerTurnInner(callControlId, callerText);
+  } finally {
+    processingTurn.delete(callControlId); // always release the lock
+  }
+}
+
+async function _handleCallerTurnInner(callControlId: string, callerText: string): Promise<void> {
   const bridge = getBridgeInfo(callControlId);
   if (!bridge) {
     logger.warn({ callControlId, callerText }, "handleCallerTurn: no bridge — skipping");
@@ -475,7 +504,7 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
   if (turnCount >= MAX_TURNS_BEFORE_CLOSE && bridge.transferNumber && !bridge.pendingTransfer) {
     history.push({
       role: "system",
-      content: `[SYSTEM OVERRIDE — turn ${turnCount}]: You have completed the script. You MUST say NOW: "Let me connect you with one of our agents right now — one moment please!" — nothing else.`,
+      content: `[SYSTEM OVERRIDE — turn ${turnCount}]: You have completed the script. Wrap up in ONE sentence that references something positive from the call, then IMMEDIATELY say: "Let me get one of our team members on the line for you — one moment!" — nothing else after that.`,
     });
     logger.info({ callControlId, turnCount }, "MAX_TURNS reached — injecting forced transfer instruction");
   }
@@ -485,8 +514,8 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
   try {
     const completion = await openai.chat.completions.create({
       model: AI_MODEL,
-      max_tokens: 150,
-      temperature: 0.7,
+      max_tokens: 220,
+      temperature: 0.75,
       messages: history.slice(-22) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
     });
     aiText = (completion.choices[0]?.message?.content ?? "").trim();
@@ -522,12 +551,16 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     "connect you with",
     "transfer you",
     "one moment please",
+    "one moment!",
     "let me connect",
     "putting you through",
     "connect you now",
     "bring in a",
     "get an agent",
     "one of our agents",
+    "one of our team",
+    "get one of our",
+    "team member on the line",
   ];
   const aiLower = aiText.toLowerCase();
   const wantsTransfer =
@@ -537,26 +570,26 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
 
   if (wantsTransfer) {
     bridge.pendingTransfer = true;
-    const ownNum = callOwnNumber.get(callControlId) ?? "";
-    logger.info({ callControlId, transferTo: bridge.transferNumber }, "Transfer phrase detected");
+    logger.info({ callControlId, transferTo: bridge.transferNumber }, "Transfer phrase detected — playing TTS then transferring after playback.ended");
 
+    // Play the transfer announcement, then execute the actual transfer once
+    // call.playback.ended fires (so Telnyx isn't mid-playback during transfer).
+    pendingTransferAfterPlay.add(callControlId);
     aiSpeaking.add(callControlId);
     try {
       const audioUrl = await generateTTS(bridge.voiceId, aiText);
       await playWithFallback(callControlId, audioUrl, aiText);
     } catch (err) {
       aiSpeaking.delete(callControlId);
-      logger.warn({ callControlId, err: String(err) }, "Transfer TTS failed — proceeding to transfer anyway");
+      pendingTransferAfterPlay.delete(callControlId);
+      logger.warn({ callControlId, err: String(err) }, "Transfer TTS failed — executing transfer immediately");
+      // TTS failed — fall back to immediate transfer
+      const ownNum = callOwnNumber.get(callControlId) ?? "";
+      await executeTransfer(callControlId, bridge.transferNumber!, ownNum, bridge.holdMusicUrl).catch((e) =>
+        logger.error({ err: String(e), callControlId }, "Immediate transfer fallback also failed")
+      );
+      await telnyxAction(callControlId, "transcription_stop", {}).catch(() => {});
     }
-
-    setTimeout(async () => {
-      try {
-        await executeTransfer(callControlId, bridge.transferNumber!, ownNum, bridge.holdMusicUrl);
-        await telnyxAction(callControlId, "transcription_stop", {}).catch(() => {});
-      } catch (err) {
-        logger.error({ err: String(err), callControlId }, "Transfer failed");
-      }
-    }, 2_500);
     return;
   }
 
@@ -1102,6 +1135,20 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       aiSpeaking.delete(callControlId);
       aiSpeakEndedAt.set(callControlId, Date.now()); // start cooldown window
 
+      // ── If a transfer is pending, execute it now that TTS has finished ──────
+      if (pendingTransferAfterPlay.has(callControlId)) {
+        pendingTransferAfterPlay.delete(callControlId);
+        const bridge = getBridgeInfo(callControlId);
+        const ownNum = callOwnNumber.get(callControlId) ?? "";
+        if (bridge?.transferNumber) {
+          logger.info({ callControlId, to: bridge.transferNumber }, "TTS done — executing pending transfer");
+          executeTransfer(callControlId, bridge.transferNumber, ownNum, bridge.holdMusicUrl)
+            .then(() => telnyxAction(callControlId, "transcription_stop", {}).catch(() => {}))
+            .catch((err) => logger.error({ err: String(err), callControlId }, "Transfer after playback.ended failed"));
+        }
+        return; // never replay missed speech after a transfer
+      }
+
       // Replay any caller speech that arrived while AI was talking
       const missed = missedTranscription.get(callControlId);
       if (missed) {
@@ -1211,6 +1258,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       lastAiResponse.delete(callControlId);
       aiSpeakEndedAt.delete(callControlId);
       lastProcessedText.delete(callControlId);
+      processingTurn.delete(callControlId);
+      pendingTransferAfterPlay.delete(callControlId);
       return;
     }
 
