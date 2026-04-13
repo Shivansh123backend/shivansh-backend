@@ -53,6 +53,21 @@ const WS_BASE_URL = BACKEND_WEBHOOK_URL.replace(/^https?:\/\//, (m) =>
 // Default ElevenLabs voice (Rachel)
 const DEFAULT_ELEVEN_VOICE = "21m00Tcm4TlvDq8ikWAM";
 
+// ── Hold music URLs for transfer (royalty-free, Pixabay CDN) ──────────────────
+const HOLD_MUSIC_URLS: Record<string, string> = {
+  none:      "https://cdn.pixabay.com/download/audio/2022/08/02/audio_884fe92c21.mp3",
+  jazz:      "https://cdn.pixabay.com/download/audio/2022/03/10/audio_c6b38e0e2e.mp3",
+  corporate: "https://cdn.pixabay.com/download/audio/2022/08/02/audio_884fe92c21.mp3",
+  smooth:    "https://cdn.pixabay.com/download/audio/2021/04/07/audio_9f72b85a8a.mp3",
+  classical: "https://cdn.pixabay.com/download/audio/2022/01/20/audio_d0c6ff1fca.mp3",
+};
+const DEFAULT_HOLD_MUSIC_URL = HOLD_MUSIC_URLS.corporate!;
+
+function resolveHoldMusicUrl(holdMusic?: string | null): string {
+  if (!holdMusic || holdMusic === "none") return DEFAULT_HOLD_MUSIC_URL;
+  return HOLD_MUSIC_URLS[holdMusic] ?? DEFAULT_HOLD_MUSIC_URL;
+}
+
 // ── Human-Like Style prompt addon ─────────────────────────────────────────────
 const HUMAN_LIKE_PROMPT_ADDON = `
 === HUMAN-LIKE SPEECH STYLE (ENABLED) ===
@@ -171,17 +186,22 @@ async function speak(callControlId: string, text: string): Promise<void> {
 async function executeTransfer(
   callControlId: string,
   toNumber: string,
-  fromNumber: string
+  fromNumber: string,
+  holdMusicUrl?: string
 ): Promise<void> {
   const apiKey = process.env.TELNYX_API_KEY;
   if (!apiKey) throw new Error("TELNYX_API_KEY not configured");
+
+  const musicUrl = holdMusicUrl ?? DEFAULT_HOLD_MUSIC_URL;
+  logger.info({ callControlId, to: toNumber, from: fromNumber, holdMusicUrl: musicUrl }, "Executing Telnyx transfer");
+
   await axios.post(
     `${TELNYX_API_BASE}/calls/${callControlId}/actions/transfer`,
     {
       to: toNumber,
       from: fromNumber,
-      audio_url:
-        "https://s3.amazonaws.com/com.twilio.music.classical/BusyStrings.mp3",
+      audio_url: musicUrl,       // hold music plays to caller while ringing human
+      timeout_secs: 30,          // ring for max 30s before giving up
       webhook_url: `${BACKEND_WEBHOOK_URL}/api/webhooks/telnyx`,
       webhook_api_version: "2",
     },
@@ -190,9 +210,11 @@ async function executeTransfer(
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      timeout: 10_000,
+      timeout: 15_000,
     }
   );
+
+  logger.info({ callControlId, to: toNumber }, "Telnyx transfer initiated — hold music active, ringing human agent");
 }
 
 // ── Campaign lookup by called number ─────────────────────────────────────────
@@ -260,7 +282,9 @@ async function getCampaignByNumber(toNumber: string) {
     humanLikeMode
   );
 
-  return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId };
+  const holdMusicUrl = resolveHoldMusicUrl(campaign.holdMusic);
+
+  return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId, holdMusicUrl };
 }
 
 // ── Post-call summary & disposition (OpenAI on ElevenLabs transcript) ─────────
@@ -392,9 +416,9 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         .where(and(eq(leadsTable.phone, ctx.phone), eq(leadsTable.campaignId, campaignId)))
         .limit(1);
 
-      // Look up agent name
+      // Look up agent name + hold music
       const [campaign] = await db
-        .select({ agentId: campaignsTable.agentId })
+        .select({ agentId: campaignsTable.agentId, holdMusic: campaignsTable.holdMusic })
         .from(campaignsTable)
         .where(eq(campaignsTable.id, campaignId))
         .limit(1);
@@ -408,6 +432,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           .limit(1);
         if (agent?.name) agentName = agent.name;
       }
+
+      const outboundHoldMusicUrl = resolveHoldMusicUrl(campaign?.holdMusic);
 
       const leadName = lead?.name;
       const firstName = leadName?.split(" ")[0];
@@ -442,13 +468,15 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         startedAt: new Date(),
         leadId: lead?.id,
         transferNumber: ctx.transferNumber ?? undefined,
+        holdMusicUrl: outboundHoldMusicUrl,
         voiceId: callVoiceId,
         systemPrompt,
         firstMessage,
         onTransferRequested: async (transferTo) => {
           try {
-            await executeTransfer(callControlId, transferTo, fromNumber);
-            logger.info({ callControlId, transferTo }, "Outbound transfer executed — stopping media fork");
+            const bridge = getBridgeInfo(callControlId);
+            await executeTransfer(callControlId, transferTo, fromNumber, bridge?.holdMusicUrl);
+            logger.info({ callControlId, transferTo }, "Outbound transfer executed — hold music active, stopping media fork");
             await telnyxAction(callControlId, "fork_stop", {}).catch(() => {});
           } catch (err) {
             logger.error({ err: String(err), callControlId }, "Outbound transfer failed in bridge callback");
@@ -478,7 +506,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         return;
       }
 
-      const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId } = result;
+      const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId, holdMusicUrl: inboundHoldMusicUrl } = result;
       const firstMessage = `Thank you for calling ${campaign.name}. This is ${agentName}. How may I help you today?`;
 
       logger.info(
@@ -495,13 +523,15 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         direction: "inbound",
         startedAt: new Date(),
         transferNumber: campaign.transferNumber ?? undefined,
+        holdMusicUrl: inboundHoldMusicUrl,
         voiceId: inboundVoiceId,
         systemPrompt,
         firstMessage,
         onTransferRequested: async (transferTo) => {
           try {
-            await executeTransfer(callControlId, transferTo, toNumber);
-            logger.info({ callControlId, transferTo }, "Inbound transfer executed — stopping media fork");
+            const bridge = getBridgeInfo(callControlId);
+            await executeTransfer(callControlId, transferTo, toNumber, bridge?.holdMusicUrl);
+            logger.info({ callControlId, transferTo }, "Inbound transfer executed — hold music active, stopping media fork");
             await telnyxAction(callControlId, "fork_stop", {}).catch(() => {});
           } catch (err) {
             logger.error({ err: String(err), callControlId }, "Inbound transfer failed in bridge callback");

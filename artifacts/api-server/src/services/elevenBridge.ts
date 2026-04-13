@@ -94,6 +94,7 @@ export interface BridgeInfo {
   leadId?: number;
   recordingUrl?: string;
   transferNumber?: string;
+  holdMusicUrl?: string;
   transcript: string[];
   voiceId: string;
   systemPrompt: string;
