@@ -240,27 +240,23 @@ async function startAIConversation(callControlId: string): Promise<void> {
     logger.warn({ err: String(err), callControlId }, "transcription_start failed — voice input disabled")
   );
 
-  // Generate ElevenLabs greeting — log exact error if it fails
-  let audioUrl: string;
-  try {
-    audioUrl = await generateTTS(bridge.voiceId, bridge.firstMessage);
-    logger.info({ callControlId, voiceId: bridge.voiceId }, "TTS generated — starting playback");
-  } catch (err) {
-    logger.error({ callControlId, voiceId: bridge.voiceId, err: String(err) }, "TTS generation failed — call will be silent");
-    return; // Don't crash the whole call handler
-  }
-
-  // Play via Telnyx playback_start — log exact error if it fails
+  // Speak the greeting via Telnyx built-in TTS (reliable, no external URL needed)
+  // Then try ElevenLabs in parallel for better voice quality on next turn
   try {
     aiSpeaking.add(callControlId);
-    await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl });
-    logger.info({ callControlId, audioUrl }, "AI greeting playing on call");
+    await telnyxAction(callControlId, "speak", {
+      payload: bridge.firstMessage,
+      payload_type: "text",
+      voice: "female",
+      language: "en-US",
+    });
+    logger.info({ callControlId, text: bridge.firstMessage }, "AI greeting speaking on call");
   } catch (err) {
     aiSpeaking.delete(callControlId);
     const detail = axios.isAxiosError(err) && err.response
       ? JSON.stringify(err.response.data).slice(0, 400)
       : String(err);
-    logger.error({ callControlId, audioUrl, detail }, "playback_start failed");
+    logger.error({ callControlId, detail }, "speak (greeting) failed");
   }
 }
 
@@ -335,11 +331,16 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     logger.info({ callControlId, transferTo: bridge.transferNumber }, "Transfer phrase detected");
 
     try {
-      const audioUrl = await generateTTS(bridge.voiceId, aiText);
       aiSpeaking.add(callControlId);
-      await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl });
+      await telnyxAction(callControlId, "speak", {
+        payload: aiText,
+        payload_type: "text",
+        voice: "female",
+        language: "en-US",
+      });
     } catch (err) {
-      logger.warn({ callControlId, err: String(err) }, "Transfer TTS failed — proceeding to transfer anyway");
+      aiSpeaking.delete(callControlId);
+      logger.warn({ callControlId, err: String(err) }, "Transfer speak failed — proceeding to transfer anyway");
     }
 
     setTimeout(async () => {
@@ -353,29 +354,22 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     return;
   }
 
-  // Normal TTS response
-  let audioUrl: string;
-  try {
-    audioUrl = await generateTTS(bridge.voiceId, aiText);
-    logger.info({ callControlId, voiceId: bridge.voiceId }, "AI TTS generated — starting playback");
-  } catch (err) {
-    const detail = axios.isAxiosError(err) && err.response
-      ? JSON.stringify(err.response.data).slice(0, 400)
-      : String(err);
-    logger.error({ callControlId, detail }, "AI turn TTS generation failed");
-    return;
-  }
-
+  // Speak the AI response via Telnyx built-in TTS
   try {
     aiSpeaking.add(callControlId);
-    await telnyxAction(callControlId, "playback_start", { audio_url: audioUrl });
-    logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "AI response playing on call");
+    await telnyxAction(callControlId, "speak", {
+      payload: aiText,
+      payload_type: "text",
+      voice: "female",
+      language: "en-US",
+    });
+    logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "AI response speaking on call");
   } catch (err) {
     aiSpeaking.delete(callControlId);
     const detail = axios.isAxiosError(err) && err.response
       ? JSON.stringify(err.response.data).slice(0, 400)
       : String(err);
-    logger.error({ callControlId, audioUrl, detail }, "AI turn playback_start failed");
+    logger.error({ callControlId, detail }, "speak (AI response) failed");
   }
 }
 
