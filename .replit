@@ -46,3 +46,4 @@ channel = "stable-25_05"
 
 [userenv.shared]
 WORKER_URL = "https://ai-voice-worker1.replit.app"
+TELNYX_CONNECTION_ID = "2935188068224730263"
