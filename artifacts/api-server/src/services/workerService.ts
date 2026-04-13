@@ -60,6 +60,7 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
     voice: payload.voice,
     phone: payload.phone,
     transferNumber: payload.transfer_number ?? null,
+    backgroundSound: payload.background_sound ?? null,
   };
   const clientState = Buffer.from(JSON.stringify(clientStateData)).toString("base64");
 

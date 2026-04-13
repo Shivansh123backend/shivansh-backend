@@ -38,6 +38,15 @@ setInterval(() => {
   }
 }, 60_000);
 
+// ── Ambient background sounds ─────────────────────────────────────────────────
+// Played with overlay:true + loop:-1 throughout the call to simulate office env.
+// These are royalty-free files. "office" and "typing" are the most common picks.
+const AMBIENT_SOUNDS: Record<string, string> = {
+  office: "https://cdn.pixabay.com/audio/2022/03/15/audio_8e3d9c1b8b.mp3",
+  typing: "https://cdn.pixabay.com/audio/2022/10/30/audio_79186ddc2e.mp3",
+  cafe:   "https://cdn.pixabay.com/audio/2022/08/04/audio_6e1e9b3154.mp3",
+};
+
 // ── Per-call conversation state ───────────────────────────────────────────────
 interface Message {
   role: "system" | "user" | "assistant";
@@ -68,6 +77,7 @@ interface CallState {
   pendingHangup?: boolean;    // hang up gracefully after current speech ends
   pendingTransfer?: string;   // phone number to transfer to after current speech ends
   transferNumber?: string;    // campaign-level transfer number
+  backgroundSound?: string;   // ambient sound key ("office", "typing", etc.)
 }
 
 const activeCalls = new Map<string, CallState>();
@@ -165,13 +175,32 @@ async function speakEleven(
     await telnyxAction(callControlId, "play_audio", {
       audio_url: `${BACKEND_WEBHOOK_URL}/api/audio/${audioId}`,
       loop: 0,
-      overlay: false,
+      overlay: true,   // layer on top of ambient background loop without stopping it
     });
 
     logger.info({ callControlId, voiceId, chars: text.length }, "ElevenLabs TTS played");
   } catch (err) {
     logger.warn({ err: String(err), callControlId }, "ElevenLabs TTS failed — using Telnyx speak fallback");
     await speak(callControlId, text);
+  }
+}
+
+// ── Start ambient background audio loop (overlay, infinite) ──────────────────
+async function startBackgroundAudio(callControlId: string, soundKey: string): Promise<void> {
+  const url = AMBIENT_SOUNDS[soundKey];
+  if (!url) {
+    logger.warn({ callControlId, soundKey }, "Unknown background sound key — skipping");
+    return;
+  }
+  try {
+    await telnyxAction(callControlId, "play_audio", {
+      audio_url: url,
+      loop: -1,      // loop indefinitely — never fires call.playback.ended
+      overlay: true, // plays under the AI voice without interrupting it
+    });
+    logger.info({ callControlId, soundKey }, "Background ambient audio started");
+  } catch (err) {
+    logger.warn({ err: String(err), callControlId, soundKey }, "Background audio start failed — continuing without it");
   }
 }
 
@@ -188,7 +217,9 @@ router.get("/api/audio/:id", (req, res): void => {
   res.send(entry.buffer);
 });
 
-// ── Natural system prompt builder (VAPI-like) ─────────────────────────────────
+// ── System prompt builder ─────────────────────────────────────────────────────
+// The rawPrompt from campaigns.ts is ALREADY comprehensive (includes HUMAN_LIKE_INSTRUCTIONS,
+// knowledge base, script, etc.). We only prepend identity + critical phone rules on top.
 function buildNaturalSystemPrompt(
   rawPrompt: string,
   campaignName: string,
@@ -196,34 +227,30 @@ function buildNaturalSystemPrompt(
   leadName?: string,
   transferNumber?: string
 ): string {
-  const intro = leadName
-    ? `You are ${agentName}, calling ${leadName} on behalf of "${campaignName}".`
-    : `You are ${agentName}, an AI phone agent calling on behalf of "${campaignName}".`;
-
-  const instructions = rawPrompt?.trim()
-    ? `YOUR ROLE AND GOAL:\n${rawPrompt}\n`
-    : `Be helpful, professional, and guide the conversation naturally.\n`;
+  const identity = leadName
+    ? `You are ${agentName}, right now making a live phone call to ${leadName} on behalf of "${campaignName}".`
+    : `You are ${agentName}, making a live outbound phone call on behalf of "${campaignName}".`;
 
   const transferInstruction = transferNumber
-    ? `- If the caller wants to speak with a human, is interested in moving forward, or specifically asks to be transferred: say "Let me connect you with one of our agents right now — one moment please!" and nothing else. This will trigger the transfer automatically.`
-    : `- If the caller wants to speak with a human, let them know the team will follow up shortly and wrap up gracefully.`;
+    ? `HUMAN TRANSFER: If the caller asks to speak with a human, wants to move forward, or asks to be transferred — say EXACTLY: "Let me connect you with one of our agents right now — one moment please!" and nothing else.`
+    : `HUMAN TRANSFER: If the caller asks for a human, tell them a team member will follow up shortly and wrap up warmly.`;
 
-  return `${intro}
+  const coreScript = rawPrompt?.trim()
+    || `Be helpful, warm, and professional. Guide the conversation naturally. Ask one question at a time.`;
 
-${instructions}
-CONVERSATION RULES — follow these at all times:
-- Sound completely natural and human. NEVER sound scripted or robotic.
-- Keep every response SHORT: 1-3 sentences maximum. This is a real phone call.
-- ALWAYS respond directly to what the caller just said before anything else.
-- If they ask an unexpected question, answer it genuinely, then gently return to your purpose.
-- If asked "are you an AI or robot?" — be honest: "Yes, I'm an AI assistant, but I'm genuinely here to help."
-- If they're not interested or want to opt out: "Absolutely, I'll remove you right away. Really sorry for the interruption — have a great day!" then wrap up.
-- If they want a callback: confirm their preferred time warmly and say someone will follow up.
-- Use natural filler language: "Got it", "Sure", "Absolutely", "Of course", "Makes sense", "Happy to help".
-- Never repeat yourself. Never read from a numbered list. Adapt to wherever the conversation goes.
-- If you learn their name, use it naturally once in a while (not every sentence).
-- Be warm, empathetic, and genuinely helpful. If you don't know something, say so honestly.
-- When wrapping up the call, give a friendly natural close like "Great talking with you, have an amazing day!"
+  return `${identity}
+
+${coreScript}
+
+CRITICAL PHONE CALL RULES (always enforce these):
+- This is a LIVE phone call. Every response must be 1-3 sentences MAX. Never write paragraphs.
+- After the caller confirms who they are, IMMEDIATELY proceed to your call purpose — don't stall.
+- Ask ONE question at a time. Wait for their answer before asking the next one.
+- React naturally to what they just said BEFORE moving to your next point.
+- Never say "As an AI..." unless they directly ask if you're a bot.
+- If they want to opt out: "Absolutely, so sorry for the interruption — have a great day!" then stop.
+- Use natural speech: "Sure", "Got it", "Of course", "Makes sense", "Totally understand".
+- If they want a callback: confirm their preferred time warmly.
 ${transferInstruction}`;
 }
 
@@ -424,6 +451,7 @@ interface OutboundClientState {
   voice: string;
   phone: string;
   transferNumber: string | null;
+  backgroundSound: string | null;
 }
 
 function decodeClientState(raw: string): OutboundClientState | null {
@@ -582,6 +610,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         ? `Hi, is this ${firstName}? This is ${agentName} calling from ${ctx.campaignName}.`
         : `Hello! This is ${agentName} calling from ${ctx.campaignName}.`;
 
+      const backgroundSound = ctx.backgroundSound ?? undefined;
+
       activeCalls.set(callControlId, {
         campaignId,
         campaignName: ctx.campaignName,
@@ -600,13 +630,20 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         leadName,
         leadId: lead?.id,
         transferNumber: ctx.transferNumber ?? undefined,
+        backgroundSound,
       });
 
-      logger.info({ callControlId, campaignId, phone: ctx.phone, leadName, agentName, greeting }, "Outbound call answered — AI speaking first");
+      logger.info({ callControlId, campaignId, phone: ctx.phone, leadName, agentName, greeting, backgroundSound }, "Outbound call answered — AI speaking first");
 
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err, callControlId }, "Outbound recording start failed — continuing")
       );
+
+      // Start ambient background audio before greeting if configured
+      if (backgroundSound && backgroundSound !== "none") {
+        await startBackgroundAudio(callControlId, backgroundSound);
+      }
+
       // Speak the greeting immediately (VAPI-style) — no waiting for caller to speak first
       await speakEleven(callControlId, greeting);
       return;
@@ -625,6 +662,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       const { campaign, agentName, systemPrompt } = result;
       const greeting = `Thank you for calling ${campaign.name}. This is ${agentName}. How may I help you today?`;
 
+      const inboundBgSound = campaign.backgroundSound ?? undefined;
+
       activeCalls.set(callControlId, {
         campaignId: campaign.id,
         campaignName: campaign.name,
@@ -641,14 +680,21 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         direction: "inbound",
         stage: "conversation",
         transferNumber: campaign.transferNumber ?? undefined,
+        backgroundSound: inboundBgSound,
       });
 
-      logger.info({ callControlId, campaignId: campaign.id, agentName }, "Answering inbound call");
+      logger.info({ callControlId, campaignId: campaign.id, agentName, backgroundSound: inboundBgSound }, "Answering inbound call");
 
       await answerCall(callControlId);
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err, callControlId }, "Recording start failed — continuing without recording")
       );
+
+      // Start ambient background if configured
+      if (inboundBgSound && inboundBgSound !== "none") {
+        await startBackgroundAudio(callControlId, inboundBgSound);
+      }
+
       await speakEleven(callControlId, greeting);
       return;
     }
