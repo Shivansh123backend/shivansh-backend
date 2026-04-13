@@ -121,7 +121,13 @@ CRITICAL PHONE CALL RULES (always enforce these):
 - If they want to opt out: "Absolutely, so sorry for the interruption — have a great day!" then stop talking.
 - Use natural speech: "Sure", "Got it", "Of course", "Makes sense", "Totally understand".
 - If they want a callback: confirm their preferred time warmly.
-${transferInstruction}`;
+${transferInstruction}
+
+HANDLING CONFUSION & INTERRUPTIONS:
+- If the caller says "are you there?", "hello?", "can you hear me?", or similar — confirm you can hear them briefly ("Yes, right here!") then MOVE FORWARD — do NOT repeat the previous question.
+- NEVER ask the same question twice in a row. If they didn't answer it, note what they said and advance naturally.
+- If they interrupt mid-thought, acknowledge what they said and adapt — don't ignore them.
+- Treat short unclear responses ("yeah", "ok", "sure", "uh huh") as agreement and move forward.`;
 }
 
 // ── Telnyx Call Control helpers ───────────────────────────────────────────────
@@ -167,9 +173,10 @@ setInterval(() => {
 
 // ── Per-call conversation history & state ────────────────────────────────────
 interface ConvMessage { role: "system" | "user" | "assistant"; content: string; }
-const callMessages  = new Map<string, ConvMessage[]>();   // callControlId → chat history
-const aiSpeaking    = new Set<string>();                  // callControlId → AI currently speaking
-const callOwnNumber = new Map<string, string>();          // callControlId → our campaign phone #
+const callMessages         = new Map<string, ConvMessage[]>();   // callControlId → chat history
+const aiSpeaking           = new Set<string>();                  // callControlId → AI currently speaking
+const callOwnNumber        = new Map<string, string>();          // callControlId → our campaign phone #
+const missedTranscription  = new Map<string, string>();          // callControlId → transcript spoken during AI speech
 
 function makeAudioToken(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(8)))
@@ -274,9 +281,14 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     return;
   }
 
-  // Don't process while AI is speaking — avoids echo
+  // Don't process while AI is speaking — but save for replay after speak.ended
   if (aiSpeaking.has(callControlId)) {
-    logger.info({ callControlId, callerText }, "Transcription during AI speech — skipped");
+    logger.info({ callControlId, callerText }, "Transcription during AI speech — buffered for replay");
+    // Keep the latest, longest utterance spoken during AI turn
+    const prev = missedTranscription.get(callControlId) ?? "";
+    if (clean.length > prev.trim().length) {
+      missedTranscription.set(callControlId, clean);
+    }
     return;
   }
 
@@ -292,13 +304,13 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
   history.push({ role: "user", content: clean });
   callMessages.set(callControlId, history);
 
-  // GPT completion (keep last 20 turns to stay within token limit)
+  // GPT completion — short tokens to enforce 1-2 sentence rule
   let aiText: string;
   try {
     const completion = await openai.chat.completions.create({
       model: AI_MODEL,
-      max_tokens: 200,
-      temperature: 0.8,
+      max_tokens: 80,
+      temperature: 0.7,
       messages: history.slice(-20) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
     });
     aiText = (completion.choices[0]?.message?.content ?? "").trim();
@@ -776,6 +788,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     if (eventType === "call.playback.ended" || eventType === "call.speak.ended") {
       aiSpeaking.delete(callControlId);
       logger.debug({ callControlId, eventType }, "AI speech ended — ready for caller input");
+
+      // Replay any transcription that arrived while AI was speaking
+      const buffered = missedTranscription.get(callControlId);
+      if (buffered) {
+        missedTranscription.delete(callControlId);
+        logger.info({ callControlId, buffered }, "Replaying buffered transcription after AI speech");
+        await handleCallerTurn(callControlId, buffered);
+      }
       return;
     }
 
@@ -883,6 +903,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       callMessages.delete(callControlId);
       aiSpeaking.delete(callControlId);
       callOwnNumber.delete(callControlId);
+      missedTranscription.delete(callControlId);
       return;
     }
 
