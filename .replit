@@ -46,3 +46,4 @@ channel = "stable-25_05"
 
 [userenv.shared]
 TELNYX_CONNECTION_ID = "2935188068224730263"
+ELEVENLABS_AGENT_ID = "agent_7701kp3txmbdf05rxsjrzazgjb9j"
