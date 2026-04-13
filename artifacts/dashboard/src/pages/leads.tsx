@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useListLeads,
@@ -14,8 +14,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, X, Filter } from "lucide-react";
+import { Plus, X, Filter, Upload, FileSpreadsheet, CheckCircle2, AlertCircle } from "lucide-react";
 
+// ── Single-lead modal ──────────────────────────────────────────────────────────
 function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -94,27 +95,213 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
   );
 }
 
+// ── CSV / XLSX bulk upload modal ───────────────────────────────────────────────
+type UploadResult = { total_uploaded: number; total_skipped: number };
+
+function UploadModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
+  const [campaignId, setCampaignId] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [result, setResult] = useState<UploadResult | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  const upload = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error("No file selected");
+      if (!campaignId) throw new Error("Please select a campaign");
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("campaign_id", campaignId);
+      const res = await fetch("/api/leads/upload", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("auth_token") ?? ""}`,
+        },
+        body: fd,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `Upload failed (${res.status})`);
+      }
+      return res.json() as Promise<UploadResult>;
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      setResult(data);
+    },
+    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+  });
+
+  const pickFile = (f: File) => {
+    const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!["csv", "xlsx", "xls"].includes(ext)) {
+      toast({ title: "Only CSV or XLSX files are supported", variant: "destructive" });
+      return;
+    }
+    setFile(f);
+    setResult(null);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    const f = e.dataTransfer.files[0];
+    if (f) pickFile(f);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-lg">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <p className="text-xs font-mono uppercase tracking-widest text-foreground">Upload Leads (CSV / XLSX)</p>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {/* Campaign selector */}
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">Campaign</Label>
+            <Select value={campaignId} onValueChange={setCampaignId}>
+              <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="Select campaign" /></SelectTrigger>
+              <SelectContent>
+                {campaigns.map(c => (
+                  <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Drop zone */}
+          <div
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={handleDrop}
+            onClick={() => fileRef.current?.click()}
+            className={`border-2 border-dashed rounded-lg p-8 flex flex-col items-center gap-3 cursor-pointer transition-colors
+              ${dragging ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-white/[0.02]"}`}
+          >
+            <FileSpreadsheet className={`w-8 h-8 ${file ? "text-primary" : "text-muted-foreground"}`} />
+            {file ? (
+              <div className="text-center">
+                <p className="text-sm font-mono text-foreground">{file.name}</p>
+                <p className="text-[10px] font-mono text-muted-foreground mt-1">{(file.size / 1024).toFixed(1)} KB — click to change</p>
+              </div>
+            ) : (
+              <div className="text-center">
+                <p className="text-sm font-mono text-muted-foreground">Drop CSV or XLSX here</p>
+                <p className="text-[10px] font-mono text-muted-foreground/60 mt-1">or click to browse</p>
+              </div>
+            )}
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) pickFile(f); e.target.value = ""; }}
+            />
+          </div>
+
+          {/* Column hint */}
+          <div className="bg-white/[0.03] border border-border/50 rounded p-3 space-y-1">
+            <p className="text-[10px] font-mono uppercase text-muted-foreground tracking-wider">Required columns</p>
+            <p className="text-[11px] font-mono text-foreground/70">
+              <span className="text-primary">phone_number</span>
+              <span className="text-muted-foreground"> · </span>
+              <span className="text-foreground/50">name</span>
+              <span className="text-muted-foreground"> · </span>
+              <span className="text-foreground/50">email (optional)</span>
+            </p>
+            <p className="text-[10px] font-mono text-muted-foreground/60 leading-relaxed">
+              Also accepts: phone, Phone, mobile · name, Name, full_name
+            </p>
+          </div>
+
+          {/* Result banner */}
+          {result && (
+            <div className={`flex items-start gap-2.5 rounded p-3 border text-xs font-mono
+              ${result.total_uploaded > 0 ? "bg-green-500/10 border-green-500/30 text-green-400" : "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"}`}>
+              {result.total_uploaded > 0 ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+              <div>
+                <p className="font-semibold">{result.total_uploaded} lead{result.total_uploaded !== 1 ? "s" : ""} imported</p>
+                {result.total_skipped > 0 && (
+                  <p className="text-[10px] opacity-80 mt-0.5">{result.total_skipped} row{result.total_skipped !== 1 ? "s" : ""} skipped (invalid phone or duplicate)</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-2 pt-1">
+            <Button
+              variant="outline"
+              className="flex-1 font-mono text-xs uppercase tracking-wider"
+              onClick={onClose}
+            >
+              {result ? "Done" : "Cancel"}
+            </Button>
+            <Button
+              className="flex-1 font-mono text-xs uppercase tracking-wider"
+              disabled={!file || !campaignId || upload.isPending}
+              onClick={() => upload.mutate()}
+            >
+              {upload.isPending ? (
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" /> Uploading…</span>
+              ) : (
+                <span className="flex items-center gap-1.5"><Upload className="w-3 h-3" /> Upload</span>
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main page ──────────────────────────────────────────────────────────────────
 export default function LeadsPage() {
   const [filterCampaign, setFilterCampaign] = useState("__all__");
   const [filterStatus, setFilterStatus] = useState("__all__");
-  const { data: leads, isLoading } = useListLeads({ campaignId: filterCampaign !== "__all__" ? parseInt(filterCampaign) : undefined, status: filterStatus !== "__all__" ? filterStatus : undefined });
+  const { data: leads, isLoading } = useListLeads({
+    campaignId: filterCampaign !== "__all__" ? parseInt(filterCampaign) : undefined,
+    status: filterStatus !== "__all__" ? filterStatus : undefined,
+  });
   const { data: campaigns } = useListCampaigns();
   const [showCreate, setShowCreate] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
 
   const campaignMap = Object.fromEntries((campaigns ?? []).map((c: { id: number; name: string }) => [c.id, c.name]));
 
   return (
     <Layout>
       {showCreate && <CreateModal onClose={() => setShowCreate(false)} campaigns={campaigns ?? []} />}
+      {showUpload && <UploadModal onClose={() => setShowUpload(false)} campaigns={campaigns ?? []} />}
+
       <PageHeader
         title="Leads"
         subtitle={`${(leads ?? []).length} records`}
         action={
-          <Button size="sm" className="font-mono text-xs uppercase tracking-wider h-7 px-3" onClick={() => setShowCreate(true)}>
-            <Plus className="w-3 h-3 mr-1.5" /> Add Lead
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="font-mono text-xs uppercase tracking-wider h-7 px-3"
+              onClick={() => setShowUpload(true)}
+            >
+              <Upload className="w-3 h-3 mr-1.5" /> Upload CSV
+            </Button>
+            <Button
+              size="sm"
+              className="font-mono text-xs uppercase tracking-wider h-7 px-3"
+              onClick={() => setShowCreate(true)}
+            >
+              <Plus className="w-3 h-3 mr-1.5" /> Add Lead
+            </Button>
+          </div>
         }
       />
+
       <div className="px-6 py-3 border-b border-border flex items-center gap-3">
         <Filter className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
         <Select value={filterCampaign} onValueChange={setFilterCampaign}>
@@ -142,6 +329,7 @@ export default function LeadsPage() {
           </SelectContent>
         </Select>
       </div>
+
       <div className="p-6">
         <div className="border border-border rounded bg-[hsl(224,71%,3%)] overflow-hidden">
           <table className="w-full text-xs font-mono">
@@ -163,17 +351,23 @@ export default function LeadsPage() {
                     ))}
                   </tr>
                 ))
+              ) : (leads ?? []).length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
+                    No leads yet. Use <span className="text-primary">Upload CSV</span> to import in bulk or <span className="text-primary">Add Lead</span> to add one at a time.
+                  </td>
+                </tr>
               ) : (leads ?? []).map((l: { id: number; name: string; phone?: string; phone_number?: string; campaignId?: number; campaign_id?: number; status: string; email?: string | null }) => {
                 const phone = l.phone || l.phone_number || "-";
-                const campaignId = l.campaignId ?? l.campaign_id;
+                const cid = l.campaignId ?? l.campaign_id;
                 return (
-                <tr key={l.id} className="border-b border-border/30 hover:bg-white/2 transition-colors">
-                  <td className="px-4 py-3 text-muted-foreground">#{l.id}</td>
-                  <td className="px-4 py-3 text-foreground font-medium">{l.name}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{phone}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{campaignId ? campaignMap[campaignId] ?? `#${campaignId}` : "-"}</td>
-                  <td className="px-4 py-3"><StatusBadge status={l.status} /></td>
-                </tr>
+                  <tr key={l.id} className="border-b border-border/30 hover:bg-white/2 transition-colors">
+                    <td className="px-4 py-3 text-muted-foreground">#{l.id}</td>
+                    <td className="px-4 py-3 text-foreground font-medium">{l.name}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{phone}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{cid ? campaignMap[cid] ?? `#${cid}` : "-"}</td>
+                    <td className="px-4 py-3"><StatusBadge status={l.status} /></td>
+                  </tr>
                 );
               })}
             </tbody>
