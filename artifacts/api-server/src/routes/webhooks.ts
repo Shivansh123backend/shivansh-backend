@@ -420,44 +420,56 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       const campaignId = parseInt(ctx.campaignId, 10);
 
-      // Look up lead name for a personalized, natural greeting
+      // Look up lead for personalization
       const [lead] = await db
         .select({ name: leadsTable.name, id: leadsTable.id })
         .from(leadsTable)
         .where(and(eq(leadsTable.phone, ctx.phone), eq(leadsTable.campaignId, campaignId)))
         .limit(1);
 
+      // Look up campaign's AI agent name
+      const [campaign] = await db
+        .select({ agentId: campaignsTable.agentId })
+        .from(campaignsTable)
+        .where(eq(campaignsTable.id, campaignId))
+        .limit(1);
+
+      let agentName = "Nexus";
+      if (campaign?.agentId) {
+        const [agent] = await db
+          .select({ name: aiAgentsTable.name })
+          .from(aiAgentsTable)
+          .where(eq(aiAgentsTable.id, campaign.agentId))
+          .limit(1);
+        if (agent?.name) agentName = agent.name;
+      }
+
       const leadName = lead?.name;
-      const firstName = leadName?.split(" ")[0];
-
-      // Natural greeting — personalised if we have their name
-      const greeting = firstName
-        ? `Hi ${firstName}, this is an AI assistant calling from ${ctx.campaignName}. Did I catch you at a good time?`
-        : `Hi there, this is an AI assistant calling from ${ctx.campaignName}. Is now an okay time to chat?`;
-
-      const naturalScript = buildNaturalSystemPrompt(ctx.script, ctx.campaignName, "AI Assistant", leadName);
+      const naturalScript = buildNaturalSystemPrompt(ctx.script, ctx.campaignName, agentName, leadName);
 
       activeCalls.set(callControlId, {
         campaignId,
         campaignName: ctx.campaignName,
-        agentName: "AI Assistant",
+        agentName,
         agentPrompt: naturalScript,
         callerNumber: ctx.phone,
         calledNumber: fromNumber,
-        messages: [
-          { role: "system", content: naturalScript },
-          { role: "assistant", content: greeting },
-        ],
+        messages: [{ role: "system", content: naturalScript }],
         turnCount: 0,
         startedAt: new Date(),
+        direction: "outbound",
+        stage: "waiting_for_pickup",
+        leadName,
+        leadId: lead?.id,
       });
 
-      logger.info({ callControlId, campaignId, phone: ctx.phone, leadName }, "Outbound call answered — starting AI conversation");
+      logger.info({ callControlId, campaignId, phone: ctx.phone, leadName, agentName }, "Outbound call answered — waiting for caller to speak first");
 
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err, callControlId }, "Outbound recording start failed — continuing")
       );
-      await speak(callControlId, greeting);
+      // ⬇ DON'T speak first — wait for caller to say "hello" / "hi" etc.
+      await gatherSpeech(callControlId);
       return;
     }
 
@@ -501,23 +513,38 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       return;
     }
 
-    // ── 2. Greeting/response done → listen ──────────────────────────────────
+    // ── 2. AI finished speaking → listen or wrap up ─────────────────────────
     if (eventType === "call.speak.ended") {
       const state = activeCalls.get(callControlId);
       if (!state) return;
 
-      if (state.turnCount >= MAX_TURNS) {
-        await speak(callControlId, "Thank you for calling. Someone from our team will follow up with you soon. Have a great day! Goodbye!");
-        await finalizeInboundCall(callControlId, state);
+      // Graceful hangup requested (e.g. wrong number, opt-out, max turns)
+      if (state.pendingHangup) {
+        try { await telnyxAction(callControlId, "hangup", {}); } catch { /* already gone */ }
+        if (state.direction === "outbound") {
+          await finalizeOutboundCall(callControlId, state);
+        } else {
+          await finalizeInboundCall(callControlId, state);
+        }
         activeCalls.delete(callControlId);
         return;
       }
 
+      // Max turns reached — wrap up naturally
+      if (state.turnCount >= MAX_TURNS) {
+        const bye = "It was really great talking with you. Have a wonderful day, take care!";
+        state.messages.push({ role: "assistant", content: bye });
+        state.pendingHangup = true;
+        await speak(callControlId, bye);
+        return;
+      }
+
+      // Listen for next caller input
       await gatherSpeech(callControlId);
       return;
     }
 
-    // ── 3. Caller spoke → generate AI response ───────────────────────────────
+    // ── 3. Caller spoke → handle based on conversation stage ────────────────
     if (eventType === "call.gather.ended") {
       const state = activeCalls.get(callControlId);
       if (!state) return;
@@ -525,30 +552,93 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       const speechText: string = payload.speech ?? "";
       const digits: string = payload.digits ?? "";
       const reason: string = payload.reason ?? "";
+      const callerInput = speechText.trim() || (digits ? `Pressed ${digits}` : "");
 
-      if (!speechText && !digits) {
-        if (reason === "timeout") {
-          if (state.turnCount >= 1) {
-            await speak(callControlId, "I didn't hear anything. Thank you for calling. Goodbye!");
-            await finalizeInboundCall(callControlId, state);
+      // ── Stage 0: waiting for caller to say anything ("hello", "hi", etc.) ──
+      if (state.stage === "waiting_for_pickup") {
+        if (!callerInput) {
+          // Silence — nudge once, then give up
+          if (state.turnCount === 0) {
+            state.turnCount++;
+            await speak(callControlId, "Hello?");
+          } else {
+            await finalizeOutboundCall(callControlId, state, "no_answer");
             activeCalls.delete(callControlId);
+          }
+          return;
+        }
+
+        logger.info({ callControlId, callerInput }, "Caller picked up — confirming identity");
+        state.messages.push({ role: "user", content: callerInput });
+        state.turnCount++;
+
+        if (state.leadName) {
+          // Confirm we have the right person
+          const firstName = state.leadName.split(" ")[0];
+          const nameCheck = `Is this ${firstName}?`;
+          state.messages.push({ role: "assistant", content: nameCheck });
+          state.stage = "confirming_name";
+          await speak(callControlId, nameCheck);
+        } else {
+          // No lead name — go straight to intro
+          const intro = `Hi, this is ${state.agentName} calling from ${state.campaignName}. How are you doing today?`;
+          state.messages.push({ role: "assistant", content: intro });
+          state.stage = "conversation";
+          await speak(callControlId, intro);
+        }
+        return;
+      }
+
+      // ── Stage 1: caller confirmed (or denied) their name ────────────────────
+      if (state.stage === "confirming_name") {
+        state.messages.push({ role: "user", content: callerInput });
+        state.turnCount++;
+
+        const lower = callerInput.toLowerCase();
+        const denied = ["no", "wrong", "not me", "different", "nobody", "who"].some(w => lower.includes(w));
+
+        if (denied || !callerInput) {
+          const sorry = "Oh, I'm so sorry for the confusion! Seems I have the wrong number. Have a great day!";
+          state.messages.push({ role: "assistant", content: sorry });
+          state.pendingHangup = true;
+          await speak(callControlId, sorry);
+          return;
+        }
+
+        // They confirmed — now give the full intro
+        const firstName = state.leadName?.split(" ")[0] ?? "";
+        const intro = `Hi ${firstName}, this is ${state.agentName} calling from ${state.campaignName}. How are you doing today?`;
+        state.messages.push({ role: "assistant", content: intro });
+        state.stage = "conversation";
+        await speak(callControlId, intro);
+        return;
+      }
+
+      // ── Stage 2: normal AI conversation ────────────────────────────────────
+      if (!callerInput) {
+        if (reason === "timeout") {
+          if (state.turnCount >= 2) {
+            const bye = "Seems like you stepped away. I'll let you go — have a great day!";
+            state.messages.push({ role: "assistant", content: bye });
+            state.pendingHangup = true;
+            await speak(callControlId, bye);
           } else {
             state.turnCount++;
-            await speak(callControlId, "I'm sorry, I didn't catch that. Could you please say something?");
+            await speak(callControlId, "Sorry, I didn't catch that — could you say that again?");
           }
           return;
         }
         return;
       }
 
-      const callerInput = speechText || `Pressed ${digits}`;
-      logger.info({ callControlId, callerInput, turn: state.turnCount }, "Caller input");
+      logger.info({ callControlId, callerInput, turn: state.turnCount, stage: state.stage }, "Caller input");
 
       if (isGoodbye(callerInput)) {
-        await speak(callControlId, "Thank you for calling. Have a wonderful day. Goodbye!");
         state.messages.push({ role: "user", content: callerInput });
-        await finalizeInboundCall(callControlId, state);
-        activeCalls.delete(callControlId);
+        const bye = "Great talking with you! Take care and have a wonderful day. Goodbye!";
+        state.messages.push({ role: "assistant", content: bye });
+        state.pendingHangup = true;
+        await speak(callControlId, bye);
         return;
       }
 
@@ -560,11 +650,11 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         aiResponse = await generateAiResponse(state.messages);
       } catch (err) {
         logger.error({ err, callControlId }, "OpenAI response failed");
-        aiResponse = "I'm sorry, I'm having trouble processing that. Could you please repeat?";
+        aiResponse = "Sorry, I missed that — could you say it again?";
       }
 
       state.messages.push({ role: "assistant", content: aiResponse });
-      logger.info({ callControlId, aiResponse, turn: state.turnCount }, "AI response generated");
+      logger.info({ callControlId, aiResponse, turn: state.turnCount }, "AI response");
       await speak(callControlId, aiResponse);
       return;
     }
