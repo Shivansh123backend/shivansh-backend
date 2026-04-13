@@ -467,18 +467,19 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
 
 export function initBridge(
   callControlId: string,
-  info: Omit<BridgeInfo, "transcript" | "pendingTransfer">
+  info: Omit<BridgeInfo, "transcript" | "pendingTransfer" | "callControlId">
 ): void {
   const sessionToken = makeSessionToken();
   activeBridges.set(callControlId, {
     ...info,
+    callControlId,        // always populate so getAllActiveBridges() can return it
     transcript: [],
     pendingTransfer: false,
     elevenWs: null,
     sessionToken,
   });
   sessionIndex.set(sessionToken, callControlId);
-  logger.info({ callControlId, sessionToken, direction: info.direction, voiceId: info.voiceId }, "Bridge registered — waiting for fork");
+  logger.info({ callControlId, sessionToken, direction: info.direction, voiceId: info.voiceId }, "Bridge registered");
 }
 
 export function getBridgeInfo(callControlId: string): BridgeInfo | undefined {

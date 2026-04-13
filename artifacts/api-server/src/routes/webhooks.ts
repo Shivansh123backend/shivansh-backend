@@ -25,7 +25,6 @@ import OpenAI from "openai";
 import {
   initBridge,
   getBridgeInfo,
-  getAllActiveBridges,
   closeBridge,
   setRecordingUrl,
 } from "../services/elevenBridge.js";
@@ -65,28 +64,17 @@ function resolveHoldMusicUrl(holdMusic?: string | null): string {
   return HOLD_MUSIC_URLS[holdMusic] ?? DEFAULT_HOLD_MUSIC_URL;
 }
 
-// ── Human-Like Style prompt addon ─────────────────────────────────────────────
-const HUMAN_LIKE_PROMPT_ADDON = `
-=== HUMAN-LIKE SPEECH STYLE (ENABLED) ===
-NATURAL FILLERS — use these to sound human, not robotic:
-- Use "Hmm", "Let me see", "Right", "Yeah", "Got it", "Totally", "Of course" naturally
-- Occasionally start with a small affirmation: "Oh, I see", "Ah, great!", "Sure thing"
-- Mirror the caller: if they're casual, be casual; if formal, stay professional
-
-EMPATHY FIRST:
-- Before proceeding, acknowledge what they said: "That makes total sense", "I completely understand"
-- If they sound busy: "I'll keep this really brief, I promise"
-- If they express frustration: "I really appreciate your patience" before continuing
-
-PACING & PAUSES:
-- Don't rush — leave natural space for the caller to think
-- After asking a question, STOP and wait — don't fill every gap
-- If they seem confused, rephrase simply rather than repeating word-for-word
-
-AVOID:
-- Never say "Certainly!", "Absolutely!", "Of course!" as a hollow opener every single time
-- Never sound like you're reading a script — vary your phrasing each turn
-=== END HUMAN-LIKE STYLE ===`.trim();
+// ── Template variable substitution ────────────────────────────────────────────
+function substituteVars(
+  template: string,
+  vars: Record<string, string>
+): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) => {
+    // Try exact match first, then lowercase
+    const val = vars[key] ?? vars[key.toLowerCase()];
+    return val !== undefined ? val : "";   // blank out unfilled placeholders
+  });
+}
 
 // ── System prompt builder ─────────────────────────────────────────────────────
 function buildSystemPrompt(
@@ -97,39 +85,90 @@ function buildSystemPrompt(
   transferNumber?: string,
   humanLikeMode = true
 ): string {
+  const firstName = leadName?.split(" ")[0];
+  const lastName  = leadName?.split(" ").slice(1).join(" ") || "";
+
   const identity = leadName
-    ? `You are ${agentName}, right now on a live phone call with ${leadName} on behalf of "${campaignName}".`
-    : `You are ${agentName}, on a live phone call on behalf of "${campaignName}".`;
+    ? `You are ${agentName}, right now on a LIVE phone call with ${leadName} on behalf of "${campaignName}". The caller's name is ${firstName}. Use their name naturally throughout the conversation (e.g. "Thanks, ${firstName}!") — but do not overdo it.`
+    : `You are ${agentName}, on a LIVE phone call on behalf of "${campaignName}".`;
 
   const transferInstruction = transferNumber
-    ? `HUMAN TRANSFER: If the caller asks to speak with a human, wants to move forward, or asks to be transferred — say EXACTLY: "Let me connect you with one of our agents right now — one moment please!" and nothing else.`
+    ? `HUMAN TRANSFER: If the caller asks to speak with a human agent, or wants to be transferred — say EXACTLY: "Let me connect you with one of our agents right now — one moment please!" and nothing else. Then stop.`
     : `HUMAN TRANSFER: If the caller asks for a human, tell them a team member will follow up shortly and wrap up warmly.`;
 
-  const coreScript =
-    rawPrompt?.trim() ||
-    `Be helpful, warm, and professional. Guide the conversation naturally. Ask one question at a time.`;
+  const rudeHandling = `HANDLING RUDE OR DIFFICULT CALLERS:
+- If the caller is rude, uses profanity, or is dismissive — remain calm and warm. Say something like "I completely understand, I'll let you go — have a great day!" and stop talking. Never argue.
+- If they say "stop calling", "remove me", "not interested" — acknowledge immediately: "Absolutely, I'll make a note of that right away. Have a wonderful day!" then end the call.
+- If they're aggressive but still engaging — soften your tone, acknowledge their frustration briefly, then offer to help or move on.`;
 
-  const humanSection = humanLikeMode ? HUMAN_LIKE_PROMPT_ADDON + "\n\n" : "";
+  const nameConfirmation = firstName
+    ? `NAME CONFIRMATION (FIRST STEP — do this before anything else):
+- Your very first task is to confirm you're speaking with ${firstName}.
+- You already said "Hi, is this ${firstName}?" — if they said yes/correct/speaking/sure/yep/that's me, they've confirmed. DO NOT ask again.
+- Once confirmed: use "${firstName}" naturally throughout ("Got it, ${firstName}!", "Thanks ${firstName}!") — never say {{FirstName}} literally.
+- If they say no or give a different name: say "Oh, I'm so sorry! Is this a good time?" and adapt.`
+    : "";
+
+  const progressionRules = `CONVERSATION PROGRESSION (CRITICAL):
+- After each question, STOP and wait for the caller's answer.
+- When they answer (even "yes", "no", "yeah", "uh huh", "sure") — ACCEPT it and MOVE to the next question immediately.
+- NEVER repeat the same question twice. If unclear: move on with "Got it!" and the next point.
+- Keep track of what questions you've already asked. Do not loop back.
+- Treat any short response ("yes", "yeah", "ok", "fine") as confirmation and ADVANCE.
+- If they go off-topic: briefly acknowledge, then bring back: "That makes sense! Just quickly…"`;
+
+  // Substitute {{FirstName}}, {{LastName}}, {{Name}}, {{CampaignName}}, etc. in the campaign script
+  const templateVars: Record<string, string> = {
+    FirstName: firstName ?? "",
+    Firstname: firstName ?? "",
+    firstname: firstName ?? "",
+    first_name: firstName ?? "",
+    LastName: lastName,
+    Lastname: lastName,
+    lastname: lastName,
+    last_name: lastName,
+    Name: leadName ?? "",
+    name: leadName ?? "",
+    FullName: leadName ?? "",
+    fullname: leadName ?? "",
+    full_name: leadName ?? "",
+    CampaignName: campaignName,
+    campaignname: campaignName,
+    campaign_name: campaignName,
+    Campaign: campaignName,
+    campaign: campaignName,
+    AgentName: agentName,
+    agentname: agentName,
+    agent_name: agentName,
+  };
+
+  const coreScript = substituteVars(
+    rawPrompt?.trim() ||
+    `Be helpful, warm, and professional. Guide the conversation naturally. Ask one question at a time.`,
+    templateVars
+  );
+
+  const humanSection = humanLikeMode ? `SPEECH STYLE — sound human, not robotic:
+- Use natural fillers: "Hmm", "Right", "Got it", "Totally", "Of course", "Makes sense"
+- Vary your openers — don't start every reply the same way
+- Mirror the caller's energy: casual if they're casual, professional if they're formal
+- Keep it brief: 1–2 sentences per response maximum\n\n` : "";
 
   return `${identity}
 
-${humanSection}${coreScript}
+${humanSection}${nameConfirmation ? nameConfirmation + "\n\n" : ""}CAMPAIGN SCRIPT — follow this closely:
+${coreScript}
 
-CRITICAL PHONE CALL RULES (always enforce these):
-- This is a LIVE phone call. Every response must be 1-3 sentences MAX. Never write paragraphs.
-- Ask ONE question at a time. Wait for their answer before asking the next one.
-- React naturally to what they just said BEFORE moving to your next point.
-- Never say "As an AI..." unless they directly ask if you're a bot.
-- If they want to opt out: "Absolutely, so sorry for the interruption — have a great day!" then stop talking.
-- Use natural speech: "Sure", "Got it", "Of course", "Makes sense", "Totally understand".
+${progressionRules}
+
+${rudeHandling}
+
+ABSOLUTE RULES:
+- This is a LIVE phone call. 1–2 sentences MAX per response. Never write paragraphs.
+- Never say "As an AI" or "I'm an AI" — just be helpful and natural.
+- If they want to opt out: "Absolutely, so sorry — have a great day!" then stop.
 - If they want a callback: confirm their preferred time warmly.
-${transferInstruction}
-
-HANDLING CONFUSION & INTERRUPTIONS:
-- If the caller says "are you there?", "hello?", "can you hear me?", or similar — confirm you can hear them briefly ("Yes, right here!") then MOVE FORWARD — do NOT repeat the previous question.
-- NEVER ask the same question twice in a row. If they didn't answer it, note what they said and advance naturally.
-- If they interrupt mid-thought, acknowledge what they said and adapt — don't ignore them.
-- Treat short unclear responses ("yeah", "ok", "sure", "uh huh") as agreement and move forward.`;
+${transferInstruction}`;
 }
 
 // ── Telnyx Call Control helpers ───────────────────────────────────────────────
@@ -343,7 +382,7 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
   try {
     const completion = await openai.chat.completions.create({
       model: AI_MODEL,
-      max_tokens: 80,
+      max_tokens: 150,
       temperature: 0.7,
       messages: history.slice(-20) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
     });
@@ -692,10 +731,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         ctx.transferNumber ?? undefined
       );
 
-      // First message the AI says as soon as the call connects
+      // First message — short name-check greeting; system prompt handles the rest
       const firstMessage = firstName
-        ? `Hi, is this ${firstName}? This is ${agentName} calling from ${ctx.campaignName}.`
-        : `Hello! This is ${agentName} calling from ${ctx.campaignName}.`;
+        ? `Hi, is this ${firstName}?`
+        : `Hello! This is ${agentName} calling from ${ctx.campaignName}. Is this a good time?`;
 
       logger.info(
         { callControlId, campaignId, phone: ctx.phone, leadName, agentName, voiceId: callVoiceId },
