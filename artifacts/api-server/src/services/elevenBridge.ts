@@ -104,7 +104,22 @@ export interface BridgeInfo {
   onCallEnded?: () => void;
 }
 
-const activeBridges = new Map<string, BridgeInfo & { elevenWs: WebSocket | null }>();
+type BridgeEntry = BridgeInfo & { elevenWs: WebSocket | null; sessionToken: string };
+
+const activeBridges = new Map<string, BridgeEntry>();               // callControlId → bridge
+const sessionIndex = new Map<string, string>();                      // sessionToken → callControlId
+
+/** Generate a URL-safe random token with no special characters */
+function makeSessionToken(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Return the session token for a given callControlId (used to build the fork URL) */
+export function getBridgeSessionToken(callControlId: string): string | undefined {
+  return activeBridges.get(callControlId)?.sessionToken;
+}
 
 // ── ElevenLabs Agent ID ────────────────────────────────────────────────────────
 // Priority:
@@ -362,12 +377,12 @@ async function connectToElevenLabs(
 // Called by index.ts for every upgrade request to /ws/eleven/:callControlId
 
 export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): void {
-  // URL format: /ws/eleven/:encodedCallControlId  (callControlId is URL-encoded to handle "v3:" colon)
+  // URL format: /ws/eleven/:sessionToken  (hex token maps to callControlId — no special chars)
   const urlParts = (req.url ?? "").split("/");
-  const rawId = urlParts[urlParts.length - 1] ?? "";
-  const callControlId = decodeURIComponent(rawId);
+  const sessionToken = urlParts[urlParts.length - 1] ?? "";
+  const callControlId = sessionIndex.get(sessionToken) ?? "";
 
-  logger.info({ callControlId, rawId, url: req.url }, "Telnyx media fork WebSocket connected");
+  logger.info({ sessionToken, callControlId, url: req.url }, "Telnyx media fork WebSocket connected");
 
   ws.on("message", async (raw: Buffer) => {
     let msg: Record<string, unknown>;
@@ -445,13 +460,16 @@ export function initBridge(
   callControlId: string,
   info: Omit<BridgeInfo, "transcript" | "pendingTransfer">
 ): void {
+  const sessionToken = makeSessionToken();
   activeBridges.set(callControlId, {
     ...info,
     transcript: [],
     pendingTransfer: false,
     elevenWs: null,
+    sessionToken,
   });
-  logger.info({ callControlId, direction: info.direction, voiceId: info.voiceId }, "Bridge registered — waiting for fork");
+  sessionIndex.set(sessionToken, callControlId);
+  logger.info({ callControlId, sessionToken, direction: info.direction, voiceId: info.voiceId }, "Bridge registered — waiting for fork");
 }
 
 export function getBridgeInfo(callControlId: string): BridgeInfo | undefined {
@@ -469,6 +487,7 @@ export function closeBridge(callControlId: string): void {
   if (bridge.elevenWs && bridge.elevenWs.readyState === WebSocket.OPEN) {
     bridge.elevenWs.close();
   }
+  sessionIndex.delete(bridge.sessionToken);
   activeBridges.delete(callControlId);
   logger.info({ callControlId }, "Bridge closed");
 }

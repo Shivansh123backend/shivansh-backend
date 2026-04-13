@@ -25,6 +25,7 @@ import OpenAI from "openai";
 import {
   initBridge,
   getBridgeInfo,
+  getBridgeSessionToken,
   closeBridge,
   setRecordingUrl,
 } from "../services/elevenBridge.js";
@@ -164,27 +165,43 @@ async function startRecording(callControlId: string): Promise<void> {
 
 /** Start Telnyx media fork → our ElevenLabs bridge WebSocket */
 async function forkMedia(callControlId: string): Promise<void> {
-  // URL-encode the callControlId so special chars (e.g. "v3:") don't confuse proxies
-  const encodedId = encodeURIComponent(callControlId);
-  const target = `${WS_BASE_URL}/ws/eleven/${encodedId}`;
-  logger.info({ callControlId, encodedId, target }, "Starting Telnyx media fork → ElevenLabs bridge");
+  // Use a random hex session token (no special chars) instead of the raw callControlId
+  // so the URL path never contains "v3:" or other chars that confuse reverse proxies
+  const sessionToken = getBridgeSessionToken(callControlId);
+  if (!sessionToken) throw new Error(`No bridge session for ${callControlId}`);
+  const target = `${WS_BASE_URL}/ws/eleven/${sessionToken}`;
+  logger.info({ callControlId, sessionToken, target }, "Starting Telnyx media fork → ElevenLabs bridge");
 
   const apiKey = process.env.TELNYX_API_KEY;
   if (!apiKey) throw new Error("TELNYX_API_KEY not configured");
 
-  const resp = await axios.post(
-    `${TELNYX_API_BASE}/calls/${callControlId}/actions/fork_start`,
-    { target, stream_track: "both_tracks" },
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+  try {
+    const resp = await axios.post(
+      `${TELNYX_API_BASE}/calls/${callControlId}/actions/fork_start`,
+      {
+        target,
+        rx: "caller",
+        tx: "caller",
+        stream_track: "inbound_track",   // "both_tracks" causes 422 on this account
       },
-      timeout: 10_000,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 10_000,
+      }
+    );
+    logger.info({ callControlId, status: resp.status }, "fork_start accepted by Telnyx");
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response) {
+      logger.error(
+        { callControlId, status: err.response.status, body: JSON.stringify(err.response.data).slice(0, 500) },
+        "fork_start rejected by Telnyx"
+      );
     }
-  );
-
-  logger.info({ callControlId, status: resp.status, data: JSON.stringify(resp.data).slice(0, 200) }, "fork_start response");
+    throw err;
+  }
 }
 
 async function speak(callControlId: string, text: string): Promise<void> {
