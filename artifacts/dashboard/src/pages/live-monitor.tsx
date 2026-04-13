@@ -7,13 +7,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Activity, Phone, Bot, Megaphone, Zap, Wifi, WifiOff,
   CheckCircle2, XCircle, PhoneIncoming, PhoneMissed, ArrowRightLeft,
-  Clock, Users, TrendingUp,
+  Clock, Users, TrendingUp, MessageSquare,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface LiveCall {
   id: number;
+  callControlId?: string;
   leadId?: number;
   campaignId?: number;
   agentId?: number;
@@ -23,7 +24,13 @@ interface LiveCall {
   phoneNumber?: string;
   status: string;
   startedAt?: string;
-  _localStart: number; // timestamp when we first saw this call as active
+  _localStart: number;
+}
+
+interface TranscriptLine {
+  speaker: "caller" | "agent";
+  text: string;
+  ts: number;
 }
 
 interface EventEntry {
@@ -53,6 +60,35 @@ function formatElapsed(startMs: number): string {
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// ── Typing sound using Web Audio API ─────────────────────────────────────────
+let _audioCtx: AudioContext | null = null;
+function playTypingSound() {
+  try {
+    if (!_audioCtx) _audioCtx = new AudioContext();
+    const ctx = _audioCtx;
+    const bufferSize = Math.floor(ctx.sampleRate * 0.035);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize) * 0.8;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.04;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 3000;
+    filter.Q.value = 0.7;
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    src.start();
+  } catch {
+    // audio not available — ignore silently
+  }
 }
 
 const EVENT_ICONS: Record<string, React.ElementType> = {
@@ -103,12 +139,27 @@ function StatCard({ label, value, color, loading, icon: Icon }: {
   );
 }
 
-function LiveCallCard({ call, campaignMap }: { call: LiveCall; campaignMap: Record<number, string> }) {
-  useLiveClock(); // re-render every second for the timer
+function LiveCallCard({
+  call,
+  campaignMap,
+  transcriptLines,
+}: {
+  call: LiveCall;
+  campaignMap: Record<number, string>;
+  transcriptLines: TranscriptLine[];
+}) {
+  useLiveClock();
   const elapsed = formatElapsed(call._localStart);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (transcriptRef.current) {
+      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+    }
+  }, [transcriptLines.length]);
 
   return (
-    <div className="border border-green-500/20 rounded bg-[hsl(224,71%,3%)] p-4 space-y-3 relative overflow-hidden group hover:border-green-500/40 transition-colors">
+    <div className="border border-green-500/20 rounded bg-[hsl(224,71%,3%)] p-4 space-y-3 relative overflow-hidden hover:border-green-500/40 transition-colors">
       <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-green-400/0 via-green-400/70 to-green-400/0 animate-pulse" />
 
       <div className="flex items-start justify-between gap-2">
@@ -145,6 +196,41 @@ function LiveCallCard({ call, campaignMap }: { call: LiveCall; campaignMap: Reco
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <Zap className="w-3 h-3 flex-shrink-0 text-yellow-400/60" />
           <span className="truncate">{call.selectedNumber ?? "-"}</span>
+        </div>
+      </div>
+
+      {/* Live transcript panel */}
+      <div className="border border-border/50 rounded bg-black/30">
+        <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border/30">
+          <MessageSquare className="w-2.5 h-2.5 text-primary/60" />
+          <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">Live Transcript</span>
+          {transcriptLines.length > 0 && (
+            <span className="ml-auto w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+          )}
+        </div>
+        <div
+          ref={transcriptRef}
+          className="overflow-y-auto px-2 py-1.5 space-y-1"
+          style={{ maxHeight: 110 }}
+        >
+          {transcriptLines.length === 0 ? (
+            <p className="text-[9px] font-mono text-muted-foreground/40 italic text-center py-2">
+              Waiting for speech…
+            </p>
+          ) : (
+            transcriptLines.slice(-6).map((line, i) => (
+              <div key={i} className="flex gap-1.5 items-start">
+                <span className={`text-[8px] font-mono font-bold flex-shrink-0 pt-0.5 ${
+                  line.speaker === "agent" ? "text-primary" : "text-cyan-400"
+                }`}>
+                  {line.speaker === "agent" ? "AI" : "C"}
+                </span>
+                <p className="text-[9px] font-mono text-foreground/80 leading-relaxed break-words min-w-0">
+                  {line.text}
+                </p>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -241,6 +327,7 @@ export default function LiveMonitorPage() {
 
   const [connected, setConnected] = useState(false);
   const [activeCalls, setActiveCalls] = useState<Map<number, LiveCall>>(new Map());
+  const [liveTranscripts, setLiveTranscripts] = useState<Map<string, TranscriptLine[]>>(new Map());
   const [events, setEvents] = useState<EventEntry[]>([]);
   const [totalToday, setTotalToday] = useState<number>(0);
   const [completedToday, setCompletedToday] = useState<number>(0);
@@ -305,10 +392,11 @@ export default function LiveMonitorPage() {
       setTotalToday(n => n + 1);
     });
 
-    socket.on("call:started", (data: { id?: number; callId?: number; leadId?: number; campaignId?: number; phoneNumber?: string; providerUsed?: string; selectedNumber?: string; agentId?: number }) => {
+    socket.on("call:started", (data: { id?: number; callId?: number; callControlId?: string; leadId?: number; campaignId?: number; phoneNumber?: string; providerUsed?: string; selectedNumber?: string; agentId?: number }) => {
       const id = data.id ?? data.callId ?? 0;
       const call: LiveCall = {
         id,
+        callControlId: data.callControlId,
         leadId: data.leadId,
         campaignId: data.campaignId,
         agentId: data.agentId,
@@ -322,11 +410,28 @@ export default function LiveMonitorPage() {
       addEvent(makeEvent("call:started", `Call #${id} started`, data.phoneNumber ? `→ ${data.phoneNumber}` : undefined));
     });
 
-    socket.on("call:ended", (data: { id?: number; callId?: number; disposition?: string; duration?: number }) => {
+    socket.on("call:ended", (data: { id?: number; callId?: number; callControlId?: string; disposition?: string; duration?: number }) => {
       const id = data.id ?? data.callId ?? 0;
       setActiveCalls(prev => { const m = new Map(prev); m.delete(id); return m; });
+      // Clear transcripts for this call
+      if (data.callControlId) {
+        setLiveTranscripts(prev => { const m = new Map(prev); m.delete(data.callControlId!); return m; });
+      }
       setCompletedToday(n => n + 1);
       addEvent(makeEvent("call:ended", `Call #${id} ended`, data.disposition ? `· ${data.disposition.replace(/_/g, " ")}` : data.duration ? `· ${data.duration}s` : undefined));
+    });
+
+    socket.on("call:transcription", (data: { callId?: number; callControlId?: string; speaker?: "caller" | "agent"; text?: string; ts?: number }) => {
+      const ccid = data.callControlId;
+      if (!ccid || !data.text || !data.speaker) return;
+      const line: TranscriptLine = { speaker: data.speaker, text: data.text, ts: data.ts ?? Date.now() };
+      setLiveTranscripts(prev => {
+        const m = new Map(prev);
+        const prev_lines = m.get(ccid) ?? [];
+        m.set(ccid, [...prev_lines.slice(-29), line]); // keep last 30 lines
+        return m;
+      });
+      playTypingSound();
     });
 
     socket.on("call:transferred", (data: { callId?: number; agentId?: number }) => {
@@ -438,7 +543,12 @@ export default function LiveMonitorPage() {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {activeCallsArr.map(c => (
-                <LiveCallCard key={c.id} call={c} campaignMap={campaignMap} />
+                <LiveCallCard
+                  key={c.id}
+                  call={c}
+                  campaignMap={campaignMap}
+                  transcriptLines={c.callControlId ? (liveTranscripts.get(c.callControlId) ?? []) : []}
+                />
               ))}
             </div>
           )}

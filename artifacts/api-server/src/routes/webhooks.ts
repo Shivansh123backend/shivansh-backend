@@ -168,7 +168,14 @@ ABSOLUTE RULES:
 - Never say "As an AI" or "I'm an AI" — just be helpful and natural.
 - If they want to opt out: "Absolutely, so sorry — have a great day!" then stop.
 - If they want a callback: confirm their preferred time warmly.
-${transferInstruction}`;
+${transferInstruction}
+
+SCRIPT COMPLETION — CRITICAL:
+- Once you have gone through all the campaign questions and received answers, you are DONE with the script.
+- At that point, IMMEDIATELY say: "Let me connect you with one of our agents right now — one moment please!"
+- Do NOT ask "Is there anything else?" — just trigger the transfer.
+- Do NOT loop back to any question you already asked.
+- Do NOT keep talking after the script is complete.`;
 }
 
 // ── Telnyx Call Control helpers ───────────────────────────────────────────────
@@ -218,6 +225,8 @@ const callMessages         = new Map<string, ConvMessage[]>();   // callControlI
 const aiSpeaking           = new Set<string>();                  // callControlId → AI currently speaking
 const callOwnNumber        = new Map<string, string>();          // callControlId → our campaign phone #
 const missedTranscription  = new Map<string, string>();          // callControlId → transcript spoken during AI speech
+const callTurnCount        = new Map<string, number>();           // callControlId → # of completed caller turns
+const MAX_TURNS_BEFORE_CLOSE = 8;                                 // after this many turns, force script completion
 
 /** Stable numeric ID from a callControlId string (for live monitor without DB row) */
 function syntheticId(callControlId: string): number {
@@ -373,9 +382,33 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
   logger.info({ callControlId, callerText }, "Caller turn — generating AI response");
   bridge.transcript.push(`Caller: ${clean}`);
 
+  // Emit live transcription to supervisor panel
+  const callId = syntheticId(callControlId);
+  emitToSupervisors("call:transcription", {
+    callId,
+    callControlId,
+    speaker: "caller",
+    text: clean,
+    ts: Date.now(),
+  });
+
   const history = callMessages.get(callControlId) ?? [{ role: "system" as const, content: bridge.systemPrompt }];
   history.push({ role: "user", content: clean });
   callMessages.set(callControlId, history);
+
+  // Track turns to detect script completion / prevent infinite loops
+  const turnCount = (callTurnCount.get(callControlId) ?? 0) + 1;
+  callTurnCount.set(callControlId, turnCount);
+  logger.debug({ callControlId, turnCount }, "Turn count updated");
+
+  // After MAX_TURNS force the AI to wrap up — prevents infinite looping
+  if (turnCount >= MAX_TURNS_BEFORE_CLOSE && bridge.transferNumber && !bridge.pendingTransfer) {
+    history.push({
+      role: "system",
+      content: `[SYSTEM OVERRIDE — turn ${turnCount}]: You have completed the script. You MUST say NOW: "Let me connect you with one of our agents right now — one moment please!" — nothing else.`,
+    });
+    logger.info({ callControlId, turnCount }, "MAX_TURNS reached — injecting forced transfer instruction");
+  }
 
   // GPT completion — short tokens to enforce 1-2 sentence rule
   let aiText: string;
@@ -384,7 +417,7 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
       model: AI_MODEL,
       max_tokens: 150,
       temperature: 0.7,
-      messages: history.slice(-20) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
+      messages: history.slice(-22) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
     });
     aiText = (completion.choices[0]?.message?.content ?? "").trim();
     logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "OpenAI response received");
@@ -404,11 +437,32 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
   history.push({ role: "assistant", content: aiText });
   bridge.transcript.push(`AI Agent: ${aiText}`);
 
-  // Detect transfer phrase before playing TTS
+  // Emit AI turn to supervisor panel
+  emitToSupervisors("call:transcription", {
+    callId,
+    callControlId,
+    speaker: "agent",
+    text: aiText,
+    ts: Date.now(),
+  });
+
+  // Detect transfer phrase — broader match to catch all variants
+  const TRANSFER_TRIGGERS = [
+    "connect you with",
+    "transfer you",
+    "one moment please",
+    "let me connect",
+    "putting you through",
+    "connect you now",
+    "bring in a",
+    "get an agent",
+    "one of our agents",
+  ];
+  const aiLower = aiText.toLowerCase();
   const wantsTransfer =
     bridge.transferNumber &&
     !bridge.pendingTransfer &&
-    (aiText.toLowerCase().includes("connect you with") || aiText.toLowerCase().includes("transfer you"));
+    TRANSFER_TRIGGERS.some((phrase) => aiLower.includes(phrase));
 
   if (wantsTransfer) {
     bridge.pendingTransfer = true;
@@ -1031,6 +1085,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       aiSpeaking.delete(callControlId);
       callOwnNumber.delete(callControlId);
       missedTranscription.delete(callControlId);
+      callTurnCount.delete(callControlId);
       return;
     }
 
