@@ -590,6 +590,280 @@ Show the current values in the card footer with small badges:
 
 ---
 
+## PATCH 16 — Live Transcripts inside each Live Call card
+
+Each active call card in Live Monitor must show a scrollable live transcript panel that updates in real time as the AI and caller speak.
+
+### 1. Add the TranscriptLine type
+
+```typescript
+interface TranscriptLine {
+  speaker: "caller" | "agent";
+  text: string;
+  ts: number;
+}
+```
+
+### 2. Add liveTranscripts state to LiveMonitorPage
+
+```typescript
+const [liveTranscripts, setLiveTranscripts] = useState<Map<string, TranscriptLine[]>>(new Map());
+```
+
+### 3. Listen for `call:transcription` WebSocket events
+
+Inside the `useEffect` where you set up the Socket.IO listeners, add:
+
+```typescript
+socket.on("call:transcription", (data: {
+  callId?: number;
+  callControlId?: string;
+  speaker?: "caller" | "agent";
+  text?: string;
+  ts?: number;
+}) => {
+  const ccid = data.callControlId;
+  if (!ccid || !data.text || !data.speaker) return;
+  const line: TranscriptLine = { speaker: data.speaker, text: data.text, ts: data.ts ?? Date.now() };
+  setLiveTranscripts(prev => {
+    const m = new Map(prev);
+    const prevLines = m.get(ccid) ?? [];
+    m.set(ccid, [...prevLines.slice(-29), line]); // keep last 30 lines
+    return m;
+  });
+});
+```
+
+Also clear transcripts when a call ends — inside the `call:ended` handler:
+```typescript
+if (data.callControlId) {
+  setLiveTranscripts(prev => {
+    const m = new Map(prev);
+    m.delete(data.callControlId!);
+    return m;
+  });
+}
+```
+
+### 4. Pass transcriptLines to LiveCallCard
+
+When rendering active call cards, pass the transcript lines for the matching callControlId:
+
+```tsx
+<LiveCallCard
+  key={c.id}
+  call={c}
+  campaignMap={campaignMap}
+  transcriptLines={c.callControlId ? (liveTranscripts.get(c.callControlId) ?? []) : []}
+/>
+```
+
+Update `LiveCallCard` props to accept `transcriptLines: TranscriptLine[]`.
+
+### 5. Render the transcript panel inside LiveCallCard
+
+Add a `transcriptRef = useRef<HTMLDivElement>(null)` inside the component and auto-scroll when lines change:
+
+```typescript
+const transcriptRef = useRef<HTMLDivElement>(null);
+useEffect(() => {
+  if (transcriptRef.current) {
+    transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+  }
+}, [transcriptLines.length]);
+```
+
+Add this JSX block inside the card, after the 2×2 info grid:
+
+```tsx
+{/* Live transcript panel */}
+<div className="border border-border/50 rounded bg-black/30">
+  <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border/30">
+    <MessageSquare className="w-2.5 h-2.5 text-primary/60" />
+    <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">Live Transcript</span>
+    {transcriptLines.length > 0 && (
+      <span className="ml-auto w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+    )}
+  </div>
+  <div
+    ref={transcriptRef}
+    className="overflow-y-auto px-2 py-1.5 space-y-1"
+    style={{ maxHeight: 110 }}
+  >
+    {transcriptLines.length === 0 ? (
+      <p className="text-[9px] font-mono text-muted-foreground/40 italic text-center py-2">
+        Waiting for speech…
+      </p>
+    ) : (
+      transcriptLines.slice(-6).map((line, i) => (
+        <div key={i} className="flex gap-1.5 items-start">
+          <span className={`text-[8px] font-mono font-bold flex-shrink-0 pt-0.5 ${
+            line.speaker === "agent" ? "text-primary" : "text-cyan-400"
+          }`}>
+            {line.speaker === "agent" ? "AI" : "C"}
+          </span>
+          <p className="text-[9px] font-mono text-foreground/80 leading-relaxed break-words min-w-0">
+            {line.text}
+          </p>
+        </div>
+      ))
+    )}
+  </div>
+</div>
+```
+
+Import `MessageSquare` from lucide-react if not already imported.
+
+---
+
+## PATCH 17 — Sound Toggle: Office Ambient + Transcript Click Sounds
+
+The Live Monitor header has a **Sound off / Sound on** button. When turned on it plays:
+- A soft brown noise loop (HVAC/office ventilation hum)
+- Random keyboard burst sounds at random intervals (other people typing)
+- A sharp key-click each time a transcript line arrives
+
+**This must be click-initiated** — browsers block audio until a user gesture. The button is that gesture.
+
+### 1. Add the Audio System (paste before your component, at file scope)
+
+```typescript
+let _audioCtx: AudioContext | null = null;
+let _ambientStop: (() => void) | null = null;
+
+async function getCtx(): Promise<AudioContext | null> {
+  try {
+    if (!_audioCtx) _audioCtx = new AudioContext();
+    if (_audioCtx.state === "suspended") await _audioCtx.resume();
+    return _audioCtx;
+  } catch { return null; }
+}
+
+function playKeyClick(ctx: AudioContext, vol = 0.05) {
+  const bufSize = Math.floor(ctx.sampleRate * 0.028);
+  const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / bufSize);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const g = ctx.createGain();
+  g.gain.value = vol;
+  const f = ctx.createBiquadFilter();
+  f.type = "bandpass";
+  f.frequency.value = 2800 + Math.random() * 800;
+  f.Q.value = 0.9;
+  src.connect(f); f.connect(g); g.connect(ctx.destination);
+  src.start();
+}
+
+function startAmbientSound(ctx: AudioContext): () => void {
+  let stopped = false;
+  const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate);
+  const noiseData = noiseBuffer.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < noiseData.length; i++) {
+    const w = Math.random() * 2 - 1;
+    noiseData[i] = last = (last + 0.015 * w) / 1.015;
+  }
+  const noiseSource = ctx.createBufferSource();
+  noiseSource.buffer = noiseBuffer;
+  noiseSource.loop = true;
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.value = 0.055;
+  const noiseFilter = ctx.createBiquadFilter();
+  noiseFilter.type = "lowpass";
+  noiseFilter.frequency.value = 250;
+  noiseSource.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(ctx.destination);
+  noiseSource.start();
+
+  function scheduleTypingBurst() {
+    if (stopped) return;
+    const delay = 1200 + Math.random() * 4000;
+    setTimeout(() => {
+      if (stopped) return;
+      const count = 1 + Math.floor(Math.random() * 6);
+      for (let i = 0; i < count; i++) {
+        setTimeout(() => { if (!stopped) playKeyClick(ctx, 0.025 + Math.random() * 0.02); },
+          i * (40 + Math.random() * 70));
+      }
+      scheduleTypingBurst();
+    }, delay);
+  }
+  scheduleTypingBurst();
+
+  return () => {
+    stopped = true;
+    try { noiseSource.stop(); } catch { /* already stopped */ }
+  };
+}
+
+async function enableAmbient() {
+  const ctx = await getCtx();
+  if (!ctx || _ambientStop) return;
+  _ambientStop = startAmbientSound(ctx);
+}
+
+function disableAmbient() {
+  _ambientStop?.();
+  _ambientStop = null;
+}
+
+async function playTypingSound() {
+  const ctx = await getCtx();
+  if (!ctx) return;
+  playKeyClick(ctx, 0.06);
+}
+```
+
+### 2. Add state + ref inside the component
+
+```typescript
+const [soundEnabled, setSoundEnabled] = useState(false);
+const soundEnabledRef = useRef(false);
+
+// Keep ref in sync
+useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
+
+// Start/stop ambient when toggle changes
+useEffect(() => {
+  if (soundEnabled) { enableAmbient(); }
+  else { disableAmbient(); }
+  return () => { disableAmbient(); };
+}, [soundEnabled]);
+```
+
+### 3. Play a click on each transcript line
+
+Inside the `call:transcription` socket handler (from PATCH 16), add:
+```typescript
+if (soundEnabledRef.current) playTypingSound();
+```
+
+### 4. Add the Sound toggle button to the PageHeader action area
+
+Import `Volume2` and `VolumeX` from lucide-react.
+
+```tsx
+<button
+  onClick={() => setSoundEnabled(v => !v)}
+  title={soundEnabled ? "Disable ambient sound" : "Enable office ambient sound + transcript clicks"}
+  className={`flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded border transition-colors ${
+    soundEnabled
+      ? "border-primary/50 text-primary bg-primary/10 hover:bg-primary/20"
+      : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
+  }`}
+>
+  {soundEnabled ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
+  {soundEnabled ? "Sound on" : "Sound off"}
+</button>
+```
+
+Place this button to the **left** of the existing "Live · connected" status indicator in the header action area.
+
+---
+
 ## Visual rules reminder (do not change these)
 
 - App name: **SHIVANSH** (not NexusCall, not Nexus AI, not anything else)
