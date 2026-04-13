@@ -1,0 +1,119 @@
+/**
+ * Audio proxy routes — serve ambient/hold-music audio to Telnyx.
+ *
+ * Telnyx fetches audio URLs with a non-browser User-Agent that many CDNs
+ * block. By proxying through our backend we:
+ *  1. Use a browser-like User-Agent to prevent blocks
+ *  2. Add a fallback chain so if the primary source is down we try the next
+ *  3. Cache the response for 24 h (Cache-Control header) to reduce upstream load
+ */
+import { Router, type IRouter } from "express";
+import axios from "axios";
+
+const router: IRouter = Router();
+
+// ── Source lists — ordered by reliability (first = preferred) ─────────────────
+const AMBIENT_SOURCES: Record<string, string[]> = {
+  typing: [
+    "https://freesound.org/data/previews/398/398699_5121236-lq.mp3",   // Mechanical keyboard typing
+    "https://freesound.org/data/previews/270/270404_5123851-lq.mp3",   // Keyboard typing 2
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",   // fallback music
+  ],
+  office: [
+    "https://freesound.org/data/previews/462/462065_3612722-lq.mp3",   // Office ambience
+    "https://freesound.org/data/previews/171/171671_2437358-lq.mp3",   // Office room tone
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+  ],
+  cafe: [
+    "https://freesound.org/data/previews/521/521975_11421771-lq.mp3",  // Café ambience
+    "https://freesound.org/data/previews/172/172948_1033898-lq.mp3",   // Coffee shop
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
+  ],
+};
+
+const HOLD_MUSIC_SOURCES: Record<string, string[]> = {
+  default: [
+    "https://freesound.org/data/previews/414/414709_7037-lq.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+  ],
+  jazz: [
+    "https://freesound.org/data/previews/541/541196_3755359-lq.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
+  ],
+  corporate: [
+    "https://freesound.org/data/previews/559/559539_9497060-lq.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+  ],
+  smooth: [
+    "https://freesound.org/data/previews/519/519439_9379544-lq.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+  ],
+  classical: [
+    "https://freesound.org/data/previews/612/612095_12517891-lq.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+  ],
+};
+
+const BROWSER_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+  Accept: "audio/mpeg, audio/*, */*",
+  "Accept-Encoding": "identity",
+};
+
+async function proxyAudio(
+  sources: string[],
+  res: import("express").Response
+): Promise<void> {
+  for (const url of sources) {
+    try {
+      const upstream = await axios.get<import("stream").Readable>(url, {
+        responseType: "stream",
+        headers: BROWSER_HEADERS,
+        timeout: 12_000,
+        maxRedirects: 5,
+      });
+
+      const ct: string =
+        (upstream.headers["content-type"] as string) ?? "audio/mpeg";
+
+      res.setHeader("Content-Type", ct);
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+
+      upstream.data.pipe(res);
+
+      // Propagate upstream close/error so the client socket doesn't hang
+      upstream.data.on("error", () => res.end());
+      return;
+    } catch {
+      // Try next source
+    }
+  }
+
+  res.status(502).send("All audio sources unavailable");
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────────
+
+/** Ambient background sounds (typing, office, cafe) */
+router.get(
+  "/audio/ambient/:type",
+  async (req, res): Promise<void> => {
+    const type = req.params.type as string;
+    const sources = AMBIENT_SOURCES[type] ?? AMBIENT_SOURCES.typing!;
+    await proxyAudio(sources, res);
+  }
+);
+
+/** Hold music presets (default, jazz, corporate, smooth, classical) */
+router.get(
+  "/audio/hold/:preset",
+  async (req, res): Promise<void> => {
+    const preset = req.params.preset as string;
+    const sources = HOLD_MUSIC_SOURCES[preset] ?? HOLD_MUSIC_SOURCES.default!;
+    await proxyAudio(sources, res);
+  }
+);
+
+export default router;
