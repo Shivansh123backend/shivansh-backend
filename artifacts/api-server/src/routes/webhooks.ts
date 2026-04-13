@@ -79,6 +79,7 @@ interface CallState {
   transferNumber?: string;    // campaign-level transfer number
   backgroundSound?: string;   // ambient sound key ("office", "typing", etc.)
   voiceId: string;            // ElevenLabs voice ID used for this call
+  isAiSpeaking: boolean;      // true while TTS is playing — ignore transcription events
 }
 
 const activeCalls = new Map<string, CallState>();
@@ -124,14 +125,14 @@ async function speak(callControlId: string, text: string): Promise<void> {
   });
 }
 
-async function gatherSpeech(callControlId: string): Promise<void> {
-  // speech_type: "cloud" is REQUIRED — without it Telnyx defaults to DTMF (keypad)
-  // mode and completely ignores voice input. gather_timeout is in SECONDS.
-  await telnyxAction(callControlId, "gather", {
-    gather_after_silence: 2000,   // 2s of silence after speech = end of utterance (ms)
-    gather_timeout: 30,           // 30 seconds max wait for speech to start (seconds)
-    speech_type: "cloud",         // CRITICAL: enables cloud-based speech-to-text
+// Replaced gather (DTMF-only by default) with transcription_start.
+// Engine B = Telnyx built-in STT, no external credentials required.
+// Fires call.transcription webhooks with is_final:true for each utterance.
+async function startTranscription(callControlId: string): Promise<void> {
+  await telnyxAction(callControlId, "transcription_start", {
     language: "en-US",
+    transcription_engine: "B",
+    interim_results: false,
   });
 }
 
@@ -142,6 +143,10 @@ async function speakEleven(
   text: string,
   voiceId: string = DEFAULT_ELEVEN_VOICE
 ): Promise<void> {
+  // Mark AI as speaking BEFORE any TTS so transcription events are ignored
+  const _callState = activeCalls.get(callControlId);
+  if (_callState) _callState.isAiSpeaking = true;
+
   if (!ELEVENLABS_API_KEY) {
     return speak(callControlId, text);
   }
@@ -174,10 +179,13 @@ async function speakEleven(
       expires: Date.now() + 3 * 60 * 1000,
     });
 
-    // Correct Telnyx action name is "playback_start" (not "play_audio")
+    // playback_start: loop is an INTEGER (1=once, 0=infinite) — NOT a boolean
+    // Also set isAiSpeaking before playback so transcription events are ignored
+    const _stateForSpeak = activeCalls.get(callControlId);
+    if (_stateForSpeak) _stateForSpeak.isAiSpeaking = true;
     await telnyxAction(callControlId, "playback_start", {
       audio_url: `${BACKEND_WEBHOOK_URL}/api/audio/${audioId}`,
-      loop: false,
+      loop: 1,
       overlay: false,
     });
 
@@ -196,11 +204,11 @@ async function startBackgroundAudio(callControlId: string, soundKey: string): Pr
     return;
   }
   try {
-    // "playback_start" is the correct Telnyx action name (not "play_audio")
+    // loop: 0 = infinite loop (integer, NOT boolean true)
     await telnyxAction(callControlId, "playback_start", {
       audio_url: url,
-      loop: true,    // loop indefinitely
-      overlay: true, // plays under the AI voice without interrupting it
+      loop: 0,
+      overlay: true,
     });
     logger.info({ callControlId, soundKey }, "Background ambient audio started");
   } catch (err) {
@@ -691,12 +699,13 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         turnCount: 0,
         startedAt: new Date(),
         direction: "outbound",
-        stage: "conversation",  // Start directly in conversation — AI speaks first
+        stage: "conversation",
         leadName,
         leadId: lead?.id,
         transferNumber: ctx.transferNumber ?? undefined,
         backgroundSound,
         voiceId: callVoiceId,
+        isAiSpeaking: false,
       });
 
       logger.info({ callControlId, campaignId, phone: ctx.phone, leadName, agentName, greeting, backgroundSound, voiceId: callVoiceId }, "Outbound call answered — AI speaking first");
@@ -705,12 +714,17 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         logger.warn({ err, callControlId }, "Outbound recording start failed — continuing")
       );
 
+      // Start transcription (Engine B, built-in, no credentials) — fires call.transcription events
+      await startTranscription(callControlId).catch((err) =>
+        logger.warn({ err, callControlId }, "Transcription start failed — continuing without STT")
+      );
+
       // Start ambient background audio before greeting if configured
       if (backgroundSound && backgroundSound !== "none") {
         await startBackgroundAudio(callControlId, backgroundSound);
       }
 
-      // Speak the greeting immediately (VAPI-style) — no waiting for caller to speak first
+      // Speak the greeting immediately (VAPI-style) — AI speaks first
       await speakEleven(callControlId, greeting, callVoiceId);
       return;
     }
@@ -748,6 +762,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         transferNumber: campaign.transferNumber ?? undefined,
         backgroundSound: inboundBgSound,
         voiceId: inboundVoiceId,
+        isAiSpeaking: false,
       });
 
       logger.info({ callControlId, campaignId: campaign.id, agentName, backgroundSound: inboundBgSound, voiceId: inboundVoiceId }, "Answering inbound call");
@@ -755,6 +770,11 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       await answerCall(callControlId);
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err, callControlId }, "Recording start failed — continuing without recording")
+      );
+
+      // Start transcription (Engine B) — runs for entire call, fires call.transcription events
+      await startTranscription(callControlId).catch((err) =>
+        logger.warn({ err, callControlId }, "Inbound transcription start failed — continuing without STT")
       );
 
       // Start ambient background if configured
@@ -766,12 +786,18 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       return;
     }
 
-    // ── 2. AI finished speaking → listen or wrap up ─────────────────────────
-    // call.speak.ended  → Telnyx TTS (fallback)
-    // call.playback.ended → ElevenLabs play_audio (primary)
+    // ── 2. AI finished speaking → allow caller input via transcription ──────
+    // call.speak.ended  → Telnyx TTS fallback finished
+    // call.playback.ended → ElevenLabs audio playback finished
+    // Transcription is already running; clearing isAiSpeaking lets the next
+    // call.transcription event be processed as caller input.
     if (eventType === "call.speak.ended" || eventType === "call.playback.ended") {
       const state = activeCalls.get(callControlId);
       if (!state) return;
+
+      // AI is no longer speaking — open the gate for transcription events
+      state.isAiSpeaking = false;
+      logger.info({ callControlId, eventType }, "AI speech ended — listening for caller via transcription");
 
       // Graceful hangup requested (e.g. wrong number, opt-out, max turns)
       if (state.pendingHangup) {
@@ -811,68 +837,47 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         return;
       }
 
-      // Listen for next caller input
-      await gatherSpeech(callControlId);
+      // Transcription is already running — no need to call gatherSpeech.
+      // The next call.transcription event with is_final:true will carry the caller's words.
       return;
     }
 
-    // ── 3. Caller spoke → handle based on conversation stage ────────────────
-    if (eventType === "call.gather.ended") {
+    // ── 3. Caller spoke → process via transcription ──────────────────────────
+    // call.transcription fires when Engine B detects an utterance (is_final:true)
+    if (eventType === "call.transcription") {
       const state = activeCalls.get(callControlId);
       if (!state) return;
 
-      // Telnyx sends speech as either a plain string OR an object:
-      // { results: [{ transcript: "Hello", confidence: 0.98 }], is_final: true }
-      // We must handle both — never assume it's a plain string.
-      const rawSpeech = payload.speech;
-      let speechText = "";
-      if (typeof rawSpeech === "string") {
-        speechText = rawSpeech.trim();
-      } else if (rawSpeech && typeof rawSpeech === "object") {
-        const results = (rawSpeech as { results?: Array<{ transcript?: string }> }).results;
-        if (Array.isArray(results) && results.length > 0) {
-          speechText = (results[0]?.transcript ?? "").trim();
-        } else if (typeof (rawSpeech as Record<string, unknown>).transcript === "string") {
-          speechText = ((rawSpeech as Record<string, unknown>).transcript as string).trim();
-        }
+      // Ignore any transcription that arrives while AI is still speaking
+      if (state.isAiSpeaking) {
+        logger.debug({ callControlId }, "call.transcription ignored — AI still speaking");
+        return;
       }
 
-      const digits: string = payload.digits ?? "";
-      const reason: string = payload.reason ?? "";
-      const callerInput = speechText || (digits ? `Pressed ${digits}` : "");
+      const td = payload.transcription_data as { transcript?: string; is_final?: boolean } | undefined;
+      const isFinal = td?.is_final === true;
+      const callerInput = (td?.transcript ?? "").trim();
 
-      logger.info(
-        { callControlId, callerInput, speechText, reason, stage: state.stage, turn: state.turnCount, rawSpeechType: typeof rawSpeech },
-        "call.gather.ended received"
-      );
+      if (!isFinal || !callerInput) {
+        // Interim or empty — ignore, wait for final
+        return;
+      }
 
-      // ── Stage 0: waiting for caller to say anything ("hello", "hi", etc.) ──
+      logger.info({ callControlId, callerInput, stage: state.stage, turn: state.turnCount }, "call.transcription — caller spoke");
+
+      // ── Stage 0: outbound — waiting for caller to say anything ───────────
       if (state.stage === "waiting_for_pickup") {
-        if (!callerInput) {
-          // Silence — nudge once, then give up
-          if (state.turnCount === 0) {
-            state.turnCount++;
-            await speakEleven(callControlId, "Hello?", state.voiceId);
-          } else {
-            await finalizeOutboundCall(callControlId, state, "no_answer");
-            activeCalls.delete(callControlId);
-          }
-          return;
-        }
-
-        logger.info({ callControlId, callerInput }, "Caller picked up — confirming identity");
         state.messages.push({ role: "user", content: callerInput });
         state.turnCount++;
+        logger.info({ callControlId, callerInput }, "Caller picked up — confirming identity");
 
         if (state.leadName) {
-          // Confirm we have the right person
           const firstName = state.leadName.split(" ")[0];
           const nameCheck = `Is this ${firstName}?`;
           state.messages.push({ role: "assistant", content: nameCheck });
           state.stage = "confirming_name";
           await speakEleven(callControlId, nameCheck, state.voiceId);
         } else {
-          // No lead name — go straight to intro
           const intro = `Hi, this is ${state.agentName} calling from ${state.campaignName}. How are you doing today?`;
           state.messages.push({ role: "assistant", content: intro });
           state.stage = "conversation";
@@ -881,7 +886,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         return;
       }
 
-      // ── Stage 1: caller confirmed (or denied) their name ────────────────────
+      // ── Stage 1: outbound — caller confirmed (or denied) their name ──────
       if (state.stage === "confirming_name") {
         state.messages.push({ role: "user", content: callerInput });
         state.turnCount++;
@@ -889,7 +894,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         const lower = callerInput.toLowerCase();
         const denied = ["no", "wrong", "not me", "different", "nobody", "who"].some(w => lower.includes(w));
 
-        if (denied || !callerInput) {
+        if (denied) {
           const sorry = "Oh, I'm so sorry for the confusion! Seems I have the wrong number. Have a great day!";
           state.messages.push({ role: "assistant", content: sorry });
           state.pendingHangup = true;
@@ -897,7 +902,6 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           return;
         }
 
-        // They confirmed — now give the full intro
         const firstName = state.leadName?.split(" ")[0] ?? "";
         const intro = `Hi ${firstName}, this is ${state.agentName} calling from ${state.campaignName}. How are you doing today?`;
         state.messages.push({ role: "assistant", content: intro });
@@ -907,26 +911,6 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       }
 
       // ── Stage 2: normal AI conversation ────────────────────────────────────
-      if (!callerInput) {
-        if (reason === "timeout") {
-          if (state.turnCount >= 2) {
-            const bye = "Seems like you stepped away. I'll let you go — have a great day!";
-            state.messages.push({ role: "assistant", content: bye });
-            state.pendingHangup = true;
-            await speakEleven(callControlId, bye, state.voiceId);
-          } else {
-            state.turnCount++;
-            await speakEleven(callControlId, "Sorry, I didn't catch that — could you say that again?", state.voiceId);
-          }
-          return;
-        }
-        // Empty gather for any other reason (noise, short silence, etc.) — keep listening
-        await gatherSpeech(callControlId);
-        return;
-      }
-
-      logger.info({ callControlId, callerInput, turn: state.turnCount, stage: state.stage }, "Caller input");
-
       if (isGoodbye(callerInput)) {
         state.messages.push({ role: "user", content: callerInput });
         const bye = "Great talking with you! Take care and have a wonderful day. Goodbye!";
@@ -939,6 +923,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       state.messages.push({ role: "user", content: callerInput });
       state.turnCount++;
 
+      if (state.turnCount >= MAX_TURNS) {
+        const bye = "It was really great talking with you. Have a wonderful day, take care!";
+        state.messages.push({ role: "assistant", content: bye });
+        state.pendingHangup = true;
+        await speakEleven(callControlId, bye, state.voiceId);
+        return;
+      }
+
       let aiResponse: string;
       try {
         aiResponse = await generateAiResponse(state.messages);
@@ -950,9 +942,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       state.messages.push({ role: "assistant", content: aiResponse });
       logger.info({ callControlId, aiResponse, turn: state.turnCount }, "AI response");
 
-      // ── Transfer intent: if AI says "transferring you" etc. and a number exists ──
       if (isTransferIntent(aiResponse) && state.transferNumber) {
-        logger.info({ callControlId, transferNumber: state.transferNumber }, "Transfer intent detected — will transfer after speak");
+        logger.info({ callControlId, transferNumber: state.transferNumber }, "Transfer intent detected");
         state.pendingTransfer = state.transferNumber;
       }
 
