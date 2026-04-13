@@ -5,6 +5,7 @@ import { eq, and } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import axios from "axios";
 import OpenAI from "openai";
+import { randomUUID } from "node:crypto";
 
 const router: IRouter = Router();
 
@@ -21,6 +22,21 @@ const AI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 const TELNYX_API_BASE = "https://api.telnyx.com/v2";
 const MAX_TURNS = 12;
+
+// ── ElevenLabs TTS ─────────────────────────────────────────────────────────────
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+// Rachel — natural, warm female voice; fallback when no agent voice configured
+const DEFAULT_ELEVEN_VOICE = "21m00Tcm4TlvDq8ikWAM";
+
+// In-memory audio cache: id → { buffer, expires }
+// Telnyx fetches the URL once; we expire entries after 3 min to stay lean.
+const audioCache = new Map<string, { buffer: Buffer; expires: number }>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of audioCache.entries()) {
+    if (entry.expires < now) audioCache.delete(id);
+  }
+}, 60_000);
 
 // ── Per-call conversation state ───────────────────────────────────────────────
 interface Message {
@@ -106,6 +122,71 @@ async function gatherSpeech(callControlId: string): Promise<void> {
     action_on_empty_result: true, // always fire gather event, even on silence
   });
 }
+
+// ── ElevenLabs TTS — generates natural-sounding audio, served from our URL ────
+// Falls back to Telnyx speak if ElevenLabs is unavailable.
+async function speakEleven(
+  callControlId: string,
+  text: string,
+  voiceId: string = DEFAULT_ELEVEN_VOICE
+): Promise<void> {
+  if (!ELEVENLABS_API_KEY) {
+    return speak(callControlId, text);
+  }
+
+  try {
+    const res = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": ELEVENLABS_API_KEY,
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
+        },
+        body: JSON.stringify({
+          text,
+          model_id: "eleven_turbo_v2",
+          voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.0, use_speaker_boost: true },
+        }),
+      }
+    );
+
+    if (!res.ok) {
+      throw new Error(`ElevenLabs HTTP ${res.status}: ${await res.text()}`);
+    }
+
+    const audioId = randomUUID();
+    audioCache.set(audioId, {
+      buffer: Buffer.from(await res.arrayBuffer()),
+      expires: Date.now() + 3 * 60 * 1000,
+    });
+
+    await telnyxAction(callControlId, "play_audio", {
+      audio_url: `${BACKEND_WEBHOOK_URL}/api/audio/${audioId}`,
+      loop: 0,
+      overlay: false,
+    });
+
+    logger.info({ callControlId, voiceId, chars: text.length }, "ElevenLabs TTS played");
+  } catch (err) {
+    logger.warn({ err: String(err), callControlId }, "ElevenLabs TTS failed — using Telnyx speak fallback");
+    await speak(callControlId, text);
+  }
+}
+
+// ── Serve ElevenLabs audio buffers to Telnyx ──────────────────────────────────
+router.get("/api/audio/:id", (req, res): void => {
+  const entry = audioCache.get(req.params.id as string);
+  if (!entry || entry.expires < Date.now()) {
+    res.status(404).end();
+    return;
+  }
+  res.set("Content-Type", "audio/mpeg");
+  res.set("Content-Length", String(entry.buffer.length));
+  res.set("Cache-Control", "no-store");
+  res.send(entry.buffer);
+});
 
 // ── Natural system prompt builder (VAPI-like) ─────────────────────────────────
 function buildNaturalSystemPrompt(
@@ -527,7 +608,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         logger.warn({ err, callControlId }, "Outbound recording start failed — continuing")
       );
       // Speak the greeting immediately (VAPI-style) — no waiting for caller to speak first
-      await speak(callControlId, greeting);
+      await speakEleven(callControlId, greeting);
       return;
     }
 
@@ -568,12 +649,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err, callControlId }, "Recording start failed — continuing without recording")
       );
-      await speak(callControlId, greeting);
+      await speakEleven(callControlId, greeting);
       return;
     }
 
     // ── 2. AI finished speaking → listen or wrap up ─────────────────────────
-    if (eventType === "call.speak.ended") {
+    // call.speak.ended  → Telnyx TTS (fallback)
+    // call.playback.ended → ElevenLabs play_audio (primary)
+    if (eventType === "call.speak.ended" || eventType === "call.playback.ended") {
       const state = activeCalls.get(callControlId);
       if (!state) return;
 
@@ -599,12 +682,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           await finalizeOutboundCall(callControlId, state, "transferred");
         } catch (err) {
           logger.error({ err, callControlId, transferTo }, "Transfer failed — hanging up instead");
-          await telnyxAction(callControlId, "speak", {
-            payload: "I'm sorry, I was unable to connect you. Please try calling back. Goodbye!",
-            payload_type: "text",
-            voice: "female",
-            language: "en-US",
-          });
+          await speakEleven(callControlId, "I'm sorry, I was unable to connect you. Please try calling back. Goodbye!");
           state.pendingHangup = true;
         }
         activeCalls.delete(callControlId);
@@ -616,7 +694,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         const bye = "It was really great talking with you. Have a wonderful day, take care!";
         state.messages.push({ role: "assistant", content: bye });
         state.pendingHangup = true;
-        await speak(callControlId, bye);
+        await speakEleven(callControlId, bye);
         return;
       }
 
@@ -661,7 +739,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           // Silence — nudge once, then give up
           if (state.turnCount === 0) {
             state.turnCount++;
-            await speak(callControlId, "Hello?");
+            await speakEleven(callControlId, "Hello?");
           } else {
             await finalizeOutboundCall(callControlId, state, "no_answer");
             activeCalls.delete(callControlId);
@@ -679,13 +757,13 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           const nameCheck = `Is this ${firstName}?`;
           state.messages.push({ role: "assistant", content: nameCheck });
           state.stage = "confirming_name";
-          await speak(callControlId, nameCheck);
+          await speakEleven(callControlId, nameCheck);
         } else {
           // No lead name — go straight to intro
           const intro = `Hi, this is ${state.agentName} calling from ${state.campaignName}. How are you doing today?`;
           state.messages.push({ role: "assistant", content: intro });
           state.stage = "conversation";
-          await speak(callControlId, intro);
+          await speakEleven(callControlId, intro);
         }
         return;
       }
@@ -702,7 +780,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           const sorry = "Oh, I'm so sorry for the confusion! Seems I have the wrong number. Have a great day!";
           state.messages.push({ role: "assistant", content: sorry });
           state.pendingHangup = true;
-          await speak(callControlId, sorry);
+          await speakEleven(callControlId, sorry);
           return;
         }
 
@@ -711,7 +789,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         const intro = `Hi ${firstName}, this is ${state.agentName} calling from ${state.campaignName}. How are you doing today?`;
         state.messages.push({ role: "assistant", content: intro });
         state.stage = "conversation";
-        await speak(callControlId, intro);
+        await speakEleven(callControlId, intro);
         return;
       }
 
@@ -722,10 +800,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             const bye = "Seems like you stepped away. I'll let you go — have a great day!";
             state.messages.push({ role: "assistant", content: bye });
             state.pendingHangup = true;
-            await speak(callControlId, bye);
+            await speakEleven(callControlId, bye);
           } else {
             state.turnCount++;
-            await speak(callControlId, "Sorry, I didn't catch that — could you say that again?");
+            await speakEleven(callControlId, "Sorry, I didn't catch that — could you say that again?");
           }
           return;
         }
@@ -739,7 +817,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         const bye = "Great talking with you! Take care and have a wonderful day. Goodbye!";
         state.messages.push({ role: "assistant", content: bye });
         state.pendingHangup = true;
-        await speak(callControlId, bye);
+        await speakEleven(callControlId, bye);
         return;
       }
 
@@ -763,7 +841,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         state.pendingTransfer = state.transferNumber;
       }
 
-      await speak(callControlId, aiResponse);
+      await speakEleven(callControlId, aiResponse);
       return;
     }
 
