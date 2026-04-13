@@ -6,3 +6,9 @@ id = "xTGVF4abVgt5dmCyTxC8t"
 uri = "file://LOVABLE_PROMPT.md"
 type = "text"
 title = "SHIVANSH — Complete Lovable Prompt"
+
+[[outputs]]
+id = "kQFF5KqVqmZm9Wn4nWp6T"
+uri = "file://LOVABLE_PATCH.md"
+type = "text"
+title = "Lovable Patch Prompt — copy & paste into Lovable"
