@@ -385,6 +385,7 @@ export default function LeadsPage() {
   const { data: campaigns } = useListCampaigns();
   const [showCreate, setShowCreate] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [showPaste, setShowPaste] = useState(false);
 
   const campaignMap = Object.fromEntries((campaigns ?? []).map((c: { id: number; name: string }) => [c.id, c.name]));
 
@@ -392,12 +393,21 @@ export default function LeadsPage() {
     <Layout>
       {showCreate && <CreateModal onClose={() => setShowCreate(false)} campaigns={campaigns ?? []} />}
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} campaigns={campaigns ?? []} />}
+      {showPaste && <PasteModal onClose={() => setShowPaste(false)} campaigns={campaigns ?? []} />}
 
       <PageHeader
         title="Leads"
         subtitle={`${(leads ?? []).length} records`}
         action={
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="font-mono text-xs uppercase tracking-wider h-7 px-3"
+              onClick={() => setShowPaste(true)}
+            >
+              <ClipboardList className="w-3 h-3 mr-1.5" /> Paste Numbers
+            </Button>
             <Button
               size="sm"
               variant="outline"
