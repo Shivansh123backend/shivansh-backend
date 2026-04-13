@@ -253,7 +253,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
       {
         data: {
           name,
-          type: type as "outbound" | "inbound",
+          type: type as "outbound" | "inbound" | "both",
           routingType: routingType as "ai" | "human" | "ai_then_human",
           maxConcurrentCalls: parseInt(maxConcurrent),
           agentPrompt: agentPrompt || undefined,
@@ -325,8 +325,9 @@ function CreateModal({ onClose }: { onClose: () => void }) {
                   <Select value={type} onValueChange={setType}>
                     <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="outbound">Outbound</SelectItem>
-                      <SelectItem value="inbound">Inbound</SelectItem>
+                      <SelectItem value="outbound">Outbound (AI dials out)</SelectItem>
+                      <SelectItem value="inbound">Inbound (AI answers)</SelectItem>
+                      <SelectItem value="both">Both (Inbound + Outbound)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

@@ -681,6 +681,12 @@ async function getCampaignByNumber(toNumber: string) {
 
   if (!campaign) return null;
 
+  // Only answer inbound calls for campaigns set to inbound or both
+  if (campaign.type !== "inbound" && campaign.type !== "both") {
+    logger.info({ campaignId: campaign.id, type: campaign.type, toNumber }, "Inbound call received but campaign is outbound-only — not answering");
+    return null;
+  }
+
   let agentName = "AI Assistant";
   let agentPrompt: string = campaign.agentPrompt ?? "";
   let resolvedVoiceId: string = DEFAULT_ELEVEN_VOICE;

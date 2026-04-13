@@ -1,7 +1,6 @@
 import { useState, Fragment } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  useListCalls,
   useListCampaigns,
   customFetch,
 } from "@workspace/api-client-react";
@@ -10,7 +9,7 @@ import { StatusBadge, DispositionBadge } from "./dashboard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Filter, ChevronDown, Phone, FileText, Download, Tag, Play, ExternalLink, RefreshCw } from "lucide-react";
+import { Filter, ChevronDown, Phone, FileText, Download, Tag, Play, ExternalLink, RefreshCw, PhoneIncoming, PhoneOutgoing } from "lucide-react";
 
 function formatDuration(seconds?: number | null) {
   if (!seconds) return "-";
@@ -37,6 +36,23 @@ const DISPOSITION_OPTIONS = [
   { value: "transferred", label: "Transferred" },
   { value: "completed", label: "Completed" },
 ];
+
+interface CdrRow {
+  id: string;
+  source: "calls" | "call_logs";
+  direction: "inbound" | "outbound";
+  phoneNumber: string | null;
+  campaignId: number | null;
+  leadId: number | null;
+  providerUsed: string | null;
+  status: string;
+  disposition: string | null;
+  duration: number | null;
+  recordingUrl: string | null;
+  transcript: string | null;
+  summary: string | null;
+  timestamp: string;
+}
 
 interface CallLog {
   id: number;
@@ -180,14 +196,22 @@ function DispositionUpdater({
 export default function CallsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("cdr");
   const [filterCampaign, setFilterCampaign] = useState("__all__");
+  const [filterDirection, setFilterDirection] = useState("__all__");
   const [logFilterCampaign, setLogFilterCampaign] = useState("__all__");
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
 
   const qc = useQueryClient();
 
-  const { data: calls, isLoading: callsLoading, refetch: refetchCalls } = useListCalls({
-    campaignId: filterCampaign !== "__all__" ? parseInt(filterCampaign) : undefined,
+  // Unified CDR — both outbound (calls table) + inbound (call_logs) merged
+  const cdrParams = new URLSearchParams();
+  if (filterCampaign !== "__all__") cdrParams.set("campaignId", filterCampaign);
+  if (filterDirection !== "__all__") cdrParams.set("direction", filterDirection);
+
+  const { data: calls, isLoading: callsLoading, refetch: refetchCalls } = useQuery<CdrRow[]>({
+    queryKey: ["calls-cdr", filterCampaign, filterDirection],
+    queryFn: () => customFetch<CdrRow[]>(`/api/calls/cdr?${cdrParams.toString()}`),
+    refetchInterval: activeTab === "cdr" ? 15000 : false,
   });
   const { data: campaigns } = useListCampaigns();
 
@@ -253,6 +277,19 @@ export default function CallsPage() {
                 ))}
               </SelectContent>
             </Select>
+            <Select value={filterDirection} onValueChange={setFilterDirection}>
+              <SelectTrigger className="font-mono text-xs h-7 w-36">
+                <SelectValue placeholder="All directions" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All directions</SelectItem>
+                <SelectItem value="inbound">Inbound only</SelectItem>
+                <SelectItem value="outbound">Outbound only</SelectItem>
+              </SelectContent>
+            </Select>
+            {callsLoading && (
+              <span className="text-[10px] font-mono text-muted-foreground animate-pulse">loading...</span>
+            )}
           </div>
           <div className="p-6">
             <div className="border border-border rounded bg-[hsl(224,71%,3%)] overflow-hidden">
@@ -260,40 +297,30 @@ export default function CallsPage() {
                 <thead>
                   <tr className="border-b border-border">
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider w-8"></th>
-                    <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">ID</th>
+                    <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Dir</th>
+                    <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Phone</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Campaign</th>
-                    <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Lead</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Provider</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Disposition</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Duration</th>
+                    <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Time</th>
                   </tr>
                 </thead>
                 <tbody>
                   {callsLoading ? (
                     [...Array(6)].map((_, i) => (
                       <tr key={i}>
-                        {[...Array(8)].map((_, j) => (
+                        {[...Array(9)].map((_, j) => (
                           <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>
                         ))}
                       </tr>
                     ))
                   ) : (calls ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">No call records found</td>
+                      <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No call records found</td>
                     </tr>
-                  ) : (calls ?? []).map((c: {
-                    id: number;
-                    campaignId?: number;
-                    leadId?: number;
-                    providerUsed?: string;
-                    status: string;
-                    disposition?: string;
-                    duration?: number;
-                    transcript?: string;
-                    summary?: string;
-                    recordingUrl?: string;
-                  }) => (
+                  ) : (calls ?? []).map((c) => (
                     <Fragment key={c.id}>
                       <tr
                         className="border-b border-border/30 hover:bg-white/2 transition-colors cursor-pointer"
@@ -302,26 +329,42 @@ export default function CallsPage() {
                         <td className="px-4 py-3 text-muted-foreground">
                           <ChevronDown className={`w-3 h-3 transition-transform ${expandedId === c.id ? "rotate-180" : ""}`} />
                         </td>
-                        <td className="px-4 py-3 text-muted-foreground">#{c.id}</td>
+                        <td className="px-4 py-3">
+                          {c.direction === "inbound" ? (
+                            <span className="inline-flex items-center gap-1 text-cyan-400">
+                              <PhoneIncoming className="w-3 h-3" />
+                              <span className="text-[9px] uppercase tracking-wider">IN</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-green-400">
+                              <PhoneOutgoing className="w-3 h-3" />
+                              <span className="text-[9px] uppercase tracking-wider">OUT</span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-foreground/80">{c.phoneNumber ?? "-"}</td>
                         <td className="px-4 py-3">{c.campaignId ? campaignMap[c.campaignId] ?? `#${c.campaignId}` : "-"}</td>
-                        <td className="px-4 py-3 text-muted-foreground">#{c.leadId ?? "-"}</td>
                         <td className="px-4 py-3 uppercase text-muted-foreground">{c.providerUsed ?? "-"}</td>
                         <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
                         <td className="px-4 py-3">{c.disposition ? <DispositionBadge disp={c.disposition} /> : <span className="text-muted-foreground">-</span>}</td>
                         <td className="px-4 py-3 text-muted-foreground">{formatDuration(c.duration)}</td>
+                        <td className="px-4 py-3 text-muted-foreground text-[10px]">{formatTimestamp(c.timestamp)}</td>
                       </tr>
                       {expandedId === c.id && (
                         <tr key={`${c.id}-expanded`} className="border-b border-border/30 bg-white/2">
-                          <td colSpan={8} className="px-6 py-4 space-y-3">
+                          <td colSpan={9} className="px-6 py-4 space-y-3">
                             {/* Actions row */}
                             <div className="flex items-center gap-4 pb-2 border-b border-border/30">
                               <DispositionUpdater
-                                id={c.id}
+                                id={parseInt(c.id.replace(/^[cl]-/, ""))}
                                 current={c.disposition}
-                                endpoint="calls"
+                                endpoint={c.source === "call_logs" ? "call-logs" : "calls"}
                                 onUpdate={() => refetchCalls()}
                               />
-                              <ExportButtons endpoint="calls" id={c.id} />
+                              <ExportButtons
+                                endpoint={c.source === "call_logs" ? "call-logs" : "calls"}
+                                id={parseInt(c.id.replace(/^[cl]-/, ""))}
+                              />
                               {c.recordingUrl && (
                                 <a
                                   href={c.recordingUrl}

@@ -3,7 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
 export const campaignStatusEnum = pgEnum("campaign_status", ["draft", "active", "paused", "completed"]);
-export const campaignTypeEnum = pgEnum("campaign_type", ["outbound", "inbound"]);
+export const campaignTypeEnum = pgEnum("campaign_type", ["outbound", "inbound", "both"]);
 export const routingTypeEnum = pgEnum("routing_type", ["ai", "human", "ai_then_human"]);
 
 export const campaignsTable = pgTable("campaigns", {

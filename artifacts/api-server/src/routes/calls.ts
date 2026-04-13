@@ -147,6 +147,99 @@ router.get("/calls", authenticate, async (req, res): Promise<void> => {
   res.json(calls);
 });
 
+// ── GET /calls/cdr — unified CDR: outbound calls + inbound call_logs ──────────
+router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
+  const campaignIdRaw = req.query.campaignId;
+  const directionRaw  = req.query.direction as string | undefined;
+  const limitRaw      = req.query.limit;
+  const limit         = limitRaw ? Math.min(parseInt(String(limitRaw), 10), 500) : 200;
+
+  const campaignId = campaignIdRaw ? parseInt(String(campaignIdRaw), 10) : null;
+
+  // Outbound records — from calls table
+  let outboundRows: typeof callsTable.$inferSelect[] = [];
+  if (!directionRaw || directionRaw === "outbound") {
+    const q = db.select().from(callsTable).orderBy(desc(callsTable.createdAt)).limit(limit);
+    if (campaignId && !isNaN(campaignId)) {
+      outboundRows = await db.select().from(callsTable)
+        .where(eq(callsTable.campaignId, campaignId))
+        .orderBy(desc(callsTable.createdAt)).limit(limit);
+    } else {
+      outboundRows = await q;
+    }
+  }
+
+  // Inbound records — from call_logs table where direction = 'inbound'
+  let inboundRows: typeof callLogsTable.$inferSelect[] = [];
+  if (!directionRaw || directionRaw === "inbound") {
+    const baseWhere = campaignId && !isNaN(campaignId)
+      ? and(eq(callLogsTable.direction, "inbound"), eq(callLogsTable.campaignId, campaignId))
+      : eq(callLogsTable.direction, "inbound");
+    inboundRows = await db.select().from(callLogsTable)
+      .where(baseWhere)
+      .orderBy(desc(callLogsTable.timestamp))
+      .limit(limit);
+  }
+
+  // Normalise to a unified shape
+  type CdrRow = {
+    id: string;
+    source: "calls" | "call_logs";
+    direction: "outbound" | "inbound";
+    phoneNumber: string | null;
+    campaignId: number | null;
+    leadId: number | null;
+    providerUsed: string | null;
+    status: string;
+    disposition: string | null;
+    duration: number | null;
+    recordingUrl: string | null;
+    transcript: string | null;
+    summary: string | null;
+    timestamp: string;
+  };
+
+  const unified: CdrRow[] = [
+    ...outboundRows.map(r => ({
+      id: `c-${r.id}`,
+      source: "calls" as const,
+      direction: "outbound" as const,
+      phoneNumber: r.phoneNumber ?? null,
+      campaignId: r.campaignId ?? null,
+      leadId: r.leadId ?? null,
+      providerUsed: r.providerUsed ?? null,
+      status: r.status,
+      disposition: r.disposition ?? null,
+      duration: r.duration ?? null,
+      recordingUrl: r.recordingUrl ?? null,
+      transcript: r.transcript ?? null,
+      summary: r.summary ?? null,
+      timestamp: (r.createdAt ?? new Date()).toISOString(),
+    })),
+    ...inboundRows.map(r => ({
+      id: `l-${r.id}`,
+      source: "call_logs" as const,
+      direction: "inbound" as const,
+      phoneNumber: r.phoneNumber ?? null,
+      campaignId: r.campaignId ?? null,
+      leadId: null,
+      providerUsed: "telnyx",
+      status: r.status,
+      disposition: r.disposition ?? null,
+      duration: r.duration ?? null,
+      recordingUrl: r.recordingUrl ?? null,
+      transcript: r.transcript ?? null,
+      summary: r.summary ?? null,
+      timestamp: (r.timestamp ?? new Date()).toISOString(),
+    })),
+  ];
+
+  // Sort by timestamp desc
+  unified.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  res.json(unified.slice(0, limit));
+});
+
 // ── GET /calls/live — active calls snapshot ───────────────────────────────────
 // Combines bridge-based in-progress calls (real-time) with queued calls from DB
 router.get("/calls/live", authenticate, async (req, res): Promise<void> => {
