@@ -128,11 +128,10 @@ async function speak(callControlId: string, text: string): Promise<void> {
 // Replaced gather (DTMF-only by default) with transcription_start.
 // Engine B = Telnyx built-in STT, no external credentials required.
 // Fires call.transcription webhooks with is_final:true for each utterance.
+// NOTE: Engine B does NOT accept language/interim_results — only transcription_engine.
 async function startTranscription(callControlId: string): Promise<void> {
   await telnyxAction(callControlId, "transcription_start", {
-    language: "en-US",
     transcription_engine: "B",
-    interim_results: false,
   });
 }
 
@@ -179,20 +178,27 @@ async function speakEleven(
       expires: Date.now() + 3 * 60 * 1000,
     });
 
-    // playback_start: loop is an INTEGER (1=once, 0=infinite) — NOT a boolean
-    // Also set isAiSpeaking before playback so transcription events are ignored
+    const audioUrl = `${BACKEND_WEBHOOK_URL}/api/audio/${audioId}`;
+    logger.info({ callControlId, voiceId, chars: text.length, audioUrl }, "ElevenLabs audio generated — calling playback_start");
+
+    // loop: 1 = play once (integer). overlay: false = stop any existing playback.
     const _stateForSpeak = activeCalls.get(callControlId);
     if (_stateForSpeak) _stateForSpeak.isAiSpeaking = true;
     await telnyxAction(callControlId, "playback_start", {
-      audio_url: `${BACKEND_WEBHOOK_URL}/api/audio/${audioId}`,
+      audio_url: audioUrl,
       loop: 1,
       overlay: false,
     });
 
-    logger.info({ callControlId, voiceId, chars: text.length }, "ElevenLabs TTS played");
+    logger.info({ callControlId, voiceId, chars: text.length }, "ElevenLabs TTS playback_start succeeded");
   } catch (err) {
-    logger.warn({ err: String(err), callControlId }, "ElevenLabs TTS failed — using Telnyx speak fallback");
-    await speak(callControlId, text);
+    logger.warn({ err: String(err), callControlId }, "ElevenLabs TTS failed — falling back to Telnyx speak");
+    try {
+      await speak(callControlId, text);
+      logger.info({ callControlId }, "Telnyx speak fallback succeeded");
+    } catch (speakErr) {
+      logger.error({ err: String(speakErr), callControlId }, "Telnyx speak fallback ALSO failed — call stuck");
+    }
   }
 }
 
@@ -217,7 +223,9 @@ async function startBackgroundAudio(callControlId: string, soundKey: string): Pr
 }
 
 // ── Serve ElevenLabs audio buffers to Telnyx ──────────────────────────────────
-router.get("/api/audio/:id", (req, res): void => {
+// NOTE: router is mounted at /api by app.use("/api", router) — so the full URL
+// is /api/audio/:id even though the route path here is just /audio/:id.
+router.get("/audio/:id", (req, res): void => {
   const entry = audioCache.get(req.params.id as string);
   if (!entry || entry.expires < Date.now()) {
     res.status(404).end();
@@ -716,7 +724,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       // Start transcription (Engine B, built-in, no credentials) — fires call.transcription events
       await startTranscription(callControlId).catch((err) =>
-        logger.warn({ err, callControlId }, "Transcription start failed — continuing without STT")
+        logger.warn({ err: String(err), callControlId }, "Transcription start failed — continuing without STT")
       );
 
       // Start ambient background audio before greeting if configured
@@ -774,7 +782,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       // Start transcription (Engine B) — runs for entire call, fires call.transcription events
       await startTranscription(callControlId).catch((err) =>
-        logger.warn({ err, callControlId }, "Inbound transcription start failed — continuing without STT")
+        logger.warn({ err: String(err), callControlId }, "Inbound transcription start failed — continuing without STT")
       );
 
       // Start ambient background if configured
