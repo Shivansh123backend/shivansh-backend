@@ -934,8 +934,8 @@ Each: label + icon (`text-primary`) + big value + sub-text `text-[10px] font-mon
 **5. Integrations** (`<Radio>`):
 - ElevenLabs — **active** (green "Enabled" badge — API key is configured)
 - Telnyx WebRTC — **active** (green "Enabled" badge — API key is configured)
-- PlayHT — inactive
-- Azure Cognitive Speech — inactive
+- PlayHT — **active** (green "Enabled" badge)
+- Azure Cognitive Speech — **active** (green "Enabled" badge)
 - WebSocket Monitoring — **active** (green "Enabled" badge)
 
 ---

@@ -188,8 +188,8 @@ export default function SettingsPage() {
           {[
             { name: "ElevenLabs", desc: "AI voice synthesis", active: true },
             { name: "Telnyx WebRTC", desc: "Telephony & WebRTC calling", active: true },
-            { name: "PlayHT", desc: "Text-to-speech voices", active: false },
-            { name: "Azure Cognitive Speech", desc: "Microsoft speech services", active: false },
+            { name: "PlayHT", desc: "Text-to-speech voices", active: true },
+            { name: "Azure Cognitive Speech", desc: "Microsoft speech services", active: true },
             { name: "WebSocket Monitoring", desc: "Real-time supervisor monitoring via Socket.IO", active: true },
           ].map(item => (
             <SettingRow key={item.name} label={item.name} description={item.desc}>
