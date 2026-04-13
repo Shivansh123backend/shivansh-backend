@@ -23,7 +23,7 @@ const router: IRouter = Router();
 const createCampaignSchema = z.object({
   name: z.string().min(1),
   agentId: z.number().optional(),
-  type: z.enum(["outbound", "inbound"]).default("outbound"),
+  type: z.enum(["outbound", "inbound", "both"]).default("outbound"),
   routingType: z.enum(["ai", "human", "ai_then_human"]).default("ai"),
   maxConcurrentCalls: z.number().min(1).max(100).default(5),
   transferRules: z.string().optional(),
@@ -100,6 +100,7 @@ router.get("/campaigns/options", authenticate, (_req, res): void => {
 
 const updateCampaignSchema = z.object({
   name: z.string().min(1).optional(),
+  type: z.enum(["outbound", "inbound", "both"]).optional(),
   agentPrompt: z.string().optional(),
   knowledgeBase: z.string().optional(),
   recordingNotes: z.string().optional(),
@@ -178,8 +179,8 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
     return;
   }
 
-  // For outbound campaigns, require at least one pending lead before launching
-  if (campaign.type === "outbound") {
+  // For outbound/both campaigns, require at least one pending lead before launching
+  if (campaign.type !== "inbound") {
     const [leadCount] = await db
       .select({ count: db.$count(leadsTable) })
       .from(leadsTable)
@@ -221,7 +222,7 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
   res.json(updated);
 
   // Background: trigger calls for outbound campaigns
-  if (campaign.type === "outbound") {
+  if (campaign.type !== "inbound") {
     triggerCampaignCalls(id, campaign).catch((err) => {
       req.log.error({ err, campaignId: id }, "Background call triggering failed");
     });
@@ -628,7 +629,7 @@ async function getCampaignOrFail(id: number, res: import("express").Response): P
 
 /** Returns false and sends a 400 if the outbound campaign has no pending leads. */
 async function guardPendingLeads(id: number, campaign: typeof campaignsTable.$inferSelect, res: import("express").Response): Promise<boolean> {
-  if (campaign.type !== "outbound") return true;
+  if (campaign.type === "inbound") return true;
   const [pendingRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable).where(and(eq(leadsTable.campaignId, id), eq(leadsTable.status, "pending")));
   if (Number(pendingRow?.count ?? 0) > 0) return true;
   const [totalRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable).where(eq(leadsTable.campaignId, id));
@@ -650,7 +651,7 @@ router.post("/campaigns/:id/start", authenticate, requireRole("admin"), async (r
   const [updated] = await db.update(campaignsTable).set({ status: "active" }).where(eq(campaignsTable.id, id)).returning();
   emitToSupervisors("campaign:started", { campaignId: id, name: campaign.name });
   res.json(updated);
-  if (campaign.type === "outbound") {
+  if (campaign.type !== "inbound") {
     triggerCampaignCalls(id, campaign).catch((err) => console.error("Background call triggering failed", err));
   }
 });
@@ -724,7 +725,7 @@ router.post("/campaigns/:id/resume", authenticate, requireRole("admin"), async (
   const [updated] = await db.update(campaignsTable).set({ status: "active" }).where(eq(campaignsTable.id, id)).returning();
   emitToSupervisors("campaign:started", { campaignId: id, name: campaign.name });
   res.json(updated);
-  if (campaign.type === "outbound") {
+  if (campaign.type !== "inbound") {
     triggerCampaignCalls(id, campaign).catch((err) => console.error("Background call triggering failed", err));
   }
 });
