@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { phoneNumbersTable, campaignsTable, aiAgentsTable, callLogsTable, leadsTable } from "@workspace/db";
+import { phoneNumbersTable, campaignsTable, aiAgentsTable, callLogsTable, leadsTable, voicesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import axios from "axios";
@@ -78,6 +78,7 @@ interface CallState {
   pendingTransfer?: string;   // phone number to transfer to after current speech ends
   transferNumber?: string;    // campaign-level transfer number
   backgroundSound?: string;   // ambient sound key ("office", "typing", etc.)
+  voiceId: string;            // ElevenLabs voice ID used for this call
 }
 
 const activeCalls = new Map<string, CallState>();
@@ -389,6 +390,7 @@ async function getCampaignByNumber(toNumber: string) {
 
   let agentName = "AI Assistant";
   let agentPrompt: string = campaign.agentPrompt ?? "";
+  let resolvedVoiceId: string = DEFAULT_ELEVEN_VOICE;
 
   if (campaign.agentId) {
     const [agent] = await db
@@ -399,12 +401,29 @@ async function getCampaignByNumber(toNumber: string) {
     if (agent) {
       agentName = agent.name;
       if (!agentPrompt) agentPrompt = agent.prompt;
+
+      // Resolve voice: agent's defaultVoiceId → voices table → ElevenLabs voice ID
+      if (agent.defaultVoiceId) {
+        const [voice] = await db
+          .select({ voiceId: voicesTable.voiceId, provider: voicesTable.provider })
+          .from(voicesTable)
+          .where(eq(voicesTable.id, agent.defaultVoiceId))
+          .limit(1);
+        if (voice?.provider === "elevenlabs" && voice.voiceId) {
+          resolvedVoiceId = voice.voiceId;
+        }
+      }
     }
+  }
+
+  // Direct campaign voice field takes priority (stored as raw ElevenLabs voice ID)
+  if (campaign.voice && campaign.voice !== "default") {
+    resolvedVoiceId = campaign.voice;
   }
 
   const systemPrompt = buildNaturalSystemPrompt(agentPrompt, campaign.name, agentName, undefined, campaign.transferNumber ?? undefined);
 
-  return { campaign, agentName, systemPrompt };
+  return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId };
 }
 
 // ── Finalize inbound call — save to DB with all data ─────────────────────────
@@ -611,6 +630,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         : `Hello! This is ${agentName} calling from ${ctx.campaignName}.`;
 
       const backgroundSound = ctx.backgroundSound ?? undefined;
+      // ctx.voice is the raw ElevenLabs voice ID set during campaign dispatch
+      const callVoiceId = (ctx.voice && ctx.voice !== "default") ? ctx.voice : DEFAULT_ELEVEN_VOICE;
 
       activeCalls.set(callControlId, {
         campaignId,
@@ -631,9 +652,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         leadId: lead?.id,
         transferNumber: ctx.transferNumber ?? undefined,
         backgroundSound,
+        voiceId: callVoiceId,
       });
 
-      logger.info({ callControlId, campaignId, phone: ctx.phone, leadName, agentName, greeting, backgroundSound }, "Outbound call answered — AI speaking first");
+      logger.info({ callControlId, campaignId, phone: ctx.phone, leadName, agentName, greeting, backgroundSound, voiceId: callVoiceId }, "Outbound call answered — AI speaking first");
 
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err, callControlId }, "Outbound recording start failed — continuing")
@@ -645,7 +667,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       }
 
       // Speak the greeting immediately (VAPI-style) — no waiting for caller to speak first
-      await speakEleven(callControlId, greeting);
+      await speakEleven(callControlId, greeting, callVoiceId);
       return;
     }
 
@@ -659,7 +681,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         return;
       }
 
-      const { campaign, agentName, systemPrompt } = result;
+      const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId } = result;
       const greeting = `Thank you for calling ${campaign.name}. This is ${agentName}. How may I help you today?`;
 
       const inboundBgSound = campaign.backgroundSound ?? undefined;
@@ -681,9 +703,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         stage: "conversation",
         transferNumber: campaign.transferNumber ?? undefined,
         backgroundSound: inboundBgSound,
+        voiceId: inboundVoiceId,
       });
 
-      logger.info({ callControlId, campaignId: campaign.id, agentName, backgroundSound: inboundBgSound }, "Answering inbound call");
+      logger.info({ callControlId, campaignId: campaign.id, agentName, backgroundSound: inboundBgSound, voiceId: inboundVoiceId }, "Answering inbound call");
 
       await answerCall(callControlId);
       await startRecording(callControlId).catch((err) =>
@@ -695,7 +718,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         await startBackgroundAudio(callControlId, inboundBgSound);
       }
 
-      await speakEleven(callControlId, greeting);
+      await speakEleven(callControlId, greeting, inboundVoiceId);
       return;
     }
 
@@ -728,7 +751,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           await finalizeOutboundCall(callControlId, state, "transferred");
         } catch (err) {
           logger.error({ err, callControlId, transferTo }, "Transfer failed — hanging up instead");
-          await speakEleven(callControlId, "I'm sorry, I was unable to connect you. Please try calling back. Goodbye!");
+          await speakEleven(callControlId, "I'm sorry, I was unable to connect you. Please try calling back. Goodbye!", state.voiceId);
           state.pendingHangup = true;
         }
         activeCalls.delete(callControlId);
@@ -740,7 +763,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         const bye = "It was really great talking with you. Have a wonderful day, take care!";
         state.messages.push({ role: "assistant", content: bye });
         state.pendingHangup = true;
-        await speakEleven(callControlId, bye);
+        await speakEleven(callControlId, bye, state.voiceId);
         return;
       }
 
@@ -785,7 +808,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           // Silence — nudge once, then give up
           if (state.turnCount === 0) {
             state.turnCount++;
-            await speakEleven(callControlId, "Hello?");
+            await speakEleven(callControlId, "Hello?", state.voiceId);
           } else {
             await finalizeOutboundCall(callControlId, state, "no_answer");
             activeCalls.delete(callControlId);
@@ -803,13 +826,13 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           const nameCheck = `Is this ${firstName}?`;
           state.messages.push({ role: "assistant", content: nameCheck });
           state.stage = "confirming_name";
-          await speakEleven(callControlId, nameCheck);
+          await speakEleven(callControlId, nameCheck, state.voiceId);
         } else {
           // No lead name — go straight to intro
           const intro = `Hi, this is ${state.agentName} calling from ${state.campaignName}. How are you doing today?`;
           state.messages.push({ role: "assistant", content: intro });
           state.stage = "conversation";
-          await speakEleven(callControlId, intro);
+          await speakEleven(callControlId, intro, state.voiceId);
         }
         return;
       }
@@ -826,7 +849,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           const sorry = "Oh, I'm so sorry for the confusion! Seems I have the wrong number. Have a great day!";
           state.messages.push({ role: "assistant", content: sorry });
           state.pendingHangup = true;
-          await speakEleven(callControlId, sorry);
+          await speakEleven(callControlId, sorry, state.voiceId);
           return;
         }
 
@@ -835,7 +858,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         const intro = `Hi ${firstName}, this is ${state.agentName} calling from ${state.campaignName}. How are you doing today?`;
         state.messages.push({ role: "assistant", content: intro });
         state.stage = "conversation";
-        await speakEleven(callControlId, intro);
+        await speakEleven(callControlId, intro, state.voiceId);
         return;
       }
 
@@ -846,10 +869,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             const bye = "Seems like you stepped away. I'll let you go — have a great day!";
             state.messages.push({ role: "assistant", content: bye });
             state.pendingHangup = true;
-            await speakEleven(callControlId, bye);
+            await speakEleven(callControlId, bye, state.voiceId);
           } else {
             state.turnCount++;
-            await speakEleven(callControlId, "Sorry, I didn't catch that — could you say that again?");
+            await speakEleven(callControlId, "Sorry, I didn't catch that — could you say that again?", state.voiceId);
           }
           return;
         }
@@ -863,7 +886,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         const bye = "Great talking with you! Take care and have a wonderful day. Goodbye!";
         state.messages.push({ role: "assistant", content: bye });
         state.pendingHangup = true;
-        await speakEleven(callControlId, bye);
+        await speakEleven(callControlId, bye, state.voiceId);
         return;
       }
 
@@ -887,7 +910,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         state.pendingTransfer = state.transferNumber;
       }
 
-      await speakEleven(callControlId, aiResponse);
+      await speakEleven(callControlId, aiResponse, state.voiceId);
       return;
     }
 
