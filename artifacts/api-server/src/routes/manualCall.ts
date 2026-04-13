@@ -99,9 +99,22 @@ async function handleManualCall(req: import("express").Request, res: import("exp
   });
 
   if (result.success) {
-    res.json({ message: `Call triggered to ${phone}`, data: result.data });
+    res.json({
+      success: true,
+      message: `Call triggered to ${phone}`,
+      phone,
+      campaignId: campaign_id,
+      data: result.data,
+    });
   } else {
-    res.status(502).json({ error: `Worker error for ${phone}: ${result.error}` });
+    const isMissingConfig = result.error?.includes("TELNYX_CONNECTION_ID") || result.error?.includes("TELNYX_API_KEY");
+    res.status(isMissingConfig ? 503 : 502).json({
+      success: false,
+      error: result.error,
+      hint: isMissingConfig
+        ? "Set TELNYX_CONNECTION_ID in Replit Secrets. Get it from portal.telnyx.com → Call Control Applications."
+        : undefined,
+    });
   }
 }
 
