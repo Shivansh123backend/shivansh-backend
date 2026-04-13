@@ -445,6 +445,12 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       const leadName = lead?.name;
       const naturalScript = buildNaturalSystemPrompt(ctx.script, ctx.campaignName, agentName, leadName);
 
+      // Build a natural opening greeting (VAPI-style: AI speaks first immediately)
+      const firstName = leadName?.split(" ")[0];
+      const greeting = firstName
+        ? `Hi, is this ${firstName}? This is ${agentName} calling from ${ctx.campaignName}.`
+        : `Hello! This is ${agentName} calling from ${ctx.campaignName}.`;
+
       activeCalls.set(callControlId, {
         campaignId,
         campaignName: ctx.campaignName,
@@ -452,22 +458,25 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         agentPrompt: naturalScript,
         callerNumber: ctx.phone,
         calledNumber: fromNumber,
-        messages: [{ role: "system", content: naturalScript }],
+        messages: [
+          { role: "system", content: naturalScript },
+          { role: "assistant", content: greeting },
+        ],
         turnCount: 0,
         startedAt: new Date(),
         direction: "outbound",
-        stage: "waiting_for_pickup",
+        stage: "conversation",  // Start directly in conversation — AI speaks first
         leadName,
         leadId: lead?.id,
       });
 
-      logger.info({ callControlId, campaignId, phone: ctx.phone, leadName, agentName }, "Outbound call answered — waiting for caller to speak first");
+      logger.info({ callControlId, campaignId, phone: ctx.phone, leadName, agentName, greeting }, "Outbound call answered — AI speaking first");
 
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err, callControlId }, "Outbound recording start failed — continuing")
       );
-      // ⬇ DON'T speak first — wait for caller to say "hello" / "hi" etc.
-      await gatherSpeech(callControlId);
+      // Speak the greeting immediately (VAPI-style) — no waiting for caller to speak first
+      await speak(callControlId, greeting);
       return;
     }
 
@@ -547,10 +556,30 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       const state = activeCalls.get(callControlId);
       if (!state) return;
 
-      const speechText: string = payload.speech ?? "";
+      // Telnyx sends speech as either a plain string OR an object:
+      // { results: [{ transcript: "Hello", confidence: 0.98 }], is_final: true }
+      // We must handle both — never assume it's a plain string.
+      const rawSpeech = payload.speech;
+      let speechText = "";
+      if (typeof rawSpeech === "string") {
+        speechText = rawSpeech.trim();
+      } else if (rawSpeech && typeof rawSpeech === "object") {
+        const results = (rawSpeech as { results?: Array<{ transcript?: string }> }).results;
+        if (Array.isArray(results) && results.length > 0) {
+          speechText = (results[0]?.transcript ?? "").trim();
+        } else if (typeof (rawSpeech as Record<string, unknown>).transcript === "string") {
+          speechText = ((rawSpeech as Record<string, unknown>).transcript as string).trim();
+        }
+      }
+
       const digits: string = payload.digits ?? "";
       const reason: string = payload.reason ?? "";
-      const callerInput = speechText.trim() || (digits ? `Pressed ${digits}` : "");
+      const callerInput = speechText || (digits ? `Pressed ${digits}` : "");
+
+      logger.info(
+        { callControlId, callerInput, speechText, reason, stage: state.stage, turn: state.turnCount, rawSpeechType: typeof rawSpeech },
+        "call.gather.ended received"
+      );
 
       // ── Stage 0: waiting for caller to say anything ("hello", "hi", etc.) ──
       if (state.stage === "waiting_for_pickup") {
