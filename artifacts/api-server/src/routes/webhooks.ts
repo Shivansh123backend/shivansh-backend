@@ -448,9 +448,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         onTransferRequested: async (transferTo) => {
           try {
             await executeTransfer(callControlId, transferTo, fromNumber);
-            logger.info({ callControlId, transferTo }, "Transfer executed from bridge callback");
+            logger.info({ callControlId, transferTo }, "Outbound transfer executed — stopping media fork");
+            await telnyxAction(callControlId, "fork_stop", {}).catch(() => {});
           } catch (err) {
-            logger.error({ err: String(err), callControlId }, "Transfer failed in bridge callback");
+            logger.error({ err: String(err), callControlId }, "Outbound transfer failed in bridge callback");
           }
         },
       });
@@ -500,7 +501,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         onTransferRequested: async (transferTo) => {
           try {
             await executeTransfer(callControlId, transferTo, toNumber);
-            logger.info({ callControlId, transferTo }, "Inbound transfer executed from bridge callback");
+            logger.info({ callControlId, transferTo }, "Inbound transfer executed — stopping media fork");
+            await telnyxAction(callControlId, "fork_stop", {}).catch(() => {});
           } catch (err) {
             logger.error({ err: String(err), callControlId }, "Inbound transfer failed in bridge callback");
           }

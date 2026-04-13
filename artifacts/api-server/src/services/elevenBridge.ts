@@ -98,6 +98,7 @@ export interface BridgeInfo {
   voiceId: string;
   systemPrompt: string;
   firstMessage: string;
+  pendingTransfer: boolean;    // true once transfer is scheduled — prevents double-execution
   onTransferRequested?: (to: string) => void;
   onCallEnded?: () => void;
 }
@@ -281,8 +282,7 @@ async function connectToElevenLabs(
       if (type === "agent_response") {
         const are = msg["agent_response_event"] as { agent_response?: string } | undefined;
         const text = are?.agent_response ?? "";
-        if (text) {
-          // Detect transfer intent
+        if (text && !bridge.pendingTransfer) {
           const TRANSFER_PHRASES = [
             "transferring you", "connect you with", "one of our agents",
             "one moment please", "putting you through", "let me get a",
@@ -290,8 +290,28 @@ async function connectToElevenLabs(
           ];
           const lower = text.toLowerCase();
           if (TRANSFER_PHRASES.some((p) => lower.includes(p)) && bridge.transferNumber) {
-            logger.info({ callControlId, transferNumber: bridge.transferNumber }, "ElevenLabs agent signalled transfer");
-            bridge.onTransferRequested?.(bridge.transferNumber);
+            bridge.pendingTransfer = true;
+            logger.info({ callControlId, transferNumber: bridge.transferNumber, text }, "Transfer phrase detected — waiting 4s for AI to finish speaking");
+
+            // Wait for AI to finish saying the transfer phrase before bridging
+            setTimeout(() => {
+              const currentBridge = activeBridges.get(callControlId);
+              if (!currentBridge) return;
+              logger.info({ callControlId }, "Executing transfer after speech delay");
+
+              // Fire the transfer on Telnyx
+              currentBridge.onTransferRequested?.(currentBridge.transferNumber!);
+
+              // Close ElevenLabs — human agent is taking over
+              if (elevenWs.readyState === WebSocket.OPEN) {
+                elevenWs.close(1000, "transferred");
+              }
+
+              // Mute Telnyx fork so no further AI audio leaks to the caller
+              if (telnyxWs.readyState === WebSocket.OPEN) {
+                telnyxWs.send(JSON.stringify({ event: "clear" }));
+              }
+            }, 4_000);
           }
         }
         return;
@@ -421,11 +441,12 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
 
 export function initBridge(
   callControlId: string,
-  info: Omit<BridgeInfo, "transcript">
+  info: Omit<BridgeInfo, "transcript" | "pendingTransfer">
 ): void {
   activeBridges.set(callControlId, {
     ...info,
     transcript: [],
+    pendingTransfer: false,
     elevenWs: null,
   });
   logger.info({ callControlId, direction: info.direction, voiceId: info.voiceId }, "Bridge registered — waiting for fork");
