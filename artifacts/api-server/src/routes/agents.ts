@@ -11,14 +11,14 @@ const createAgentSchema = z.object({
   name: z.string().min(1),
   prompt: z.string().min(1),
   language: z.string().default("en"),
-  defaultVoiceId: z.number().optional(),
+  defaultVoiceId: z.coerce.number().int().positive().optional().nullable(),
 });
 
 const updateAgentSchema = z.object({
   name: z.string().min(1).optional(),
   prompt: z.string().min(1).optional(),
   language: z.string().optional(),
-  defaultVoiceId: z.number().nullable().optional(),
+  defaultVoiceId: z.coerce.number().int().positive().optional().nullable(),
 });
 
 const addVoiceSchema = z.object({
