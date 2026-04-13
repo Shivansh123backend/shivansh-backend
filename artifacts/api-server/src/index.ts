@@ -25,25 +25,29 @@ if (Number.isNaN(port) || port <= 0) {
 
 const httpServer = createServer(app);
 
-// ── Socket.IO WebSocket (dashboard real-time events) ───────────────────────────
-initWebSocket(httpServer);
-
 // ── Raw WebSocket server for Telnyx media forks ───────────────────────────────
-// Telnyx fork_start connects to wss://.../ws/eleven/:callControlId
-// We handle upgrades ourselves so it coexists with Socket.IO on the same port.
+// IMPORTANT: register this BEFORE Socket.IO so our handler fires first.
+// engine.io (inside Socket.IO) destroys any upgrade that doesn't match /api/ws.
+// Using prependListener ensures /ws/eleven/* is consumed before that happens.
 const rawWss = new WebSocketServer({ noServer: true });
 
-httpServer.on("upgrade", (req, socket, head) => {
+httpServer.prependListener("upgrade", (req, socket, head) => {
   const url = req.url ?? "";
-  logger.info({ url }, "HTTP upgrade request received");
-
   if (url.startsWith("/ws/eleven/")) {
+    logger.info({ url }, "Telnyx media fork upgrade — handling");
     rawWss.handleUpgrade(req, socket as import("net").Socket, head, (ws) => {
       handleTelnyxMediaSocket(ws, req);
     });
-    // Socket.IO handles /api/ws — it will ignore other paths automatically
+    // Stop here — don't let Socket.IO see this upgrade
+    return;
   }
+  // All other paths fall through to Socket.IO's upgrade handler
+  logger.info({ url }, "HTTP upgrade request received");
 });
+
+// ── Socket.IO WebSocket (dashboard real-time events) ───────────────────────────
+// Must be registered AFTER prependListener so it doesn't pre-empt Telnyx upgrades
+initWebSocket(httpServer);
 
 // ── Call queue (Redis, optional) ───────────────────────────────────────────────
 if (process.env.REDIS_HOST || process.env.REDIS_URL) {
