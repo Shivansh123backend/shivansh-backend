@@ -89,12 +89,13 @@ do_not_call    → border-orange-500/30 text-orange-400 bg-orange-500/5
 - **Active**: `bg-primary/15 text-primary border border-primary/25 font-medium`
 - Icon: `w-3.5 h-3.5 flex-shrink-0` from lucide-react
 
-#### Admin Nav (13 items, exact order):
+#### Admin Nav (14 items, exact order):
 | Icon | Label |
 |------|-------|
 | LayoutDashboard | Dashboard |
 | Megaphone | Campaigns |
 | List | Lead Lists |
+| Bot | AI Agents |
 | Mic2 | Voices |
 | Tag | Dispositions |
 | Users | Users |
@@ -921,7 +922,7 @@ Each: label + icon (`text-primary`) + big value + sub-text `text-[10px] font-mon
 
 **3. Telephony Providers** (`<Phone>`):
 - VoIP Endpoint URL: full-width input + "Not Set" inactive badge in flex row
-- Telnyx API Key: full-width password input + "Not Set" badge
+- Telnyx API Key: full-width password input + **"Configured"** green active badge (API key is set)
 - Twilio Account SID + Auth Token: 2-col grid
 - Footer: `"Provider priority: VoIP → Telnyx → Twilio (fallback chain)"` muted mono
 
@@ -931,7 +932,8 @@ Each: label + icon (`text-primary`) + big value + sub-text `text-[10px] font-mon
 - Footer: env var hint
 
 **5. Integrations** (`<Radio>`):
-- ElevenLabs — inactive
+- ElevenLabs — **active** (green "Enabled" badge — API key is configured)
+- Telnyx WebRTC — **active** (green "Enabled" badge — API key is configured)
 - PlayHT — inactive
 - Azure Cognitive Speech — inactive
 - WebSocket Monitoring — **active** (green "Enabled" badge)
