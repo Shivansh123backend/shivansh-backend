@@ -10,8 +10,13 @@ const router: IRouter = Router();
 
 const manualCallSchema = z.object({
   phone: z.string().min(7),
-  campaign_id: z.number().int().positive(),
-});
+  // Accept both camelCase (campaignId) and snake_case (campaign_id) from frontend
+  campaign_id: z.union([z.number().int().positive(), z.string().transform(Number)]).optional(),
+  campaignId: z.union([z.number().int().positive(), z.string().transform(Number)]).optional(),
+}).transform((data) => ({
+  phone: data.phone,
+  campaign_id: Number(data.campaign_id ?? data.campaignId ?? 0),
+})).refine((data) => data.campaign_id > 0, { message: "campaign_id is required and must be a positive integer" });
 
 async function handleManualCall(req: import("express").Request, res: import("express").Response): Promise<void> {
   const parsed = manualCallSchema.safeParse(req.body);
