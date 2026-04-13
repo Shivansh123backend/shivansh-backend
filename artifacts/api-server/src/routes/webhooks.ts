@@ -182,23 +182,32 @@ async function generateTTS(voiceId: string, text: string): Promise<string> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) throw new Error("ELEVENLABS_API_KEY not configured");
 
-  const resp = await axios.post(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-    {
-      text,
-      model_id: "eleven_turbo_v2_5",
-      voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: 1.0 },
-    },
-    {
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
+  let resp;
+  try {
+    resp = await axios.post(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+      {
+        text,
+        model_id: "eleven_turbo_v2",
+        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
       },
-      responseType: "arraybuffer",
-      timeout: 15_000,
+      {
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
+        },
+        responseType: "arraybuffer",
+        timeout: 20_000,
+      }
+    );
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response) {
+      const body = Buffer.from(err.response.data as ArrayBuffer).toString("utf-8").slice(0, 300);
+      logger.error({ voiceId, status: err.response.status, body }, "ElevenLabs TTS failed");
     }
-  );
+    throw err;
+  }
 
   const token = makeAudioToken();
   audioCache.set(token, {
@@ -704,11 +713,11 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
     // ── 2b. Caller transcription — run the AI response turn ──────────────────
     if (eventType === "call.transcription") {
-      const items = (payload.transcription_data ?? []) as Array<{ transcript?: string; is_final?: boolean }>;
-      for (const item of items) {
-        if (item.is_final && item.transcript?.trim()) {
-          await handleCallerTurn(callControlId, item.transcript.trim());
-        }
+      // Telnyx sends transcription_data as a plain object (not array)
+      const td = payload.transcription_data as { transcript?: string; is_final?: boolean } | undefined;
+      logger.info({ callControlId, td }, "Transcription received");
+      if (td?.is_final && td.transcript?.trim()) {
+        await handleCallerTurn(callControlId, td.transcript.trim());
       }
       return;
     }
