@@ -2,7 +2,10 @@ import axios from "axios";
 import { logger } from "../lib/logger.js";
 import { setActiveCall } from "../lib/redis.js";
 
-const WORKER_URL = process.env.WORKER_URL ?? "https://ai-voice-worker1.replit.app";
+const WORKER_URL = process.env.WORKER_URL;
+const TELNYX_API_BASE = "https://api.telnyx.com/v2";
+const BACKEND_WEBHOOK_URL =
+  process.env.WEBHOOK_BASE_URL ?? "https://shivanshbackend.replit.app";
 
 export interface TriggerCallPayload {
   to: string;
@@ -36,8 +39,107 @@ function isHtmlResponse(data: unknown): boolean {
   return typeof data === "string" && data.trimStart().startsWith("<");
 }
 
-/** POST /api/calls/start-call — immediate real-time call */
+// ── Telnyx direct outbound call ───────────────────────────────────────────────
+async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCallResult> {
+  const apiKey = process.env.TELNYX_API_KEY;
+  const connectionId = process.env.TELNYX_CONNECTION_ID;
+
+  if (!apiKey) {
+    return { success: false, error: "TELNYX_API_KEY environment variable not set" };
+  }
+  if (!connectionId) {
+    return { success: false, error: "TELNYX_CONNECTION_ID environment variable not set. Get it from portal.telnyx.com → Call Control Applications." };
+  }
+
+  // Encode campaign context in client_state so webhook knows which campaign this call is for
+  const clientStateData = {
+    type: "outbound",
+    campaignId: payload.campaign_id,
+    campaignName: payload.campaign_name ?? "",
+    script: payload.agent_prompt,
+    voice: payload.voice,
+    phone: payload.phone,
+    transferNumber: payload.transfer_number ?? null,
+  };
+  const clientState = Buffer.from(JSON.stringify(clientStateData)).toString("base64");
+
+  try {
+    logger.info(
+      { phone: payload.phone, from: payload.from_number, campaignId: payload.campaign_id },
+      "Initiating Telnyx outbound call directly"
+    );
+
+    const body = {
+      connection_id: connectionId,
+      to: payload.phone,
+      from: payload.from_number,
+      from_display_name: payload.campaign_name ?? "Shivansh AI",
+      webhook_url: `${BACKEND_WEBHOOK_URL}/api/webhooks/telnyx`,
+      webhook_api_version: "2",
+      client_state: clientState,
+      // AMD (Answering Machine Detection) — hang up on voicemail
+      answering_machine_detection: "premium",
+      answering_machine_detection_config: {
+        after_silence_millis: 800,
+        between_words_silence_millis: 50,
+        maximum_words: 3,
+        total_analysis_time_millis: 5000,
+      },
+    };
+
+    const response = await axios.post(`${TELNYX_API_BASE}/calls`, body, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 15_000,
+    });
+
+    const callControlId: string = response.data?.data?.call_control_id ?? "";
+
+    logger.info(
+      { phone: payload.phone, callControlId, status: response.status },
+      "Telnyx outbound call initiated"
+    );
+
+    if (callControlId) {
+      await setActiveCall({
+        call_id: callControlId,
+        phone_number: payload.phone,
+        campaign_id: parseInt(payload.campaign_id, 10),
+        campaign_name: payload.campaign_name,
+        status: "ringing",
+        started_at: new Date().toISOString(),
+      }).catch(() => {}); // non-fatal if Redis unavailable
+    }
+
+    return { success: true, data: response.data };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = (err as Record<string, unknown> & { response?: { status?: number; data?: unknown } })?.response?.status;
+    const detail = (err as Record<string, unknown> & { response?: { status?: number; data?: unknown } })?.response?.data;
+    logger.error({ phone: payload.phone, err: msg, status, detail }, "Telnyx direct call failed");
+    return { success: false, error: `Telnyx API error ${status ?? ""}: ${msg}` };
+  }
+}
+
+// ── External worker fallback ──────────────────────────────────────────────────
+
+/** POST /api/calls/start-call — immediate real-time call via external worker */
 export async function triggerCall(payload: TriggerCallPayload): Promise<TriggerCallResult> {
+  // If no worker configured, use Telnyx direct
+  if (!WORKER_URL) {
+    return telnyxDirectCall({
+      phone: payload.to,
+      from_number: payload.from,
+      agent_prompt: payload.script,
+      voice: payload.voice,
+      transfer_number: payload.transfer_number,
+      campaign_id: String(payload.campaign_id),
+      campaign_name: payload.campaign_name,
+    });
+  }
+
   try {
     logger.info({ to: payload.to, from: payload.from, campaignId: payload.campaign_id }, `Triggering call to ${payload.to}`);
 
@@ -56,11 +158,16 @@ export async function triggerCall(payload: TriggerCallPayload): Promise<TriggerC
     });
 
     if (isHtmlResponse(response.data)) {
-      logger.warn(
-        { to: payload.to, workerUrl: WORKER_URL },
-        `Worker returned HTML for ${payload.to} — endpoint not configured`,
-      );
-      return { success: false, error: "Worker endpoint /api/calls/start-call returned HTML. Check WORKER_URL." };
+      logger.warn({ to: payload.to, workerUrl: WORKER_URL }, `Worker returned HTML — falling back to Telnyx direct`);
+      return telnyxDirectCall({
+        phone: payload.to,
+        from_number: payload.from,
+        agent_prompt: payload.script,
+        voice: payload.voice,
+        transfer_number: payload.transfer_number,
+        campaign_id: String(payload.campaign_id),
+        campaign_name: payload.campaign_name,
+      });
     }
 
     logger.info({ to: payload.to, status: response.status }, `Worker accepted call to ${payload.to}`);
@@ -73,18 +180,31 @@ export async function triggerCall(payload: TriggerCallPayload): Promise<TriggerC
       campaign_name: payload.campaign_name,
       status: "ringing",
       started_at: new Date().toISOString(),
-    });
+    }).catch(() => {});
 
     return { success: true, data: response.data };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.error({ to: payload.to, err: message }, `Worker error for ${payload.to}`);
-    return { success: false, error: message };
+    logger.warn({ to: payload.to, err: message }, `Worker error — falling back to Telnyx direct`);
+    return telnyxDirectCall({
+      phone: payload.to,
+      from_number: payload.from,
+      agent_prompt: payload.script,
+      voice: payload.voice,
+      transfer_number: payload.transfer_number,
+      campaign_id: String(payload.campaign_id),
+      campaign_name: payload.campaign_name,
+    });
   }
 }
 
-/** POST /api/calls/enqueue — queue via worker's BullMQ (preferred for campaigns) */
+/** POST /api/calls/enqueue — queue via worker's BullMQ or Telnyx direct */
 export async function enqueueCall(payload: EnqueueCallPayload): Promise<TriggerCallResult> {
+  // If no worker configured (or WORKER_URL not set), use Telnyx direct
+  if (!WORKER_URL) {
+    return telnyxDirectCall(payload);
+  }
+
   try {
     logger.info({ phone: payload.phone, campaignId: payload.campaign_id }, `Enqueueing call to ${payload.phone}`);
 
@@ -94,19 +214,16 @@ export async function enqueueCall(payload: EnqueueCallPayload): Promise<TriggerC
     });
 
     if (isHtmlResponse(response.data)) {
-      logger.warn(
-        { phone: payload.phone, workerUrl: WORKER_URL },
-        `Worker returned HTML for ${payload.phone} — endpoint not configured`,
-      );
-      return { success: false, error: "Worker endpoint /api/calls/enqueue returned HTML. Check WORKER_URL." };
+      logger.warn({ phone: payload.phone, workerUrl: WORKER_URL }, `Worker returned HTML — falling back to Telnyx direct`);
+      return telnyxDirectCall(payload);
     }
 
     logger.info({ phone: payload.phone, status: response.status }, `Worker enqueued call to ${payload.phone}`);
     return { success: true, data: response.data };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.error({ phone: payload.phone, err: message }, `Worker enqueue error for ${payload.phone}`);
-    return { success: false, error: message };
+    logger.warn({ phone: payload.phone, err: message }, `Worker enqueue failed — falling back to Telnyx direct`);
+    return telnyxDirectCall(payload);
   }
 }
 

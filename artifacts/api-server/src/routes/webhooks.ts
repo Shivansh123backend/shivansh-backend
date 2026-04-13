@@ -236,6 +236,63 @@ async function finalizeInboundCall(
   }
 }
 
+// ── Outbound client_state decoder ────────────────────────────────────────────
+interface OutboundClientState {
+  type: "outbound";
+  campaignId: string;
+  campaignName: string;
+  script: string;
+  voice: string;
+  phone: string;
+  transferNumber: string | null;
+}
+
+function decodeClientState(raw: string): OutboundClientState | null {
+  try {
+    const json = Buffer.from(raw, "base64").toString("utf-8");
+    const parsed = JSON.parse(json);
+    if (parsed?.type === "outbound") return parsed as OutboundClientState;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Finalize outbound call — save to DB ────────────────────────────────────────
+async function finalizeOutboundCall(
+  callControlId: string,
+  state: InboundCallState,
+  disposition?: string
+): Promise<void> {
+  try {
+    const durationSecs = Math.round((Date.now() - state.startedAt.getTime()) / 1000);
+    const { summary, disposition: detectedDisposition, transcript } = await generateSummaryAndDisposition(
+      state.messages,
+      state.campaignName
+    );
+
+    await db.insert(callLogsTable).values({
+      phoneNumber: state.callerNumber,
+      campaignId: state.campaignId,
+      status: "completed",
+      disposition: disposition ?? detectedDisposition,
+      direction: "outbound",
+      duration: durationSecs,
+      recordingUrl: state.recordingUrl ?? null,
+      transcript,
+      summary,
+      callControlId,
+    });
+
+    logger.info(
+      { callControlId, campaignId: state.campaignId, disposition: disposition ?? detectedDisposition, durationSecs },
+      "Outbound call finalized"
+    );
+  } catch (err) {
+    logger.error({ err, callControlId }, "Failed to finalize outbound call");
+  }
+}
+
 // ── POST /webhooks/telnyx ─────────────────────────────────────────────────────
 router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
   // Always respond 200 immediately
@@ -250,11 +307,77 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
   const direction: string = payload.direction ?? "";
   const toNumber: string = payload.to ?? "";
   const fromNumber: string = payload.from ?? "";
+  const clientStateRaw: string = payload.client_state ?? "";
 
   logger.info({ eventType, direction, to: toNumber, from: fromNumber, callControlId }, "Telnyx event");
 
   try {
-    // ── 1. Inbound call arrives ──────────────────────────────────────────────
+    // ── 0. Outbound: AMD result — hang up on voicemail ───────────────────────
+    if (eventType === "call.machine.detection.ended") {
+      const result: string = payload.result ?? "";
+      logger.info({ callControlId, result }, "AMD result");
+
+      if (result === "machine_start" || result === "machine_end_beep" || result === "machine_end_silence") {
+        // Voicemail detected — hang up and log as vm
+        try { await telnyxAction(callControlId, "hangup", {}); } catch { /* already hung up */ }
+
+        const state = activeCalls.get(callControlId);
+        if (state) {
+          const durationSecs = Math.round((Date.now() - state.startedAt.getTime()) / 1000);
+          await db.insert(callLogsTable).values({
+            phoneNumber: state.callerNumber,
+            campaignId: state.campaignId,
+            status: "completed",
+            disposition: "vm",
+            direction: "outbound",
+            duration: durationSecs,
+            callControlId,
+          }).catch(() => {});
+          activeCalls.delete(callControlId);
+        }
+      }
+      // If human detected — call.answered will fire; nothing to do here
+      return;
+    }
+
+    // ── 1a. Outbound call answered by human ──────────────────────────────────
+    if (eventType === "call.answered" && direction === "outgoing") {
+      const ctx = clientStateRaw ? decodeClientState(clientStateRaw) : null;
+
+      if (!ctx) {
+        logger.warn({ callControlId }, "Outbound call.answered — no valid client_state; hanging up");
+        try { await telnyxAction(callControlId, "hangup", {}); } catch { /* ok */ }
+        return;
+      }
+
+      const campaignId = parseInt(ctx.campaignId, 10);
+      const greeting = `Hello! This is an AI assistant calling from ${ctx.campaignName}. Am I speaking with you? I wanted to reach out to discuss something important with you today.`;
+
+      activeCalls.set(callControlId, {
+        campaignId,
+        campaignName: ctx.campaignName,
+        agentName: "AI Agent",
+        agentPrompt: ctx.script,
+        callerNumber: ctx.phone,
+        calledNumber: fromNumber,
+        messages: [
+          { role: "system", content: ctx.script },
+          { role: "assistant", content: greeting },
+        ],
+        turnCount: 0,
+        startedAt: new Date(),
+      });
+
+      logger.info({ callControlId, campaignId, phone: ctx.phone }, "Outbound call answered — starting AI conversation");
+
+      await startRecording(callControlId).catch((err) =>
+        logger.warn({ err, callControlId }, "Outbound recording start failed — continuing")
+      );
+      await speak(callControlId, greeting);
+      return;
+    }
+
+    // ── 1b. Inbound call arrives ──────────────────────────────────────────────
     if (eventType === "call.initiated" && direction === "incoming") {
       const result = await getCampaignByNumber(toNumber);
 
@@ -388,12 +511,17 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       return;
     }
 
-    // ── 5. Call hung up — finalize ───────────────────────────────────────────
+    // ── 5. Call hung up — finalize (inbound or outbound) ─────────────────────
     if (eventType === "call.hangup") {
       const state = activeCalls.get(callControlId);
       if (state) {
-        logger.info({ callControlId, campaignId: state.campaignId, turns: state.turnCount }, "Inbound call ended");
-        await finalizeInboundCall(callControlId, state);
+        if (direction === "outgoing" || clientStateRaw) {
+          logger.info({ callControlId, campaignId: state.campaignId, turns: state.turnCount }, "Outbound call ended");
+          await finalizeOutboundCall(callControlId, state);
+        } else {
+          logger.info({ callControlId, campaignId: state.campaignId, turns: state.turnCount }, "Inbound call ended");
+          await finalizeInboundCall(callControlId, state);
+        }
         activeCalls.delete(callControlId);
       }
       return;
