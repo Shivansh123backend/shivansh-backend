@@ -58,12 +58,14 @@ if (process.env.NODE_ENV === "production") {
   // Development: proxy all non-API requests to the Vite dev server
   // so any route (e.g. /settings, /campaigns) that reaches Express
   // is transparently forwarded to the React SPA.
+  // NOTE: /ws/eleven/* is excluded — those are raw Telnyx media forks handled in index.ts.
   const VITE_PORT = process.env.VITE_PORT ?? "23183";
   app.use(
     createProxyMiddleware({
       target: `http://localhost:${VITE_PORT}`,
       changeOrigin: false,
-      ws: true,
+      ws: false,           // WebSocket upgrades handled manually in index.ts (not via this proxy)
+      pathFilter: (path) => !path.startsWith("/ws/eleven/"),
       logger: console,
     })
   );

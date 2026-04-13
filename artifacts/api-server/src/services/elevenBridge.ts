@@ -362,11 +362,12 @@ async function connectToElevenLabs(
 // Called by index.ts for every upgrade request to /ws/eleven/:callControlId
 
 export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): void {
-  // URL format: /ws/eleven/:callControlId
+  // URL format: /ws/eleven/:encodedCallControlId  (callControlId is URL-encoded to handle "v3:" colon)
   const urlParts = (req.url ?? "").split("/");
-  const callControlId = urlParts[urlParts.length - 1] ?? "";
+  const rawId = urlParts[urlParts.length - 1] ?? "";
+  const callControlId = decodeURIComponent(rawId);
 
-  logger.info({ callControlId }, "Telnyx media fork WebSocket connected");
+  logger.info({ callControlId, rawId, url: req.url }, "Telnyx media fork WebSocket connected");
 
   ws.on("message", async (raw: Buffer) => {
     let msg: Record<string, unknown>;

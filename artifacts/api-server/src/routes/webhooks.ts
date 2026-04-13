@@ -164,14 +164,27 @@ async function startRecording(callControlId: string): Promise<void> {
 
 /** Start Telnyx media fork → our ElevenLabs bridge WebSocket */
 async function forkMedia(callControlId: string): Promise<void> {
-  const target = `${WS_BASE_URL}/ws/eleven/${callControlId}`;
-  logger.info({ callControlId, target }, "Starting Telnyx media fork → ElevenLabs bridge");
-  await telnyxAction(callControlId, "fork_start", {
-    target,
-    rx: "caller",
-    tx: "caller",
-    stream_track: "inbound_track",
-  });
+  // URL-encode the callControlId so special chars (e.g. "v3:") don't confuse proxies
+  const encodedId = encodeURIComponent(callControlId);
+  const target = `${WS_BASE_URL}/ws/eleven/${encodedId}`;
+  logger.info({ callControlId, encodedId, target }, "Starting Telnyx media fork → ElevenLabs bridge");
+
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) throw new Error("TELNYX_API_KEY not configured");
+
+  const resp = await axios.post(
+    `${TELNYX_API_BASE}/calls/${callControlId}/actions/fork_start`,
+    { target, stream_track: "both_tracks" },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 10_000,
+    }
+  );
+
+  logger.info({ callControlId, status: resp.status, data: JSON.stringify(resp.data).slice(0, 200) }, "fork_start response");
 }
 
 async function speak(callControlId: string, text: string): Promise<void> {

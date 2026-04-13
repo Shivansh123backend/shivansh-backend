@@ -35,6 +35,8 @@ const rawWss = new WebSocketServer({ noServer: true });
 
 httpServer.on("upgrade", (req, socket, head) => {
   const url = req.url ?? "";
+  logger.info({ url }, "HTTP upgrade request received");
+
   if (url.startsWith("/ws/eleven/")) {
     rawWss.handleUpgrade(req, socket as import("net").Socket, head, (ws) => {
       handleTelnyxMediaSocket(ws, req);
