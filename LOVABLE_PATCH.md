@@ -304,6 +304,107 @@ Show a confirmation dialog before bulk delete: "Delete all N leads for [Campaign
 
 ---
 
+## PATCH 12 — CDR: show recording, transcript, summary & dispositions
+
+The CDR table already fetches from `GET /api/call-logs`. The backend returns **all** of these fields — they just aren't being rendered. Fix the table to display them.
+
+### Column layout for CDR table (left → right):
+
+| Column | Content |
+|--------|---------|
+| Phone | `log.phoneNumber` |
+| Campaign | `log.campaignId` (or campaign name if available) |
+| Direction | `log.direction` — badge: inbound = blue, outbound = cyan |
+| Status | `log.status` — badge colors: completed=green, failed=red, initiated=yellow |
+| Disposition | `log.disposition` — colored badge (see colors below) |
+| Duration | `log.duration ? formatDuration(log.duration) : "—"` |
+| Recording | audio play button or "—" if no URL |
+| Transcript | expand button or "—" if empty |
+| Summary | expand button or "—" if empty |
+| Date | `log.timestamp` formatted |
+
+### Disposition badge colors:
+```
+interested         → green   (border + text: hsl(142,76%,36%))
+not_interested     → red     (border + text: hsl(0,84%,60%))
+vm                 → purple  (border + text: hsl(270,70%,60%))
+no_answer          → orange  (border + text: hsl(25,95%,53%))
+busy               → yellow  (border + text: hsl(48,96%,53%))
+callback_requested → blue    (border + text: hsl(210,100%,56%))
+connected          → cyan    (border + text: hsl(183,100%,50%))
+transferred        → teal    (border + text: hsl(173,80%,40%))
+completed          → green   (same as interested)
+(empty/null)       → gray    "—"
+```
+
+### Recording playback:
+If `log.recordingUrl` is present, show a small play button (▶) that opens an `<audio>` element inline below the row (toggle on click). If null, show `—`.
+
+```tsx
+{log.recordingUrl ? (
+  <button
+    onClick={() => toggleRecording(log.id)}
+    className="flex items-center gap-1 text-xs text-primary border border-primary/30 rounded px-2 py-0.5 hover:bg-primary/10"
+  >
+    <Play className="w-3 h-3" /> Play
+  </button>
+) : <span className="text-muted-foreground">—</span>}
+
+{openRecording === log.id && log.recordingUrl && (
+  <audio controls src={log.recordingUrl} className="w-full mt-1" />
+)}
+```
+
+### Transcript & Summary — expandable row detail:
+If `log.transcript` or `log.summary` is non-empty, show an expand icon (ChevronDown). Clicking it toggles an expanded row beneath that shows:
+
+```tsx
+{expandedRow === log.id && (
+  <tr>
+    <td colSpan={10} className="bg-muted/20 px-4 py-3 border-b border-border/30">
+      {log.summary && (
+        <div className="mb-3">
+          <p className="text-xs font-mono text-primary/70 uppercase tracking-wider mb-1">AI Summary</p>
+          <p className="text-sm font-mono text-foreground/90 whitespace-pre-wrap">{log.summary}</p>
+        </div>
+      )}
+      {log.transcript && (
+        <div>
+          <p className="text-xs font-mono text-primary/70 uppercase tracking-wider mb-1">Transcript</p>
+          <pre className="text-xs font-mono text-foreground/70 whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto bg-background/50 rounded p-2 border border-border/30">{log.transcript}</pre>
+        </div>
+      )}
+      {!log.summary && !log.transcript && (
+        <p className="text-xs text-muted-foreground">No transcript or summary available for this call.</p>
+      )}
+    </td>
+  </tr>
+)}
+```
+
+### Duration formatter:
+```typescript
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${s}s`;
+}
+```
+
+### Inline disposition update:
+The existing `PATCH /api/call-logs/:id/disposition` endpoint works. Add a dropdown to each disposition badge cell so supervisors can manually override it. On change:
+```
+PATCH /api/call-logs/{log.id}/disposition
+Body: { "disposition": "interested" }
+```
+Update the row in local state after success (no full refetch needed).
+
+### Empty state:
+If no logs: show centered text `"NO CALLS RECORDED YET"` in `text-muted-foreground font-mono text-xs`.
+
+---
+
 ## Visual rules reminder (do not change these)
 
 - App name: **SHIVANSH** (not NexusCall, not Nexus AI, not anything else)
