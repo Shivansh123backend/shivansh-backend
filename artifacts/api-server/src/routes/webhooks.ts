@@ -49,7 +49,9 @@ interface CallState {
   stage: CallStage;
   leadName?: string;
   leadId?: number;
-  pendingHangup?: boolean;  // hang up gracefully after current speech ends
+  pendingHangup?: boolean;    // hang up gracefully after current speech ends
+  pendingTransfer?: string;   // phone number to transfer to after current speech ends
+  transferNumber?: string;    // campaign-level transfer number
 }
 
 const activeCalls = new Map<string, CallState>();
@@ -110,7 +112,8 @@ function buildNaturalSystemPrompt(
   rawPrompt: string,
   campaignName: string,
   agentName = "AI Assistant",
-  leadName?: string
+  leadName?: string,
+  transferNumber?: string
 ): string {
   const intro = leadName
     ? `You are ${agentName}, calling ${leadName} on behalf of "${campaignName}".`
@@ -119,6 +122,10 @@ function buildNaturalSystemPrompt(
   const instructions = rawPrompt?.trim()
     ? `YOUR ROLE AND GOAL:\n${rawPrompt}\n`
     : `Be helpful, professional, and guide the conversation naturally.\n`;
+
+  const transferInstruction = transferNumber
+    ? `- If the caller wants to speak with a human, is interested in moving forward, or specifically asks to be transferred: say "Let me connect you with one of our agents right now — one moment please!" and nothing else. This will trigger the transfer automatically.`
+    : `- If the caller wants to speak with a human, let them know the team will follow up shortly and wrap up gracefully.`;
 
   return `${intro}
 
@@ -135,7 +142,8 @@ CONVERSATION RULES — follow these at all times:
 - Never repeat yourself. Never read from a numbered list. Adapt to wherever the conversation goes.
 - If you learn their name, use it naturally once in a while (not every sentence).
 - Be warm, empathetic, and genuinely helpful. If you don't know something, say so honestly.
-- When wrapping up the call, give a friendly natural close like "Great talking with you, have an amazing day!"`;
+- When wrapping up the call, give a friendly natural close like "Great talking with you, have an amazing day!"
+${transferInstruction}`;
 }
 
 // ── OpenAI helpers ────────────────────────────────────────────────────────────
@@ -211,6 +219,48 @@ function isGoodbye(text: string): boolean {
   );
 }
 
+// ── Transfer intent detection ─────────────────────────────────────────────────
+const TRANSFER_PHRASES = [
+  "transferring you", "transfer you", "transfer your call",
+  "connecting you", "connect you with", "put you through",
+  "let me get a", "getting someone", "bring in a",
+  "one of our agents", "one of our specialists", "a human agent",
+  "a live agent", "a team member", "speak with someone",
+  "forward your call",
+];
+
+function isTransferIntent(text: string): boolean {
+  const lower = text.toLowerCase();
+  return TRANSFER_PHRASES.some((phrase) => lower.includes(phrase));
+}
+
+// ── Execute Telnyx transfer (bridge to human) ─────────────────────────────────
+const DEFAULT_HOLD_MUSIC = "https://s3.amazonaws.com/com.twilio.music.classical/BusyStrings.mp3";
+
+async function executeTransfer(
+  callControlId: string,
+  toNumber: string,
+  fromNumber: string
+): Promise<void> {
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) throw new Error("TELNYX_API_KEY not configured");
+
+  await axios.post(
+    `${TELNYX_API_BASE}/calls/${callControlId}/actions/transfer`,
+    {
+      to: toNumber,
+      from: fromNumber,
+      audio_url: DEFAULT_HOLD_MUSIC,
+      webhook_url: `${BACKEND_WEBHOOK_URL}/api/webhooks/telnyx`,
+      webhook_api_version: "2",
+    },
+    {
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      timeout: 10_000,
+    }
+  );
+}
+
 // ── Campaign lookup by called number ─────────────────────────────────────────
 async function getCampaignByNumber(toNumber: string) {
   const [phoneRow] = await db
@@ -244,7 +294,7 @@ async function getCampaignByNumber(toNumber: string) {
     }
   }
 
-  const systemPrompt = buildNaturalSystemPrompt(agentPrompt, campaign.name, agentName);
+  const systemPrompt = buildNaturalSystemPrompt(agentPrompt, campaign.name, agentName, undefined, campaign.transferNumber ?? undefined);
 
   return { campaign, agentName, systemPrompt };
 }
@@ -443,7 +493,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       }
 
       const leadName = lead?.name;
-      const naturalScript = buildNaturalSystemPrompt(ctx.script, ctx.campaignName, agentName, leadName);
+      const naturalScript = buildNaturalSystemPrompt(ctx.script, ctx.campaignName, agentName, leadName, ctx.transferNumber ?? undefined);
 
       // Build a natural opening greeting (VAPI-style: AI speaks first immediately)
       const firstName = leadName?.split(" ")[0];
@@ -468,6 +518,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         stage: "conversation",  // Start directly in conversation — AI speaks first
         leadName,
         leadId: lead?.id,
+        transferNumber: ctx.transferNumber ?? undefined,
       });
 
       logger.info({ callControlId, campaignId, phone: ctx.phone, leadName, agentName, greeting }, "Outbound call answered — AI speaking first");
@@ -508,6 +559,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         startedAt: new Date(),
         direction: "inbound",
         stage: "conversation",
+        transferNumber: campaign.transferNumber ?? undefined,
       });
 
       logger.info({ callControlId, campaignId: campaign.id, agentName }, "Answering inbound call");
@@ -532,6 +584,28 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           await finalizeOutboundCall(callControlId, state);
         } else {
           await finalizeInboundCall(callControlId, state);
+        }
+        activeCalls.delete(callControlId);
+        return;
+      }
+
+      // Transfer requested — execute after AI finished speaking bridge announcement
+      if (state.pendingTransfer) {
+        const transferTo = state.pendingTransfer;
+        logger.info({ callControlId, transferTo }, "Executing transfer after speak");
+        try {
+          await executeTransfer(callControlId, transferTo, state.calledNumber || state.callerNumber);
+          // Finalize the call log as "transferred" — the call control is handed off
+          await finalizeOutboundCall(callControlId, state, "transferred");
+        } catch (err) {
+          logger.error({ err, callControlId, transferTo }, "Transfer failed — hanging up instead");
+          await telnyxAction(callControlId, "speak", {
+            payload: "I'm sorry, I was unable to connect you. Please try calling back. Goodbye!",
+            payload_type: "text",
+            voice: "female",
+            language: "en-US",
+          });
+          state.pendingHangup = true;
         }
         activeCalls.delete(callControlId);
         return;
@@ -682,11 +756,24 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       state.messages.push({ role: "assistant", content: aiResponse });
       logger.info({ callControlId, aiResponse, turn: state.turnCount }, "AI response");
+
+      // ── Transfer intent: if AI says "transferring you" etc. and a number exists ──
+      if (isTransferIntent(aiResponse) && state.transferNumber) {
+        logger.info({ callControlId, transferNumber: state.transferNumber }, "Transfer intent detected — will transfer after speak");
+        state.pendingTransfer = state.transferNumber;
+      }
+
       await speak(callControlId, aiResponse);
       return;
     }
 
-    // ── 4. Recording saved — update DB record ────────────────────────────────
+    // ── 4. Transfer bridged — log completion ─────────────────────────────────
+    if (eventType === "call.bridged") {
+      logger.info({ callControlId, to: toNumber, from: fromNumber }, "Call bridged to human agent — transfer successful");
+      return;
+    }
+
+    // ── 5. Recording saved — update DB record ────────────────────────────────
     if (eventType === "call.recording.saved") {
       const recordingUrl: string = payload.recording_urls?.mp3 ?? payload.public_recording_urls?.mp3 ?? "";
       logger.info({ callControlId, recordingUrl }, "Recording saved");

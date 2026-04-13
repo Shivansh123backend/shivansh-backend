@@ -405,6 +405,37 @@ If no logs: show centered text `"NO CALLS RECORDED YET"` in `text-muted-foregrou
 
 ---
 
+## PATCH 13 — Campaign Transfer Number field
+
+When creating or editing a campaign, add a **Transfer Number** input field. This is the human agent's phone number that the AI will transfer to when the caller wants to speak with a live person.
+
+### Field placement
+Add after the "From Number" field in the Create/Edit Campaign modal:
+
+```
+Label: "Transfer Number (optional)"
+Placeholder: "+1XXXXXXXXXX"
+Helper text: "When the AI detects the caller wants a human, it will transfer to this number and play hold music."
+```
+
+### API field name: `transferNumber` (camelCase)
+```
+POST /api/campaigns           Body: { ..., transferNumber: "+19998887777" }
+PATCH /api/campaigns/:id      Body: { transferNumber: "+19998887777" }
+GET  /api/campaigns           Response includes: { ..., transferNumber: "+19998887777" | null }
+```
+
+The field is optional — leave it null/empty if no transfer is needed. When set, the AI automatically handles transfer when it detects phrases like "let me connect you with a human", "transferring you now", etc.
+
+### Campaign card display
+If `campaign.transferNumber` is set, show a small badge or line in the card footer:
+```
+↗ Transfer: +19998887777
+```
+Use `text-xs font-mono text-muted-foreground`.
+
+---
+
 ## Visual rules reminder (do not change these)
 
 - App name: **SHIVANSH** (not NexusCall, not Nexus AI, not anything else)
