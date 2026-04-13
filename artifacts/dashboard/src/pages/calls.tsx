@@ -1,9 +1,10 @@
-import { useState, Fragment } from "react";
+import { useState, Fragment, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useListCampaigns,
   customFetch,
 } from "@workspace/api-client-react";
+import { io, type Socket } from "socket.io-client";
 import { Layout, PageHeader } from "@/components/layout";
 import { StatusBadge, DispositionBadge } from "./dashboard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -202,6 +203,37 @@ export default function CallsPage() {
   const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
 
   const qc = useQueryClient();
+  const socketRef = useRef<Socket | null>(null);
+  const [liveConnected, setLiveConnected] = useState(false);
+
+  // ── Socket.IO live connection — refetch immediately on any call lifecycle event
+  useEffect(() => {
+    const socket = io(window.location.origin, {
+      path: "/socket.io",
+      transports: ["websocket", "polling"],
+    });
+    socketRef.current = socket;
+
+    socket.on("connect", () => setLiveConnected(true));
+    socket.on("disconnect", () => setLiveConnected(false));
+
+    const refreshAll = () => {
+      qc.invalidateQueries({ queryKey: ["calls-cdr"] });
+      qc.invalidateQueries({ queryKey: ["call-logs"] });
+    };
+
+    // Refetch immediately whenever a call changes state
+    socket.on("call:ended", refreshAll);
+    socket.on("call:started", refreshAll);
+    socket.on("call:transferred", refreshAll);
+    socket.on("call:inbound", refreshAll);
+    socket.on("call_update", refreshAll);
+
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, [qc]);
 
   // Unified CDR — both outbound (calls table) + inbound (call_logs) merged
   const cdrParams = new URLSearchParams();
@@ -211,7 +243,8 @@ export default function CallsPage() {
   const { data: calls, isLoading: callsLoading, refetch: refetchCalls } = useQuery<CdrRow[]>({
     queryKey: ["calls-cdr", filterCampaign, filterDirection],
     queryFn: () => customFetch<CdrRow[]>(`/api/calls/cdr?${cdrParams.toString()}`),
-    refetchInterval: activeTab === "cdr" ? 15000 : false,
+    refetchInterval: activeTab === "cdr" ? 30000 : false,
+    refetchOnWindowFocus: true,
   });
   const { data: campaigns } = useListCampaigns();
 
@@ -224,7 +257,8 @@ export default function CallsPage() {
       return await customFetch<CallLog[]>(`/api/call-logs${params}`);
     },
     enabled: activeTab === "call-logs",
-    refetchInterval: activeTab === "call-logs" ? 10000 : false,
+    refetchInterval: activeTab === "call-logs" ? 30000 : false,
+    refetchOnWindowFocus: true,
   });
 
   const campaignMap = Object.fromEntries(
@@ -238,6 +272,12 @@ export default function CallsPage() {
         subtitle={activeTab === "cdr"
           ? `${(calls ?? []).length} full CDR entries`
           : `${(callLogsQuery.data ?? []).length} campaign log entries`}
+        action={
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${liveConnected ? "bg-primary animate-pulse" : "bg-muted-foreground/40"}`} />
+            {liveConnected ? "LIVE" : "connecting..."}
+          </div>
+        }
       />
 
       {/* Tab strip */}
