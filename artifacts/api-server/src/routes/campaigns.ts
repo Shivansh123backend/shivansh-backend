@@ -146,6 +146,29 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
     return;
   }
 
+  // For outbound campaigns, require at least one pending lead before launching
+  if (campaign.type === "outbound") {
+    const [leadCount] = await db
+      .select({ count: db.$count(leadsTable) })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.campaignId, id), eq(leadsTable.status, "pending")));
+    const pendingCount = Number(leadCount?.count ?? 0);
+    if (pendingCount === 0) {
+      // Check if there are any leads at all to give a better error
+      const [totalRow] = await db
+        .select({ count: db.$count(leadsTable) })
+        .from(leadsTable)
+        .where(eq(leadsTable.campaignId, id));
+      const totalCount = Number(totalRow?.count ?? 0);
+      if (totalCount === 0) {
+        res.status(400).json({ error: "No leads added yet. Add leads before launching.", code: "no_leads" });
+      } else {
+        res.status(400).json({ error: "All leads have already been called. Reset leads before launching again.", code: "all_called" });
+      }
+      return;
+    }
+  }
+
   // Activate campaign first so frontend sees the state change immediately
   const [updated] = await db
     .update(campaignsTable)
@@ -571,12 +594,27 @@ async function getCampaignOrFail(id: number, res: import("express").Response): P
   return campaign;
 }
 
+/** Returns false and sends a 400 if the outbound campaign has no pending leads. */
+async function guardPendingLeads(id: number, campaign: typeof campaignsTable.$inferSelect, res: import("express").Response): Promise<boolean> {
+  if (campaign.type !== "outbound") return true;
+  const [pendingRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable).where(and(eq(leadsTable.campaignId, id), eq(leadsTable.status, "pending")));
+  if (Number(pendingRow?.count ?? 0) > 0) return true;
+  const [totalRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable).where(eq(leadsTable.campaignId, id));
+  if (Number(totalRow?.count ?? 0) === 0) {
+    res.status(400).json({ error: "No leads added yet. Add leads before launching.", code: "no_leads" });
+  } else {
+    res.status(400).json({ error: "All leads have already been called. Reset leads before launching again.", code: "all_called" });
+  }
+  return false;
+}
+
 router.post("/campaigns/:id/start", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
   const campaign = await getCampaignOrFail(id, res);
   if (!campaign) return;
   if (campaign.status === "active") { res.status(400).json({ error: "Campaign is already active" }); return; }
+  if (!await guardPendingLeads(id, campaign, res)) return;
   const [updated] = await db.update(campaignsTable).set({ status: "active" }).where(eq(campaignsTable.id, id)).returning();
   emitToSupervisors("campaign:started", { campaignId: id, name: campaign.name });
   res.json(updated);
@@ -650,6 +688,7 @@ router.post("/campaigns/:id/resume", authenticate, requireRole("admin"), async (
   const campaign = await getCampaignOrFail(id, res);
   if (!campaign) return;
   if (campaign.status === "active") { res.status(400).json({ error: "Campaign is already active" }); return; }
+  if (!await guardPendingLeads(id, campaign, res)) return;
   const [updated] = await db.update(campaignsTable).set({ status: "active" }).where(eq(campaignsTable.id, id)).returning();
   emitToSupervisors("campaign:started", { campaignId: id, name: campaign.name });
   res.json(updated);
