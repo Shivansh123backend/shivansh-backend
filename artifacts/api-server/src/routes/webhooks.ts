@@ -1,11 +1,11 @@
 /**
- * Telnyx Webhooks — ElevenLabs Conversational AI Bridge Edition
+ * Telnyx Webhooks — ElevenLabs TTS + OpenAI + Telnyx Transcription Edition
  *
  * Flow:
- *   Outbound: workerService dials → call.answered → fork_start → ElevenLabs ConvAI
- *   Inbound:  call.initiated → answer → fork_start → ElevenLabs ConvAI
- *   Both:     ElevenLabs handles STT + LLM + TTS in real-time over the fork WebSocket
- *   End:      call.hangup → finalize (summary via OpenAI on ElevenLabs transcript)
+ *   Outbound: workerService dials → call.answered → transcription_start + ElevenLabs greeting
+ *   Inbound:  call.initiated → answer → transcription_start + ElevenLabs greeting
+ *   Both:     call.transcription → OpenAI → ElevenLabs TTS → playback_start (fallback: speak)
+ *   End:      call.hangup → finalize (summary via OpenAI on accumulated transcript)
  */
 
 import { Router, type IRouter } from "express";
@@ -25,7 +25,6 @@ import OpenAI from "openai";
 import {
   initBridge,
   getBridgeInfo,
-  getBridgeSessionToken,
   getAllActiveBridges,
   closeBridge,
   setRecordingUrl,
@@ -238,27 +237,68 @@ async function generateTTS(voiceId: string, text: string): Promise<string> {
 }
 
 /**
- * Start ElevenLabs ConvAI bridge via Telnyx media fork.
- * Telnyx will open a WebSocket to our /ws/eleven/:token endpoint,
- * which elevenBridge.ts proxies to ElevenLabs ConvAI.
- * ElevenLabs handles STT + LLM + TTS entirely — no Telnyx transcription or speak needed.
+ * Play audio via Telnyx playback_start (ElevenLabs TTS URL).
+ * Falls back to Telnyx native speak if playback_start returns an error.
  */
-async function startElevenLabsFork(callControlId: string): Promise<void> {
-  const sessionToken = getBridgeSessionToken(callControlId);
-  if (!sessionToken) throw new Error("No bridge session token for " + callControlId);
+async function playWithFallback(
+  callControlId: string,
+  audioUrl: string,
+  text: string
+): Promise<void> {
+  try {
+    await telnyxAction(callControlId, "playback_start", {
+      audio_url: audioUrl,
+    });
+    logger.info({ callControlId }, "ElevenLabs audio playing via playback_start");
+  } catch (err) {
+    const status = axios.isAxiosError(err) ? err.response?.status : null;
+    logger.warn({ callControlId, status, err: String(err) }, "playback_start failed — falling back to Telnyx speak");
+    await telnyxAction(callControlId, "speak", {
+      payload: text,
+      payload_type: "text",
+      voice: "female",
+      language: "en-US",
+    });
+  }
+}
 
-  const forkWsUrl =
-    BACKEND_WEBHOOK_URL.replace(/^https?:\/\//, "wss://") +
-    "/ws/eleven/" +
-    sessionToken;
+/**
+ * Start Telnyx transcription and play the AI's greeting via ElevenLabs TTS.
+ * This replaces the fork_start approach — no inbound WebSocket needed.
+ */
+async function startTranscriptionAndGreet(callControlId: string): Promise<void> {
+  const bridge = getBridgeInfo(callControlId);
+  if (!bridge) return;
 
-  logger.info({ callControlId, forkWsUrl }, "Starting ElevenLabs ConvAI media fork");
-
-  await telnyxAction(callControlId, "fork_start", {
-    target: forkWsUrl,
-    rx: "send",
-    tx: "send",
+  // Start Telnyx real-time transcription (STT)
+  await telnyxAction(callControlId, "transcription_start", {
+    language: "en",
+    transcription_engine: "A",
+    interim_results: false,
   });
+
+  // Speak the greeting via ElevenLabs TTS
+  aiSpeaking.add(callControlId);
+  try {
+    const audioUrl = await generateTTS(bridge.voiceId, bridge.firstMessage);
+    await playWithFallback(callControlId, audioUrl, bridge.firstMessage);
+    bridge.transcript.push(`AI Agent: ${bridge.firstMessage}`);
+  } catch (err) {
+    aiSpeaking.delete(callControlId);
+    logger.error({ err: String(err), callControlId }, "Failed to generate/play greeting — falling back to speak");
+    try {
+      await telnyxAction(callControlId, "speak", {
+        payload: bridge.firstMessage,
+        payload_type: "text",
+        voice: "female",
+        language: "en-US",
+      });
+      bridge.transcript.push(`AI Agent: ${bridge.firstMessage}`);
+    } catch (speakErr) {
+      aiSpeaking.delete(callControlId);
+      logger.error({ err: String(speakErr), callControlId }, "Speak fallback also failed");
+    }
+  }
 }
 
 /** Process a final transcription from the caller and speak the AI's response */
@@ -336,17 +376,13 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     const ownNum = callOwnNumber.get(callControlId) ?? "";
     logger.info({ callControlId, transferTo: bridge.transferNumber }, "Transfer phrase detected");
 
+    aiSpeaking.add(callControlId);
     try {
-      aiSpeaking.add(callControlId);
-      await telnyxAction(callControlId, "speak", {
-        payload: aiText,
-        payload_type: "text",
-        voice: "female",
-        language: "en-US",
-      });
+      const audioUrl = await generateTTS(bridge.voiceId, aiText);
+      await playWithFallback(callControlId, audioUrl, aiText);
     } catch (err) {
       aiSpeaking.delete(callControlId);
-      logger.warn({ callControlId, err: String(err) }, "Transfer speak failed — proceeding to transfer anyway");
+      logger.warn({ callControlId, err: String(err) }, "Transfer TTS failed — proceeding to transfer anyway");
     }
 
     setTimeout(async () => {
@@ -360,22 +396,18 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     return;
   }
 
-  // Speak the AI response via Telnyx built-in TTS
+  // Generate ElevenLabs TTS and play via playback_start (fallback to speak)
+  aiSpeaking.add(callControlId);
   try {
-    aiSpeaking.add(callControlId);
-    await telnyxAction(callControlId, "speak", {
-      payload: aiText,
-      payload_type: "text",
-      voice: "female",
-      language: "en-US",
-    });
-    logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "AI response speaking on call");
+    const audioUrl = await generateTTS(bridge.voiceId, aiText);
+    await playWithFallback(callControlId, audioUrl, aiText);
+    logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "AI response playing via ElevenLabs TTS");
   } catch (err) {
     aiSpeaking.delete(callControlId);
     const detail = axios.isAxiosError(err) && err.response
       ? JSON.stringify(err.response.data).slice(0, 400)
       : String(err);
-    logger.error({ callControlId, detail }, "speak (AI response) failed");
+    logger.error({ callControlId, detail }, "ElevenLabs TTS + playback failed");
   }
 }
 
@@ -707,8 +739,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         logger.warn({ err: String(err), callControlId }, "Recording start failed — continuing")
       );
 
-      // Open Telnyx media fork → ElevenLabs ConvAI (STT + LLM + TTS in one pipeline)
-      await startElevenLabsFork(callControlId);
+      // Start transcription + play ElevenLabs greeting
+      await startTranscriptionAndGreet(callControlId);
 
       // Live monitor: announce active call to supervisors
       emitToSupervisors("call:started", {
@@ -783,8 +815,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         logger.warn({ err: String(err), callControlId }, "Inbound recording start failed — continuing")
       );
 
-      // Open Telnyx media fork → ElevenLabs ConvAI (STT + LLM + TTS in one pipeline)
-      await startElevenLabsFork(callControlId);
+      // Start transcription + play ElevenLabs greeting
+      await startTranscriptionAndGreet(callControlId);
 
       // Live monitor: notify supervisors of inbound call
       const inboundId = syntheticId(callControlId);
@@ -834,6 +866,38 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             .where(eq(callLogsTable.id, existing.id));
           logger.info({ callControlId }, "Recording URL saved to DB");
         }
+      }
+      return;
+    }
+
+    // ── 3a. Transcription result — drive the conversation ─────────────────────
+    if (eventType === "call.transcription") {
+      const td = payload.transcription_data ?? {};
+      const transcript: string = td.transcript ?? "";
+      const isFinal: boolean = td.is_final === true || td.is_final === "true";
+
+      if (!isFinal || transcript.trim().length < 2) return;
+
+      logger.info({ callControlId, transcript: transcript.slice(0, 100) }, "Final transcription received");
+      handleCallerTurn(callControlId, transcript).catch((err) =>
+        logger.error({ err: String(err), callControlId }, "handleCallerTurn error")
+      );
+      return;
+    }
+
+    // ── 3b. Speak/playback ended — clear speaking flag & replay missed ────────
+    if (eventType === "call.speak.ended" || eventType === "call.playback.ended") {
+      logger.info({ callControlId, eventType }, "AI speech finished");
+      aiSpeaking.delete(callControlId);
+
+      // Replay any caller speech that arrived while AI was talking
+      const missed = missedTranscription.get(callControlId);
+      if (missed) {
+        missedTranscription.delete(callControlId);
+        logger.info({ callControlId, missed: missed.slice(0, 80) }, "Replaying buffered caller speech");
+        handleCallerTurn(callControlId, missed).catch((err) =>
+          logger.error({ err: String(err), callControlId }, "handleCallerTurn (replay) error")
+        );
       }
       return;
     }
@@ -919,8 +983,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         duration: durationSecs,
       });
 
-      // Stop the media fork cleanly (ElevenLabs bridge tears down its WS automatically)
-      await telnyxAction(callControlId, "fork_stop", {}).catch(() => {});
+      // Stop transcription cleanly
+      await telnyxAction(callControlId, "transcription_stop", {}).catch(() => {});
 
       closeBridge(callControlId);
       // Clean up per-call state
