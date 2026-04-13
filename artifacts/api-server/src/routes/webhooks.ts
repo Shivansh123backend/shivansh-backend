@@ -22,6 +22,7 @@ const AI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 const TELNYX_API_BASE = "https://api.telnyx.com/v2";
 const MAX_TURNS = 12;
+const BACKEND_WEBHOOK_URL = process.env.WEBHOOK_BASE_URL ?? "https://shivanshbackend.replit.app";
 
 // ── ElevenLabs TTS ─────────────────────────────────────────────────────────────
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
@@ -125,12 +126,13 @@ async function speak(callControlId: string, text: string): Promise<void> {
 }
 
 async function gatherSpeech(callControlId: string): Promise<void> {
-  // DO NOT include minimum_digits/maximum_digits — 0 is invalid and causes 422.
-  // Omitting them entirely enables speech-only (STT) gathering mode.
+  // DO NOT include minimum_digits/maximum_digits — enables speech-only (STT) mode.
+  // gather_timeout is in SECONDS (Telnyx API); gather_after_silence is in ms.
+  // language explicitly enables cloud speech recognition.
   await telnyxAction(callControlId, "gather", {
-    gather_after_silence: 2500,   // 2.5s silence = end of utterance
-    gather_timeout: 30000,        // 30s max wait before timeout event
-    action_on_empty_result: true, // always fire gather event, even on silence
+    gather_after_silence: 2000,   // 2s silence = end of utterance
+    gather_timeout: 30,           // 30 seconds max wait (NOT ms — Telnyx uses seconds)
+    language: "en-US",            // required to enable STT cloud recognition mode
   });
 }
 
@@ -876,6 +878,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           }
           return;
         }
+        // Empty gather for any other reason (noise, short silence, etc.) — keep listening
+        await gatherSpeech(callControlId);
         return;
       }
 
