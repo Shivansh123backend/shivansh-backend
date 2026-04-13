@@ -290,6 +290,7 @@ const lastAiResponse            = new Map<string, string>();          // callCon
 const aiSpeakEndedAt            = new Map<string, number>();          // callControlId → timestamp AI finished speaking
 const lastProcessedText         = new Map<string, { text: string; ts: number }>(); // dedup window
 const pendingTransferAfterPlay  = new Set<string>();                  // callControlId → execute transfer after next playback.ended
+const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
 const AI_SPEAK_COOLDOWN_MS      = 1400;                               // ignore transcriptions this many ms after AI speaks
 
 /** Stable numeric ID from a callControlId string (for live monitor without DB row) */
@@ -850,7 +851,21 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     if (eventType === "call.answered") {
       const ctx = clientStateRaw ? decodeClientState(clientStateRaw) : null;
       if (!ctx) {
-        logger.info({ callControlId, direction }, "call.answered without client_state — inbound, skipping");
+        // No client_state means this is an inbound call we answered.
+        // If it's in our pending inbound greet queue, now start transcription + greeting.
+        if (pendingInboundGreet.has(callControlId)) {
+          pendingInboundGreet.delete(callControlId);
+          logger.info({ callControlId }, "call.answered (inbound) — starting recording + transcription + greeting");
+          // Start recording first, then transcription + greeting
+          await startRecording(callControlId).catch((err) =>
+            logger.warn({ err: String(err), callControlId }, "Inbound recording start failed — continuing")
+          );
+          startTranscriptionAndGreet(callControlId).catch((err) =>
+            logger.error({ err: String(err), callControlId }, "startTranscriptionAndGreet failed for inbound call")
+          );
+        } else {
+          logger.info({ callControlId, direction }, "call.answered without client_state — skipping (no pending inbound greet)");
+        }
         return;
       }
 
@@ -1020,12 +1035,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       // Store our campaign phone number (needed if transfer is requested)
       callOwnNumber.set(callControlId, toNumber);
 
-      await startRecording(callControlId).catch((err) =>
-        logger.warn({ err: String(err), callControlId }, "Inbound recording start failed — continuing")
-      );
-
-      // Start transcription + play ElevenLabs greeting
-      await startTranscriptionAndGreet(callControlId);
+      // Mark as waiting for call.answered before starting transcription + greeting.
+      // Telnyx must confirm the call is established before we can start STT/TTS.
+      pendingInboundGreet.add(callControlId);
+      logger.info({ callControlId }, "Inbound answered — waiting for call.answered to start greeting");
 
       // Live monitor: notify supervisors of inbound call
       const inboundId = syntheticId(callControlId);
@@ -1266,6 +1279,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       lastProcessedText.delete(callControlId);
       processingTurn.delete(callControlId);
       pendingTransferAfterPlay.delete(callControlId);
+      pendingInboundGreet.delete(callControlId);
       return;
     }
 
