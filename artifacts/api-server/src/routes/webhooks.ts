@@ -49,14 +49,14 @@ const BACKEND_WEBHOOK_URL =
 // Default ElevenLabs voice (Rachel)
 const DEFAULT_ELEVEN_VOICE = "21m00Tcm4TlvDq8ikWAM";
 
-// ── Hold music URLs for transfer — reliable public-domain MP3s ────────────────
-// These must be directly fetchable by Telnyx without auth or redirects
+// ── Hold music URLs — served through our own audio proxy so Telnyx can fetch
+// them reliably with proper browser-like User-Agent headers.
 const HOLD_MUSIC_URLS: Record<string, string> = {
-  none:      "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-  jazz:      "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
-  corporate: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-  smooth:    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
-  classical: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+  none:      `${BACKEND_WEBHOOK_URL}/api/audio/hold/default`,
+  jazz:      `${BACKEND_WEBHOOK_URL}/api/audio/hold/jazz`,
+  corporate: `${BACKEND_WEBHOOK_URL}/api/audio/hold/corporate`,
+  smooth:    `${BACKEND_WEBHOOK_URL}/api/audio/hold/smooth`,
+  classical: `${BACKEND_WEBHOOK_URL}/api/audio/hold/classical`,
 };
 const DEFAULT_HOLD_MUSIC_URL = HOLD_MUSIC_URLS.corporate!;
 
@@ -65,11 +65,12 @@ function resolveHoldMusicUrl(holdMusic?: string | null): string {
   return HOLD_MUSIC_URLS[holdMusic] ?? DEFAULT_HOLD_MUSIC_URL;
 }
 
-// Background sound URLs — played with overlay:true so they mix beneath the conversation audio
+// Background sound URLs — played as overlay:true so they mix beneath the AI voice.
+// Served via our audio proxy so Telnyx can reliably fetch actual ambient sounds.
 const BACKGROUND_SOUND_URLS: Record<string, string> = {
-  office:  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-  typing:  "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
-  cafe:    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
+  office:  `${BACKEND_WEBHOOK_URL}/api/audio/ambient/office`,
+  typing:  `${BACKEND_WEBHOOK_URL}/api/audio/ambient/typing`,
+  cafe:    `${BACKEND_WEBHOOK_URL}/api/audio/ambient/cafe`,
 };
 
 // System-prompt context injected so the AI's language matches the selected environment
@@ -392,18 +393,24 @@ async function startTranscriptionAndGreet(callControlId: string): Promise<void> 
 
   // If a background sound is selected, inject it as an overlay audio track.
   // overlay:true mixes the audio underneath the call rather than replacing it.
+  // We delay 500 ms so the greeting TTS goes out first and the overlay doesn't
+  // race with the initial playback_start for the greeting audio.
+  // loop:true keeps the ambient sound cycling for the entire call duration.
   const bgSound = bridge.backgroundSound;
   if (bgSound && bgSound !== "none" && BACKGROUND_SOUND_URLS[bgSound]) {
     backgroundSoundActive.add(callControlId);
-    telnyxAction(callControlId, "playback_start", {
-      audio_url: BACKGROUND_SOUND_URLS[bgSound],
-      overlay: true,
-      loop: false,
-    }).catch((err) => {
-      logger.warn({ callControlId, bgSound, err: String(err) }, "Background sound injection failed (non-fatal)");
-      backgroundSoundActive.delete(callControlId);
-    });
-    logger.info({ callControlId, bgSound }, "Background sound injected as overlay");
+    setTimeout(() => {
+      telnyxAction(callControlId, "playback_start", {
+        audio_url: BACKGROUND_SOUND_URLS[bgSound],
+        overlay: true,
+        loop: true,
+      }).then(() => {
+        logger.info({ callControlId, bgSound }, "Background sound overlay started");
+      }).catch((err) => {
+        logger.warn({ callControlId, bgSound, err: String(err) }, "Background sound injection failed (non-fatal)");
+        backgroundSoundActive.delete(callControlId);
+      });
+    }, 500);
   }
 
   // Speak the greeting via ElevenLabs TTS
