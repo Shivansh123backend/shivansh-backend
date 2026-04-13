@@ -291,7 +291,7 @@ const aiSpeakEndedAt            = new Map<string, number>();          // callCon
 const lastProcessedText         = new Map<string, { text: string; ts: number }>(); // dedup window
 const pendingTransferAfterPlay  = new Set<string>();                  // callControlId → execute transfer after next playback.ended
 const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
-const AI_SPEAK_COOLDOWN_MS      = 1400;                               // ignore transcriptions this many ms after AI speaks
+const AI_SPEAK_COOLDOWN_MS      = 600;                                // ignore transcriptions this many ms after AI speaks
 
 /** Stable numeric ID from a callControlId string (for live monitor without DB row) */
 function syntheticId(callControlId: string): number {
@@ -386,7 +386,7 @@ async function startTranscriptionAndGreet(callControlId: string): Promise<void> 
   // Start Telnyx real-time transcription (STT)
   await telnyxAction(callControlId, "transcription_start", {
     language: "en",
-    transcription_engine: "A",
+    transcription_engine: "B",
     interim_results: false,
   });
 
@@ -515,9 +515,9 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
   try {
     const completion = await openai.chat.completions.create({
       model: AI_MODEL,
-      max_tokens: 220,
-      temperature: 0.75,
-      messages: history.slice(-22) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
+      max_tokens: 160,
+      temperature: 0.7,
+      messages: history.slice(-14) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
     });
     aiText = (completion.choices[0]?.message?.content ?? "").trim();
     logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "OpenAI response received");
