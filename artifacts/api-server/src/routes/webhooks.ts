@@ -40,12 +40,11 @@ setInterval(() => {
 }, 60_000);
 
 // ── Ambient background sounds ─────────────────────────────────────────────────
-// Played with overlay:true + loop:-1 throughout the call to simulate office env.
-// These are royalty-free files. "office" and "typing" are the most common picks.
+// Reliable CDN-hosted royalty-free loops.
 const AMBIENT_SOUNDS: Record<string, string> = {
-  office: "https://cdn.pixabay.com/audio/2022/03/15/audio_8e3d9c1b8b.mp3",
-  typing: "https://cdn.pixabay.com/audio/2022/10/30/audio_79186ddc2e.mp3",
-  cafe:   "https://cdn.pixabay.com/audio/2022/08/04/audio_6e1e9b3154.mp3",
+  office: "https://assets.mixkit.co/sfx/preview/mixkit-office-ambience-447.mp3",
+  typing: "https://assets.mixkit.co/sfx/preview/mixkit-typing-on-keyboard-2583.mp3",
+  cafe:   "https://assets.mixkit.co/sfx/preview/mixkit-restaurant-ambience-255.mp3",
 };
 
 // ── Per-call conversation state ───────────────────────────────────────────────
@@ -126,13 +125,13 @@ async function speak(callControlId: string, text: string): Promise<void> {
 }
 
 async function gatherSpeech(callControlId: string): Promise<void> {
-  // DO NOT include minimum_digits/maximum_digits — enables speech-only (STT) mode.
-  // gather_timeout is in SECONDS (Telnyx API); gather_after_silence is in ms.
-  // language explicitly enables cloud speech recognition.
+  // speech_type: "cloud" is REQUIRED — without it Telnyx defaults to DTMF (keypad)
+  // mode and completely ignores voice input. gather_timeout is in SECONDS.
   await telnyxAction(callControlId, "gather", {
-    gather_after_silence: 2000,   // 2s silence = end of utterance
-    gather_timeout: 30,           // 30 seconds max wait (NOT ms — Telnyx uses seconds)
-    language: "en-US",            // required to enable STT cloud recognition mode
+    gather_after_silence: 2000,   // 2s of silence after speech = end of utterance (ms)
+    gather_timeout: 30,           // 30 seconds max wait for speech to start (seconds)
+    speech_type: "cloud",         // CRITICAL: enables cloud-based speech-to-text
+    language: "en-US",
   });
 }
 
@@ -175,10 +174,11 @@ async function speakEleven(
       expires: Date.now() + 3 * 60 * 1000,
     });
 
-    await telnyxAction(callControlId, "play_audio", {
+    // Correct Telnyx action name is "playback_start" (not "play_audio")
+    await telnyxAction(callControlId, "playback_start", {
       audio_url: `${BACKEND_WEBHOOK_URL}/api/audio/${audioId}`,
-      loop: 0,
-      overlay: true,   // layer on top of ambient background loop without stopping it
+      loop: false,
+      overlay: false,
     });
 
     logger.info({ callControlId, voiceId, chars: text.length }, "ElevenLabs TTS played");
@@ -196,9 +196,10 @@ async function startBackgroundAudio(callControlId: string, soundKey: string): Pr
     return;
   }
   try {
-    await telnyxAction(callControlId, "play_audio", {
+    // "playback_start" is the correct Telnyx action name (not "play_audio")
+    await telnyxAction(callControlId, "playback_start", {
       audio_url: url,
-      loop: -1,      // loop indefinitely — never fires call.playback.ended
+      loop: true,    // loop indefinitely
       overlay: true, // plays under the AI voice without interrupting it
     });
     logger.info({ callControlId, soundKey }, "Background ambient audio started");
