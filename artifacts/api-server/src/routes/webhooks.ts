@@ -92,18 +92,16 @@ async function speak(callControlId: string, text: string): Promise<void> {
     payload_type: "text",
     voice: "female",
     language: "en-US",
-    service_level: "premium",
   });
 }
 
 async function gatherSpeech(callControlId: string): Promise<void> {
+  // DO NOT include minimum_digits/maximum_digits — 0 is invalid and causes 422.
+  // Omitting them entirely enables speech-only (STT) gathering mode.
   await telnyxAction(callControlId, "gather", {
-    maximum_digits: 0,
-    minimum_digits: 0,
-    gather_after_silence: 2500,   // 2.5s — gives callers time to finish a sentence
-    gather_timeout: 30000,
-    voice: "female",
-    language: "en-US",
+    gather_after_silence: 2500,   // 2.5s silence = end of utterance
+    gather_timeout: 30000,        // 30s max wait before timeout event
+    action_on_empty_result: true, // always fire gather event, even on silence
   });
 }
 
