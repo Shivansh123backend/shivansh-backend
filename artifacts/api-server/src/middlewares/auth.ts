@@ -10,15 +10,22 @@ declare global {
 }
 
 export function authenticate(req: Request, res: Response, next: NextFunction): void {
+  // Accept token from Authorization header OR ?token= query param
+  // (query param fallback is needed for audio src= URLs and direct browser navigation)
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
+  const queryToken = typeof req.query.token === "string" ? req.query.token : null;
+
+  const rawToken = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : queryToken;
+
+  if (!rawToken) {
     res.status(401).json({ error: "Missing or invalid authorization header" });
     return;
   }
 
-  const token = authHeader.slice(7);
   try {
-    req.user = verifyToken(token);
+    req.user = verifyToken(rawToken);
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });

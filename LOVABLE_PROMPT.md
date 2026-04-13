@@ -992,8 +992,8 @@ GET    /api/call-logs/:id/export    ?format=txt|pdf → blob
 GET    /api/voices                  → Voice[]
 POST   /api/voices                  Create
 GET    /api/voices/elevenlabs       → ElevenLabsVoice[]
-GET    /api/voices/:id/preview      → audio blob
-POST   /api/voices/:id/sample       { text } → audio blob
+GET    /api/voices/:id/preview      → audio/mpeg blob  ⚠️ see auth note below
+POST   /api/voices/:id/sample       { text } → audio/mpeg blob  ⚠️ see auth note below
 
 GET    /api/agents                  → Agent[]
 POST   /api/agents                  Create
@@ -1009,6 +1009,50 @@ DELETE /api/numbers/:id
 
 GET    /api/healthz                 → { ok: true }
 ```
+
+### ⚠️ CRITICAL — Voice Audio Preview Implementation
+
+Both `/api/voices/:id/preview` and `/api/voices/:id/sample` require authentication.
+**Browser `<audio src="...">` elements NEVER send `Authorization` headers** — using these
+URLs as a direct `src` attribute returns 401 and the audio fails silently.
+
+The backend accepts `?token=` as a query-param fallback on **all** endpoints.
+Use this pattern for voice audio:
+
+```typescript
+// Option A — ?token= query param (simplest, works with <audio src>)
+const token = localStorage.getItem("auth_token");
+const previewSrc = `https://shivanshbackend.replit.app/api/voices/${voice.id}/preview?token=${token}`;
+const sampleSrc  = `https://shivanshbackend.replit.app/api/voices/${voice.id}/sample?token=${token}`;
+// Can use directly: new Audio(previewSrc).play()
+// Or:              <audio src={previewSrc} controls />
+
+// Option B — fetch blob → createObjectURL (if you prefer not to expose token in URL)
+const res = await fetch(`https://shivanshbackend.replit.app/api/voices/${voice.id}/preview`, {
+  headers: { Authorization: `Bearer ${token}` },
+});
+const blob = await res.blob();
+const src = URL.createObjectURL(blob);
+const audio = new Audio(src);
+audio.onended = () => URL.revokeObjectURL(src);
+audio.play();
+```
+
+For **sample generation** (voices without a previewUrl, ElevenLabs only):
+```typescript
+const token = localStorage.getItem("auth_token");
+const res = await fetch(`https://shivanshbackend.replit.app/api/voices/${voice.id}/sample?token=${token}`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ text: "Hello! I'm your AI voice assistant." }),
+});
+const blob = await res.blob();
+const src = URL.createObjectURL(blob);
+new Audio(src).play();
+```
+
+A voice card can generate a sample only if: `voice.provider === "elevenlabs"` AND the voiceId
+matches `/^[a-zA-Z0-9]{15,}$/` (real ElevenLabs IDs — not placeholder strings).
 
 ### WebSocket — Socket.IO
 ```
