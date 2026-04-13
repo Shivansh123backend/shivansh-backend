@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { callsTable, leadsTable, campaignsTable, aiAgentsTable, phoneNumbersTable } from "@workspace/db";
+import { callsTable, callLogsTable, leadsTable, campaignsTable, aiAgentsTable, phoneNumbersTable } from "@workspace/db";
 import { eq, and, desc, gte, count, sql } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { enqueueCall } from "../queue/callQueue.js";
@@ -9,6 +9,7 @@ import { findAvailableAgentForCampaign } from "../services/routingService.js";
 import { callWithFallback } from "../providers/registry.js";
 import { emitToSupervisors, emitToAgent } from "../websocket/index.js";
 import { createAuditLog } from "../lib/audit.js";
+import { getAllActiveBridges } from "../services/elevenBridge.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -147,14 +148,39 @@ router.get("/calls", authenticate, async (req, res): Promise<void> => {
 });
 
 // ── GET /calls/live — active calls snapshot ───────────────────────────────────
+// Combines bridge-based in-progress calls (real-time) with queued calls from DB
 router.get("/calls/live", authenticate, async (req, res): Promise<void> => {
-  const liveCalls = await db
+  // Bridge-based calls: actively connected via ElevenLabs ConvAI
+  const bridgeCalls = getAllActiveBridges().map(b => {
+    let h = 0;
+    for (let i = 0; i < b.callControlId.length; i++) {
+      h = (Math.imul(31, h) + b.callControlId.charCodeAt(i)) | 0;
+    }
+    return {
+      id: Math.abs(h) % 9_000_000 + 1_000_000,
+      callControlId: b.callControlId,
+      campaignId: b.campaignId,
+      leadId: b.leadId,
+      phoneNumber: b.callerNumber,
+      providerUsed: "telnyx",
+      status: "in_progress",
+      startedAt: b.startedAt.toISOString(),
+    };
+  });
+
+  // DB-queued calls not yet answered (ringing / queued)
+  const queuedCalls = await db
     .select()
     .from(callsTable)
-    .where(sql`status IN ('initiated', 'ringing', 'in_progress', 'queued')`)
+    .where(sql`status IN ('queued', 'ringing', 'initiated')`)
     .orderBy(desc(callsTable.createdAt))
     .limit(50);
-  res.json(liveCalls);
+
+  // Deduplicate: if DB has an in-progress call for same phone+campaign, bridge version wins
+  const bridgePhones = new Set(bridgeCalls.map(b => b.phoneNumber));
+  const filtered = queuedCalls.filter(c => !bridgePhones.has(c.selectedNumber ?? ""));
+
+  res.json([...bridgeCalls, ...filtered]);
 });
 
 // ── GET /calls/stats/today — today's call stats ───────────────────────────────
@@ -162,20 +188,25 @@ router.get("/calls/stats/today", authenticate, async (req, res): Promise<void> =
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
 
-  const rows = await db
-    .select({ status: callsTable.status, cnt: count() })
-    .from(callsTable)
-    .where(gte(callsTable.createdAt, startOfDay))
-    .groupBy(callsTable.status);
+  // Count from call_logs table (webhook-driven calls finalize here)
+  const logRows = await db
+    .select({ status: callLogsTable.status, cnt: count() })
+    .from(callLogsTable)
+    .where(gte(callLogsTable.timestamp, startOfDay))
+    .groupBy(callLogsTable.status);
 
   let total = 0;
   let completed = 0;
   let failed = 0;
-  for (const r of rows) {
+  for (const r of logRows) {
     total += Number(r.cnt);
     if (r.status === "completed") completed += Number(r.cnt);
     if (r.status === "failed" || r.status === "no_answer") failed += Number(r.cnt);
   }
+
+  // Also add currently active bridge calls to total
+  total += getAllActiveBridges().length;
+
   res.json({ total, completed, failed, successRate: total > 0 ? Math.round((completed / total) * 100) : 0 });
 });
 

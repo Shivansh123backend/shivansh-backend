@@ -501,6 +501,11 @@ export function closeBridge(callControlId: string): void {
   logger.info({ callControlId }, "Bridge closed");
 }
 
+/** Return a snapshot of all currently active bridges (for live monitor) */
+export function getAllActiveBridges(): BridgeInfo[] {
+  return Array.from(activeBridges.values());
+}
+
 /** Pre-warm: ensure the base ElevenLabs agent exists on server start */
 export async function warmupElevenAgent(): Promise<void> {
   if (!ELEVENLABS_API_KEY) {

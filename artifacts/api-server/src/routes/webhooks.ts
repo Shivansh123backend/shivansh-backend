@@ -26,9 +26,11 @@ import {
   initBridge,
   getBridgeInfo,
   getBridgeSessionToken,
+  getAllActiveBridges,
   closeBridge,
   setRecordingUrl,
 } from "../services/elevenBridge.js";
+import { emitToSupervisors } from "../websocket/index.js";
 
 const router: IRouter = Router();
 
@@ -178,6 +180,15 @@ const callMessages         = new Map<string, ConvMessage[]>();   // callControlI
 const aiSpeaking           = new Set<string>();                  // callControlId → AI currently speaking
 const callOwnNumber        = new Map<string, string>();          // callControlId → our campaign phone #
 const missedTranscription  = new Map<string, string>();          // callControlId → transcript spoken during AI speech
+
+/** Stable numeric ID from a callControlId string (for live monitor without DB row) */
+function syntheticId(callControlId: string): number {
+  let h = 0;
+  for (let i = 0; i < callControlId.length; i++) {
+    h = (Math.imul(31, h) + callControlId.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h) % 9_000_000 + 1_000_000;
+}
 
 function makeAudioToken(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(8)))
@@ -409,6 +420,13 @@ async function executeTransfer(
   );
 
   logger.info({ callControlId, to: toNumber }, "Telnyx transfer initiated — hold music active, ringing human agent");
+
+  // Live monitor: notify supervisors of transfer
+  emitToSupervisors("call:transferred", {
+    callId: syntheticId(callControlId),
+    callControlId,
+    transferTo: toNumber,
+  });
 }
 
 // ── Campaign lookup by called number ─────────────────────────────────────────
@@ -691,6 +709,18 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       // Open Telnyx media fork → ElevenLabs ConvAI (STT + LLM + TTS in one pipeline)
       await startElevenLabsFork(callControlId);
+
+      // Live monitor: announce active call to supervisors
+      emitToSupervisors("call:started", {
+        id: syntheticId(callControlId),
+        callControlId,
+        campaignId,
+        leadId: lead?.id,
+        phoneNumber: ctx.phone,
+        providerUsed: "telnyx",
+        status: "in_progress",
+        startedAt: new Date().toISOString(),
+      });
       return;
     }
 
@@ -755,6 +785,24 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       // Open Telnyx media fork → ElevenLabs ConvAI (STT + LLM + TTS in one pipeline)
       await startElevenLabsFork(callControlId);
+
+      // Live monitor: notify supervisors of inbound call
+      const inboundId = syntheticId(callControlId);
+      emitToSupervisors("call:inbound", {
+        callId: inboundId,
+        callControlId,
+        from: fromNumber,
+        campaignId: campaign.id,
+      });
+      emitToSupervisors("call:started", {
+        id: inboundId,
+        callControlId,
+        campaignId: campaign.id,
+        phoneNumber: fromNumber,
+        providerUsed: "telnyx",
+        status: "in_progress",
+        startedAt: new Date().toISOString(),
+      });
       return;
     }
 
@@ -862,6 +910,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           "Inbound call finalized"
         );
       }
+
+      // Live monitor: call ended
+      emitToSupervisors("call:ended", {
+        id: syntheticId(callControlId),
+        callControlId,
+        disposition,
+        duration: durationSecs,
+      });
 
       // Stop the media fork cleanly (ElevenLabs bridge tears down its WS automatically)
       await telnyxAction(callControlId, "fork_stop", {}).catch(() => {});
