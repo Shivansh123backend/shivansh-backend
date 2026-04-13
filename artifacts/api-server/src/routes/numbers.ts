@@ -50,7 +50,7 @@ router.patch("/numbers/:id", authenticate, requireRole("admin"), async (req, res
   }
 
   const updateSchema = z.object({
-    campaignId: z.number().optional(),
+    campaignId: z.union([z.number(), z.null()]).optional(),
     status: z.enum(["active", "inactive"]).optional(),
     priority: z.number().optional(),
   });
@@ -61,9 +61,15 @@ router.patch("/numbers/:id", authenticate, requireRole("admin"), async (req, res
     return;
   }
 
+  // Build the update payload — include campaignId even if explicitly null (to unassign)
+  const updatePayload: Record<string, unknown> = {};
+  if (parsed.data.status !== undefined) updatePayload.status = parsed.data.status;
+  if (parsed.data.priority !== undefined) updatePayload.priority = parsed.data.priority;
+  if ("campaignId" in parsed.data) updatePayload.campaignId = parsed.data.campaignId ?? null;
+
   const [updated] = await db
     .update(phoneNumbersTable)
-    .set(parsed.data)
+    .set(updatePayload)
     .where(eq(phoneNumbersTable.id, id))
     .returning();
 

@@ -4,6 +4,7 @@ import {
   useAddNumber,
   useListCampaigns,
   getListNumbersQueryKey,
+  customFetch,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Layout, PageHeader } from "@/components/layout";
@@ -15,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, X } from "lucide-react";
+import { Plus, X, RefreshCw, CheckCircle2 } from "lucide-react";
 
 const PROVIDER_STYLES: Record<string, string> = {
   voip: "border-blue-500/30 text-blue-400 bg-blue-500/5",
@@ -97,6 +98,77 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
   );
 }
 
+// ── Inline campaign assignment cell ───────────────────────────────────────────
+function CampaignCell({
+  numberId,
+  currentCampaignId,
+  campaigns,
+  campaignMap,
+}: {
+  numberId: number;
+  currentCampaignId?: number | null;
+  campaigns: { id: number; name: string }[];
+  campaignMap: Record<number, string>;
+}) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const handleChange = async (value: string) => {
+    const newCampaignId = value === "__none__" ? null : parseInt(value);
+    setSaving(true);
+    setSaved(false);
+    try {
+      const token = localStorage.getItem("auth_token");
+      const res = await fetch(`/api/numbers/${numberId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ campaignId: newCampaignId }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      // Immediately refresh the numbers list
+      await qc.invalidateQueries({ queryKey: getListNumbersQueryKey() });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      toast({ title: newCampaignId ? `Assigned to ${campaignMap[newCampaignId] ?? "campaign"}` : "Unassigned from campaign" });
+    } catch {
+      toast({ title: "Failed to update assignment", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <Select
+        value={currentCampaignId ? String(currentCampaignId) : "__none__"}
+        onValueChange={handleChange}
+        disabled={saving}
+      >
+        <SelectTrigger className="font-mono text-[11px] h-7 w-44 border-dashed border-border/60 bg-transparent hover:border-primary/40 transition-colors">
+          <SelectValue placeholder="Unassigned" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__none__" className="font-mono text-xs text-muted-foreground">
+            — Unassigned —
+          </SelectItem>
+          {campaigns.map(c => (
+            <SelectItem key={c.id} value={String(c.id)} className="font-mono text-xs">
+              {c.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {saving && <RefreshCw className="w-3 h-3 animate-spin text-muted-foreground flex-shrink-0" />}
+      {saved && !saving && <CheckCircle2 className="w-3 h-3 text-green-400 flex-shrink-0" />}
+    </div>
+  );
+}
+
 export default function NumbersPage() {
   const { data: numbers, isLoading } = useListNumbers();
   const { data: campaigns } = useListCampaigns();
@@ -137,7 +209,7 @@ export default function NumbersPage() {
                     ))}
                   </tr>
                 ))
-              ) : (numbers ?? []).map((n: { id: number; phoneNumber: string; provider: string; campaignId?: number; priority?: number; status: string }) => (
+              ) : (numbers ?? []).map((n: { id: number; phoneNumber: string; provider: string; campaignId?: number | null; priority?: number; status: string }) => (
                 <tr key={n.id} className="border-b border-border/30 hover:bg-white/2 transition-colors">
                   <td className="px-4 py-3 text-foreground font-mono font-medium">{n.phoneNumber}</td>
                   <td className="px-4 py-3">
@@ -145,7 +217,14 @@ export default function NumbersPage() {
                       {n.provider}
                     </Badge>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{n.campaignId ? campaignMap[n.campaignId] ?? `#${n.campaignId}` : "Unassigned"}</td>
+                  <td className="px-4 py-2">
+                    <CampaignCell
+                      numberId={n.id}
+                      currentCampaignId={n.campaignId}
+                      campaigns={campaigns ?? []}
+                      campaignMap={campaignMap}
+                    />
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground">{n.priority ?? 1}</td>
                   <td className="px-4 py-3"><StatusBadge status={n.status} /></td>
                 </tr>
