@@ -313,7 +313,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
   try {
     // ── 0. Outbound: AMD result — hang up on voicemail ───────────────────────
-    if (eventType === "call.machine.detection.ended") {
+    // Telnyx sends "call.machine.premium.detection.ended" for premium AMD
+    if (eventType === "call.machine.detection.ended" || eventType === "call.machine.premium.detection.ended") {
       const result: string = payload.result ?? "";
       logger.info({ callControlId, result }, "AMD result");
 
@@ -341,12 +342,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     }
 
     // ── 1a. Outbound call answered by human ──────────────────────────────────
-    if (eventType === "call.answered" && direction === "outgoing") {
+    // Telnyx sends call.answered with direction="" (not "outgoing"), so we
+    // detect outbound calls by the presence of our client_state payload.
+    if (eventType === "call.answered") {
       const ctx = clientStateRaw ? decodeClientState(clientStateRaw) : null;
 
+      // If no client_state → this is an inbound answered call; skip (handled by call.initiated)
       if (!ctx) {
-        logger.warn({ callControlId }, "Outbound call.answered — no valid client_state; hanging up");
-        try { await telnyxAction(callControlId, "hangup", {}); } catch { /* ok */ }
+        logger.info({ callControlId, direction }, "call.answered without client_state — inbound or unknown, skipping");
         return;
       }
 
@@ -515,7 +518,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     if (eventType === "call.hangup") {
       const state = activeCalls.get(callControlId);
       if (state) {
-        if (direction === "outgoing" || clientStateRaw) {
+        // Outbound calls always have client_state encoded on them
+        if (clientStateRaw) {
           logger.info({ callControlId, campaignId: state.campaignId, turns: state.turnCount }, "Outbound call ended");
           await finalizeOutboundCall(callControlId, state);
         } else {

@@ -77,14 +77,6 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
       webhook_url: `${BACKEND_WEBHOOK_URL}/api/webhooks/telnyx`,
       webhook_api_version: "2",
       client_state: clientState,
-      // AMD (Answering Machine Detection) — hang up on voicemail
-      answering_machine_detection: "premium",
-      answering_machine_detection_config: {
-        after_silence_millis: 800,
-        between_words_silence_millis: 50,
-        maximum_words: 3,
-        total_analysis_time_millis: 5000,
-      },
     };
 
     const response = await axios.post(`${TELNYX_API_BASE}/calls`, body, {
