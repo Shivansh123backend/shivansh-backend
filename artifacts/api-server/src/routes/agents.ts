@@ -87,4 +87,40 @@ router.get("/ai-agents/:id/voices", authenticate, async (req, res): Promise<void
   res.json(voices);
 });
 
+// ── REST-conventional aliases — /agents mirrors /ai-agents ────────────────────
+router.get("/agents", authenticate, async (_req, res): Promise<void> => {
+  const agents = await db.select().from(aiAgentsTable);
+  res.json(agents);
+});
+
+router.post("/agents", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const parsed = createAgentSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  const [agent] = await db.insert(aiAgentsTable).values(parsed.data).returning();
+  res.status(201).json(agent);
+});
+
+router.get("/agents/:id/voices", authenticate, async (req, res): Promise<void> => {
+  const agentId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(agentId)) { res.status(400).json({ error: "Invalid agent ID" }); return; }
+  const voices = await db
+    .select({ id: agentVoicesTable.id, agentId: agentVoicesTable.agentId, voiceId: agentVoicesTable.voiceId, priority: agentVoicesTable.priority, voice: voicesTable })
+    .from(agentVoicesTable)
+    .innerJoin(voicesTable, eq(agentVoicesTable.voiceId, voicesTable.id))
+    .where(eq(agentVoicesTable.agentId, agentId))
+    .orderBy(agentVoicesTable.priority);
+  res.json(voices);
+});
+
+router.post("/agents/:id/voices", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const agentId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(agentId)) { res.status(400).json({ error: "Invalid agent ID" }); return; }
+  const [agent] = await db.select().from(aiAgentsTable).where(eq(aiAgentsTable.id, agentId));
+  if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+  const parsed = addVoiceSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  const [agentVoice] = await db.insert(agentVoicesTable).values({ agentId, voiceId: parsed.data.voiceId, priority: parsed.data.priority }).returning();
+  res.status(201).json(agentVoice);
+});
+
 export default router;

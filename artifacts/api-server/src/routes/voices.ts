@@ -31,6 +31,17 @@ router.post("/voices/create", authenticate, requireRole("admin"), async (req, re
   res.status(201).json(voice);
 });
 
+// REST-conventional alias: POST /voices → same as POST /voices/create
+router.post("/voices", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const parsed = createVoiceSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const [voice] = await db.insert(voicesTable).values(parsed.data).returning();
+  res.status(201).json(voice);
+});
+
 router.get("/voices", authenticate, async (req, res): Promise<void> => {
   const voices = await db.select().from(voicesTable);
   res.json(voices);

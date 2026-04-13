@@ -96,4 +96,29 @@ router.patch("/users/me/status", authenticate, async (req, res): Promise<void> =
   res.json(updated);
 });
 
+// REST-conventional alias: POST /users → same as POST /users/create
+router.post("/users", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const parsed = createUserSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const { name, email, password, role } = parsed.data;
+
+  if (role === "agent") {
+    const [{ count: agentCount }] = await db.select({ count: count() }).from(usersTable).where(eq(usersTable.role, "agent"));
+    if (agentCount >= config.maxAgents) {
+      res.status(400).json({ error: `Maximum agent limit of ${config.maxAgents} reached` });
+      return;
+    }
+  }
+
+  const [existing] = await db.select().from(usersTable).where(eq(usersTable.email, email));
+  if (existing) { res.status(409).json({ error: "Email already in use" }); return; }
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  const [user] = await db.insert(usersTable).values({ name, email, passwordHash, role, status: "available" }).returning({
+    id: usersTable.id, name: usersTable.name, email: usersTable.email, role: usersTable.role,
+  });
+  res.status(201).json(user);
+});
+
 export default router;

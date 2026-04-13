@@ -544,4 +544,68 @@ router.get("/campaigns/:id/agents", authenticate, async (req, res): Promise<void
   res.json(agents);
 });
 
+// ── REST-conventional aliases (/:id/start|stop|pause|resume and POST /campaigns) ──
+// These mirror the /start/:id and /stop/:id routes so either URL shape works.
+
+router.post("/campaigns", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const parsed = createCampaignSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  const [campaign] = await db.insert(campaignsTable).values(parsed.data).returning();
+  res.status(201).json(campaign);
+});
+
+async function getCampaignOrFail(id: number, res: import("express").Response): Promise<typeof campaignsTable.$inferSelect | null> {
+  const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, id));
+  if (!campaign) { res.status(404).json({ error: "Campaign not found" }); return null; }
+  return campaign;
+}
+
+router.post("/campaigns/:id/start", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
+  const campaign = await getCampaignOrFail(id, res);
+  if (!campaign) return;
+  if (campaign.status === "active") { res.status(400).json({ error: "Campaign is already active" }); return; }
+  const [updated] = await db.update(campaignsTable).set({ status: "active" }).where(eq(campaignsTable.id, id)).returning();
+  emitToSupervisors("campaign:started", { campaignId: id, name: campaign.name });
+  res.json(updated);
+  if (campaign.type === "outbound") {
+    triggerCampaignCalls(id, campaign).catch((err) => console.error("Background call triggering failed", err));
+  }
+});
+
+router.post("/campaigns/:id/stop", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
+  const campaign = await getCampaignOrFail(id, res);
+  if (!campaign) return;
+  const [updated] = await db.update(campaignsTable).set({ status: "paused" }).where(eq(campaignsTable.id, id)).returning();
+  emitToSupervisors("campaign:stopped", { campaignId: id, name: campaign.name });
+  res.json(updated);
+});
+
+router.post("/campaigns/:id/pause", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
+  const campaign = await getCampaignOrFail(id, res);
+  if (!campaign) return;
+  const [updated] = await db.update(campaignsTable).set({ status: "paused" }).where(eq(campaignsTable.id, id)).returning();
+  emitToSupervisors("campaign:stopped", { campaignId: id, name: campaign.name });
+  res.json(updated);
+});
+
+router.post("/campaigns/:id/resume", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
+  const campaign = await getCampaignOrFail(id, res);
+  if (!campaign) return;
+  if (campaign.status === "active") { res.status(400).json({ error: "Campaign is already active" }); return; }
+  const [updated] = await db.update(campaignsTable).set({ status: "active" }).where(eq(campaignsTable.id, id)).returning();
+  emitToSupervisors("campaign:started", { campaignId: id, name: campaign.name });
+  res.json(updated);
+  if (campaign.type === "outbound") {
+    triggerCampaignCalls(id, campaign).catch((err) => console.error("Background call triggering failed", err));
+  }
+});
+
 export default router;

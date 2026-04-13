@@ -960,22 +960,20 @@ GET    /api/auth/me                 → { user }
 POST   /api/auth/logout
 
 GET    /api/campaigns               → Campaign[]
-POST   /api/campaigns               Create
-PATCH  /api/campaigns/:id           Update
-DELETE /api/campaigns/:id
-POST   /api/campaigns/:id/start
-POST   /api/campaigns/:id/pause
-POST   /api/campaigns/:id/resume
+POST   /api/campaigns               { name, type, routingType, agentId?, maxConcurrentCalls?, agentPrompt?, voice?, fromNumber? } → Campaign
+PATCH  /api/campaigns/:id           Update fields
+POST   /api/campaigns/:id/start     → Campaign (status: "active")
+POST   /api/campaigns/:id/stop      → Campaign (status: "paused")
+POST   /api/campaigns/:id/pause     → Campaign (status: "paused")
+POST   /api/campaigns/:id/resume    → Campaign (status: "active")
 POST   /api/campaigns/:id/test-call { phone } → { success, jobId, fromNumber, voice, error? }
-POST   /api/campaigns/:id/reset-leads
+POST   /api/campaigns/:id/reset-leads → { reset, campaignId }
+POST   /api/campaigns/:id/agents    { agentId } → Assign human agent
 
-GET    /api/leads                   ?campaignId&status&limit&offset → Lead[]
-POST   /api/leads                   Create single
-POST   /api/leads/bulk              { leads[], campaignId }
-GET    /api/leads/:id
-PATCH  /api/leads/:id
-DELETE /api/leads/:id
-GET    /api/leads/export/csv        ?campaignId
+GET    /api/leads                   ?campaignId&status → Lead[]
+POST   /api/leads                   { name, phone, email, campaignId, source? } → Lead
+POST   /api/leads/add               Same as POST /api/leads
+POST   /api/leads/import-sheet      { leads: Lead[], campaignId } → bulk import
 
 GET    /api/calls                   → Call[]
 GET    /api/calls/live              → LiveCall[]
@@ -988,26 +986,35 @@ POST   /api/calls/webrtc-token      → { token }
 GET    /api/call-logs               ?campaignId&status → CallLog[]
 GET    /api/call-logs/:id
 GET    /api/call-logs/:id/export    ?format=txt|pdf → blob
+PATCH  /api/call-logs/:id/disposition { disposition } → CallLog
 
 GET    /api/voices                  → Voice[]
-POST   /api/voices                  Create
-GET    /api/voices/elevenlabs       → ElevenLabsVoice[]
+POST   /api/voices                  { name, provider, voiceId, gender, accent?, language?, previewUrl?, description? } → Voice
+GET    /api/voices/elevenlabs       → raw ElevenLabs voice list
+POST   /api/voices/elevenlabs/sync  → { synced, updated, total }
 GET    /api/voices/:id/preview      → audio/mpeg blob  ⚠️ see auth note below
 POST   /api/voices/:id/sample       { text } → audio/mpeg blob  ⚠️ see auth note below
 
-GET    /api/agents                  → Agent[]
-POST   /api/agents                  Create
-GET    /api/agents/available        → Agent[]
+GET    /api/agents                  → AiAgent[]   (AI agents — call personas)
+POST   /api/agents                  { name, prompt, language?, defaultVoiceId? } → AiAgent
+GET    /api/agents/:id/voices       → AgentVoice[]
+POST   /api/agents/:id/voices       { voiceId, priority? } → AgentVoice
+GET    /api/agents/available        → { available: bool, ... }
 
 GET    /api/users                   → User[]
-POST   /api/users                   Create
-PATCH  /api/users/me/status         { status }
+POST   /api/users                   { name, email, password, role } → User
+PATCH  /api/users/me/status         { status: "available"|"busy"|"offline" }
 
 GET    /api/numbers                 → PhoneNumber[]
-POST   /api/numbers                 { phoneNumber, provider, campaignId?, priority? }
+POST   /api/numbers/add             { phoneNumber, provider, campaignId?, priority? } → PhoneNumber
+PATCH  /api/numbers/:id             { status?, campaignId?, priority? }
 DELETE /api/numbers/:id
 
-GET    /api/healthz                 → { ok: true }
+GET    /api/dashboard/summary       → { total_calls, active_calls, completed_calls }
+GET    /api/dashboard/live-calls    → LiveCall[]
+GET    /api/dashboard/agents        → AgentStatus[]
+
+GET    /api/healthz                 → { status: "ok" }
 ```
 
 ### ⚠️ CRITICAL — Voice Audio Preview Implementation
