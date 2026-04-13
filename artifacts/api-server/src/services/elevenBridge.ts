@@ -234,6 +234,9 @@ async function connectToElevenLabs(
     // Override voice + prompt + first message per call
     elevenWs.send(JSON.stringify({
       type: "conversation_initiation_client_data",
+      // Tell ElevenLabs what audio format it will receive / should send
+      // We convert µ-law 8kHz → PCM 16kHz before sending
+      custom_llm_extra_body: {},
       conversation_config_override: {
         agent: {
           prompt: { prompt: bridge.systemPrompt },
@@ -243,10 +246,16 @@ async function connectToElevenLabs(
         tts: {
           voice_id: bridge.voiceId,
           model_id: "eleven_turbo_v2_5",
+          optimize_streaming_latency: 3,
+        },
+        asr: {
+          quality: "high",
+          provider: "elevenlabs",
+          user_input_audio_format: "pcm_16000",
         },
         turn: {
-          turn_timeout: 7,
-          silence_end_call_timeout: 20,
+          turn_timeout: 8,
+          silence_end_call_timeout: 25,
         },
       },
     }));
