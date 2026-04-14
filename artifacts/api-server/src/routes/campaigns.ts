@@ -213,26 +213,35 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
     return;
   }
 
-  // For outbound/both campaigns, require at least one pending lead before launching
+  // For outbound/both campaigns, ensure there are callable leads
   if (campaign.type !== "inbound") {
-    const [leadCount] = await db
+    const [pendingRow] = await db
       .select({ count: db.$count(leadsTable) })
       .from(leadsTable)
       .where(and(eq(leadsTable.campaignId, id), eq(leadsTable.status, "pending")));
-    const pendingCount = Number(leadCount?.count ?? 0);
+    const pendingCount = Number(pendingRow?.count ?? 0);
+
     if (pendingCount === 0) {
-      // Check if there are any leads at all to give a better error
+      // Check if there are any leads at all
       const [totalRow] = await db
         .select({ count: db.$count(leadsTable) })
         .from(leadsTable)
         .where(eq(leadsTable.campaignId, id));
       const totalCount = Number(totalRow?.count ?? 0);
+
       if (totalCount === 0) {
         res.status(400).json({ error: "No leads added yet. Add leads before launching.", code: "no_leads" });
-      } else {
-        res.status(400).json({ error: "All leads have already been called. Reset leads before launching again.", code: "all_called" });
+        return;
       }
-      return;
+
+      // Auto-reset previously called leads so they can be dialled again
+      await db
+        .update(leadsTable)
+        .set({ status: "pending", retryCount: 0 })
+        .where(and(
+          eq(leadsTable.campaignId, id),
+          inArray(leadsTable.status, ["called", "completed"]),
+        ));
     }
   }
 
@@ -493,11 +502,14 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
   // Build DNC set once for the entire run
   const dncSet = await buildDncSet();
 
-  // Fetch pending leads, ordered by priority desc
+  // Fetch dialable leads: pending + called (called = previously attempted, retry allowed)
   const pendingLeads = await db
     .select()
     .from(leadsTable)
-    .where(and(eq(leadsTable.campaignId, campaignId), eq(leadsTable.status, "pending")));
+    .where(and(
+      eq(leadsTable.campaignId, campaignId),
+      inArray(leadsTable.status, ["pending", "called"]),
+    ));
 
   // Sort: higher priority first, then by created date
   pendingLeads.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
@@ -997,18 +1009,30 @@ async function getCampaignOrFail(id: number, res: import("express").Response): P
   return campaign;
 }
 
-/** Returns false and sends a 400 if the outbound campaign has no pending leads. */
+/** Ensures there are pending leads to dial. Auto-resets called/completed leads if none are pending. */
 async function guardPendingLeads(id: number, campaign: typeof campaignsTable.$inferSelect, res: import("express").Response): Promise<boolean> {
   if (campaign.type === "inbound") return true;
-  const [pendingRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable).where(and(eq(leadsTable.campaignId, id), eq(leadsTable.status, "pending")));
+
+  const [pendingRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable)
+    .where(and(eq(leadsTable.campaignId, id), eq(leadsTable.status, "pending")));
   if (Number(pendingRow?.count ?? 0) > 0) return true;
-  const [totalRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable).where(eq(leadsTable.campaignId, id));
+
+  const [totalRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable)
+    .where(eq(leadsTable.campaignId, id));
   if (Number(totalRow?.count ?? 0) === 0) {
     res.status(400).json({ error: "No leads added yet. Add leads before launching.", code: "no_leads" });
-  } else {
-    res.status(400).json({ error: "All leads have already been called. Reset leads before launching again.", code: "all_called" });
+    return false;
   }
-  return false;
+
+  // Auto-reset previously called leads so they can be dialled again
+  await db
+    .update(leadsTable)
+    .set({ status: "pending", retryCount: 0 })
+    .where(and(
+      eq(leadsTable.campaignId, id),
+      inArray(leadsTable.status, ["called", "completed"]),
+    ));
+  return true;
 }
 
 router.post("/campaigns/:id/start", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
