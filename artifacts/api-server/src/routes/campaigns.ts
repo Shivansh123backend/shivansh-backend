@@ -318,6 +318,7 @@ async function allocateNumber(campaignId: number, fallbackNumber: string): Promi
         eq(phoneNumbersTable.isBusy, false),
         eq(phoneNumbersTable.isBlocked, false),
         sql`${phoneNumbersTable.spamScore} < 70`,
+        sql`${phoneNumbersTable.direction} IN ('outbound', 'both')`,
         sql`(${phoneNumbersTable.campaignId} = ${campaignId} OR ${phoneNumbersTable.campaignId} IS NULL)`
       )
     )

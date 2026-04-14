@@ -5,11 +5,16 @@ import { z } from "zod/v4";
 export const phoneProviderEnum = pgEnum("phone_provider", ["voip", "telnyx", "twilio"]);
 export const phoneStatusEnum = pgEnum("phone_status", ["active", "inactive"]);
 
+export const phoneDirectionEnum = pgEnum("phone_direction", ["inbound", "outbound", "both"]);
+
 export const phoneNumbersTable = pgTable("phone_numbers", {
   id: serial("id").primaryKey(),
   phoneNumber: text("phone_number").notNull().unique(),
+  label: text("label"),
   provider: phoneProviderEnum("provider").notNull(),
   campaignId: integer("campaign_id"),
+  direction: phoneDirectionEnum("direction").notNull().default("both"),
+  forwardNumber: text("forward_number"),        // per-number call-forward override
   status: phoneStatusEnum("status").notNull().default("active"),
   priority: integer("priority").notNull().default(1),
   // Spam / usage tracking

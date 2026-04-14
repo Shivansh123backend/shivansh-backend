@@ -689,6 +689,12 @@ async function getCampaignByNumber(toNumber: string) {
 
   if (!campaign) return null;
 
+  // Only answer inbound calls for numbers configured as inbound or both
+  if (phoneRow.direction === "outbound") {
+    logger.info({ toNumber, direction: phoneRow.direction }, "Inbound call on outbound-only number — not answering");
+    return null;
+  }
+
   // Only answer inbound calls for campaigns set to inbound or both
   if (campaign.type !== "inbound" && campaign.type !== "both") {
     logger.info({ campaignId: campaign.id, type: campaign.type, toNumber }, "Inbound call received but campaign is outbound-only — not answering");
@@ -739,7 +745,10 @@ async function getCampaignByNumber(toNumber: string) {
 
   const holdMusicUrl = resolveHoldMusicUrl(campaign.holdMusic);
 
-  return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId, holdMusicUrl };
+  // Per-number forwardNumber takes priority over campaign.transferNumber
+  const effectiveTransferNumber = phoneRow.forwardNumber ?? campaign.transferNumber ?? null;
+
+  return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId, holdMusicUrl, effectiveTransferNumber };
 }
 
 // ── Post-call summary & disposition (OpenAI on ElevenLabs transcript) ─────────
@@ -1000,11 +1009,11 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         return;
       }
 
-      const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId, holdMusicUrl: inboundHoldMusicUrl } = result;
+      const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId, holdMusicUrl: inboundHoldMusicUrl, effectiveTransferNumber } = result;
       const firstMessage = `Thank you for calling ${campaign.name}. This is ${agentName}. How may I help you today?`;
 
       logger.info(
-        { callControlId, campaignId: campaign.id, agentName, voiceId: inboundVoiceId },
+        { callControlId, campaignId: campaign.id, agentName, voiceId: inboundVoiceId, effectiveTransferNumber },
         "Inbound call — starting ElevenLabs ConvAI bridge"
       );
 
@@ -1016,7 +1025,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         callerNumber: fromNumber,
         direction: "inbound",
         startedAt: new Date(),
-        transferNumber: campaign.transferNumber ?? undefined,
+        transferNumber: effectiveTransferNumber ?? undefined,  // per-number override > campaign default
         holdMusicUrl: inboundHoldMusicUrl,
         voiceId: inboundVoiceId,
         systemPrompt,

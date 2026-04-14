@@ -9,8 +9,11 @@ const router: IRouter = Router();
 
 const addNumberSchema = z.object({
   phoneNumber: z.string().min(1),
+  label: z.string().optional(),
   provider: z.enum(["voip", "telnyx", "twilio"]),
   campaignId: z.number().optional(),
+  direction: z.enum(["inbound", "outbound", "both"]).default("both"),
+  forwardNumber: z.string().optional(),
   priority: z.number().default(1),
 });
 
@@ -50,8 +53,12 @@ router.patch("/numbers/:id", authenticate, requireRole("admin"), async (req, res
   }
 
   const updateSchema = z.object({
+    label: z.string().optional(),
     campaignId: z.union([z.number(), z.null()]).optional(),
+    direction: z.enum(["inbound", "outbound", "both"]).optional(),
+    forwardNumber: z.union([z.string(), z.null()]).optional(),
     status: z.enum(["active", "inactive"]).optional(),
+    isBlocked: z.boolean().optional(),
     priority: z.number().optional(),
   });
 
@@ -61,11 +68,14 @@ router.patch("/numbers/:id", authenticate, requireRole("admin"), async (req, res
     return;
   }
 
-  // Build the update payload — include campaignId even if explicitly null (to unassign)
   const updatePayload: Record<string, unknown> = {};
-  if (parsed.data.status !== undefined) updatePayload.status = parsed.data.status;
-  if (parsed.data.priority !== undefined) updatePayload.priority = parsed.data.priority;
-  if ("campaignId" in parsed.data) updatePayload.campaignId = parsed.data.campaignId ?? null;
+  if (parsed.data.label !== undefined)         updatePayload.label = parsed.data.label;
+  if (parsed.data.status !== undefined)        updatePayload.status = parsed.data.status;
+  if (parsed.data.priority !== undefined)      updatePayload.priority = parsed.data.priority;
+  if (parsed.data.direction !== undefined)     updatePayload.direction = parsed.data.direction;
+  if (parsed.data.isBlocked !== undefined)     updatePayload.isBlocked = parsed.data.isBlocked;
+  if ("campaignId" in parsed.data)             updatePayload.campaignId = parsed.data.campaignId ?? null;
+  if ("forwardNumber" in parsed.data)          updatePayload.forwardNumber = parsed.data.forwardNumber ?? null;
 
   const [updated] = await db
     .update(phoneNumbersTable)
@@ -79,6 +89,16 @@ router.patch("/numbers/:id", authenticate, requireRole("admin"), async (req, res
   }
 
   res.json(updated);
+});
+
+router.delete("/numbers/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid number ID" });
+    return;
+  }
+  await db.delete(phoneNumbersTable).where(eq(phoneNumbersTable.id, id));
+  res.json({ ok: true });
 });
 
 export default router;
