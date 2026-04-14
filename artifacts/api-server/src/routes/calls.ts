@@ -4,6 +4,7 @@ import { callsTable, callLogsTable, leadsTable, campaignsTable, aiAgentsTable, p
 import { eq, and, desc, gte, count, sql } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { enqueueCall } from "../queue/callQueue.js";
+import axios from "axios";
 import { selectVoice, selectPhoneNumber, selectProvider } from "../services/selectionService.js";
 import { findAvailableAgentForCampaign } from "../services/routingService.js";
 import { callWithFallback } from "../providers/registry.js";
@@ -520,9 +521,12 @@ router.post("/calls/inbound", authenticate, async (req, res): Promise<void> => {
 });
 
 // ── POST /calls/:callControlId/conference ─────────────────────────────────────
-// Adds a third party to an active call via a Telnyx conference bridge.
-// Body: { to: E.164 phone number }
-const conferenceSchema = z.object({ to: z.string().min(7) });
+// Dials a third party and bridges them into the active call (3-way calling).
+// Body: { to: E.164 phone number, from?: E.164 (optional; uses campaign default) }
+const conferenceSchema = z.object({
+  to:   z.string().min(7),
+  from: z.string().optional(),
+});
 
 router.post("/calls/:callControlId/conference", authenticate, async (req, res): Promise<void> => {
   const { callControlId } = req.params as { callControlId: string };
@@ -533,49 +537,50 @@ router.post("/calls/:callControlId/conference", authenticate, async (req, res): 
     return;
   }
 
-  const apiKey = process.env.TELNYX_API_KEY;
+  const apiKey       = process.env.TELNYX_API_KEY;
+  const connectionId = process.env.TELNYX_CONNECTION_ID ?? "2935188068224730263";
+  const webhookUrl   = `${process.env.WEBHOOK_BASE_URL ?? "https://shivanshbackend.replit.app"}/webhooks/telnyx`;
+
   if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
 
-  const conferenceName = `conf_${callControlId.slice(-8)}_${Date.now()}`;
+  // Build client_state encoding that the webhook will decode on call.answered
+  // to know it should bridge this new leg into the original call.
+  const clientState = Buffer.from(
+    JSON.stringify({ type: "conference_bridge", originalCallControlId: callControlId })
+  ).toString("base64");
 
   try {
-    // 1. Transfer the original call leg into a conference room
-    await import("axios").then(({ default: axios }) =>
-      axios.post(
-        `https://api.telnyx.com/v2/calls/${callControlId}/actions/join_conference`,
-        {
-          call_control_id: callControlId,
-          conference_name: conferenceName,
-          beep: "always",
-        },
-        { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
-      )
-    );
-
-    // 2. Dial the third party out and drop them into the same conference
-    const { default: axios } = await import("axios");
-    const { data: newCall } = await axios.post(
+    // Dial the third party. When they answer, our webhook decodes the
+    // conference_bridge client_state and executes a `bridge` action linking
+    // the two call legs together.
+    const { data: newCallData } = await axios.post(
       "https://api.telnyx.com/v2/calls",
       {
-        connection_id: "2935188068224730263",
-        to:            parsed.data.to,
-        from:          "+18005551234", // will be overridden by Telnyx if profile has a default
-        webhook_url:   `${process.env.BASE_URL ?? ""}/webhooks/telnyx`,
-        record:        false,
+        connection_id:               connectionId,
+        to:                          parsed.data.to,
+        ...(parsed.data.from ? { from: parsed.data.from } : {}),
+        webhook_url:                 webhookUrl,
         answering_machine_detection: "disabled",
-        custom_headers: [{ name: "X-Conference", value: conferenceName }],
+        client_state:                clientState,
       },
-      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
+      {
+        headers: {
+          Authorization:  `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+      }
     );
 
+    const thirdPartyCallControlId = (newCallData as { data?: { call_control_id?: string } })?.data?.call_control_id ?? null;
+
     res.json({
-      conferenceName,
-      thirdPartyCallControlId: newCall?.data?.call_control_id ?? null,
-      message: "Conference initiated — third party is being dialed",
+      thirdPartyCallControlId,
+      originalCallControlId: callControlId,
+      message: "Third party is being dialed — will be bridged when they answer",
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    res.status(502).json({ error: "Conference initiation failed", detail: msg });
+    res.status(502).json({ error: "Conference dial failed", detail: msg });
   }
 });
 

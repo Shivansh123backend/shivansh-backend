@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { aiAgentsTable, agentVoicesTable, voicesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { aiAgentsTable, agentVoicesTable, voicesTable, humanAgentsTable, callsTable } from "@workspace/db";
+import { eq, and, gte, isNotNull, sql as drizzleSql } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
+import { getAgentStatus } from "../lib/redis.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -121,6 +122,94 @@ router.post("/agents", authenticate, requireRole("admin"), async (req, res): Pro
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [agent] = await db.insert(aiAgentsTable).values(parsed.data).returning();
   res.status(201).json(agent);
+});
+
+// ── GET /agents/available ─────────────────────────────────────────────────────
+// Returns the first available human agent (for call transfers and routing).
+// MUST be before GET /agents/:id to avoid :id capturing "available" as a param.
+router.get("/agents/available", authenticate, async (req, res): Promise<void> => {
+  const agents = await db
+    .select()
+    .from(humanAgentsTable)
+    .where(eq(humanAgentsTable.status, "available"))
+    .limit(1);
+
+  if (agents.length === 0) {
+    res.status(404).json({ error: "No agents available", available: false });
+    return;
+  }
+
+  const agent = agents[0]!;
+  res.json({
+    id:           agent.id,
+    name:         agent.name,
+    phone_number: agent.phoneNumber,
+    status:       agent.status,
+    available:    true,
+  });
+});
+
+// ── GET /agents/stats ─────────────────────────────────────────────────────────
+// Per-human-agent call stats for today (callsToday, avgDuration, dispositions).
+// MUST be before GET /agents/:id to avoid :id capturing "stats" as a param.
+router.get("/agents/stats", authenticate, async (req, res): Promise<void> => {
+  const agentIdRaw = req.query.agentId;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const humanAgents = await db.select().from(humanAgentsTable);
+
+  const statsRows = await db
+    .select({
+      humanAgentId: callsTable.humanAgentId,
+      disposition:  callsTable.disposition,
+      calls:        drizzleSql<number>`count(*)::int`,
+      avgDuration:  drizzleSql<number>`coalesce(avg(${callsTable.duration}), 0)::int`,
+    })
+    .from(callsTable)
+    .where(
+      and(
+        gte(callsTable.createdAt, todayStart),
+        isNotNull(callsTable.humanAgentId),
+        ...(agentIdRaw
+          ? [eq(callsTable.humanAgentId, parseInt(String(agentIdRaw), 10))]
+          : [])
+      )
+    )
+    .groupBy(callsTable.humanAgentId, callsTable.disposition);
+
+  const agentMap = new Map<number, { callsToday: number; avgDuration: number; dispositions: Record<string, number> }>();
+  for (const row of statsRows) {
+    if (row.humanAgentId == null) continue;
+    const entry = agentMap.get(row.humanAgentId) ?? { callsToday: 0, avgDuration: 0, dispositions: {} };
+    entry.callsToday += row.calls;
+    entry.avgDuration = row.avgDuration;
+    if (row.disposition) entry.dispositions[row.disposition] = (entry.dispositions[row.disposition] ?? 0) + row.calls;
+    agentMap.set(row.humanAgentId, entry);
+  }
+
+  const result = await Promise.all(
+    humanAgents
+      .filter((a) => agentIdRaw ? a.id === parseInt(String(agentIdRaw), 10) : true)
+      .map(async (a) => {
+        const stats = agentMap.get(a.id) ?? { callsToday: 0, avgDuration: 0, dispositions: {} };
+        const redisStatus = await getAgentStatus(a.id);
+        return {
+          id:           a.id,
+          name:         a.name,
+          phone_number: a.phoneNumber,
+          status:       redisStatus?.status ?? a.status,
+          current_call: redisStatus?.current_call ?? null,
+          stats: {
+            callsToday:   stats.callsToday,
+            avgDuration:  stats.avgDuration,
+            dispositions: stats.dispositions,
+          },
+        };
+      })
+  );
+
+  res.json(result);
 });
 
 router.get("/agents/:id", authenticate, async (req, res): Promise<void> => {

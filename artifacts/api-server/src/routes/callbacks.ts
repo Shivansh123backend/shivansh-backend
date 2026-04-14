@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { leadsTable, campaignsTable } from "@workspace/db";
 import { eq, and, lte, isNotNull } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
-import { enqueueCall } from "../queue/callQueue.js";
+import { enqueueCall } from "../services/workerService.js";
 import { logger } from "../lib/logger.js";
 import { z } from "zod";
 
@@ -224,7 +224,7 @@ export async function startCallbackScheduler(): Promise<void> {
             phone:           lead.phone,
             from_number:     campaign.fromNumber,
             agent_prompt:    campaign.agentPrompt ?? "",
-            voice:           campaign.voice       ?? undefined,
+            voice:           campaign.voice ?? "default",
             transfer_number: campaign.transferNumber ?? undefined,
             campaign_id:     String(lead.campaignId),
             campaign_name:   campaign.name,

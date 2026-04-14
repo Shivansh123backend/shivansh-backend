@@ -862,11 +862,19 @@ interface OutboundClientState {
   backgroundSound: string | null;
 }
 
-function decodeClientState(raw: string): OutboundClientState | null {
+interface ConferenceBridgeClientState {
+  type: "conference_bridge";
+  originalCallControlId: string; // leg A — the call we're adding a 3rd party to
+}
+
+type AnyClientState = OutboundClientState | ConferenceBridgeClientState;
+
+function decodeClientState(raw: string): AnyClientState | null {
   try {
     const json = Buffer.from(raw, "base64").toString("utf-8");
     const parsed = JSON.parse(json) as Record<string, unknown>;
-    if (parsed?.type === "outbound") return parsed as unknown as OutboundClientState;
+    if (parsed?.type === "outbound")          return parsed as unknown as OutboundClientState;
+    if (parsed?.type === "conference_bridge") return parsed as unknown as ConferenceBridgeClientState;
     return null;
   } catch {
     return null;
@@ -963,6 +971,20 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     // ── 1a. Outbound call answered by human ───────────────────────────────────
     if (eventType === "call.answered") {
       const ctx = clientStateRaw ? decodeClientState(clientStateRaw) : null;
+
+      // ── Conference bridge: third party answered — bridge legs together ───────
+      if (ctx?.type === "conference_bridge") {
+        const { originalCallControlId } = ctx;
+        logger.info({ callControlId, originalCallControlId }, "Conference leg answered — bridging to original call");
+        try {
+          await telnyxAction(callControlId, "bridge", { call_control_id: originalCallControlId });
+          logger.info({ callControlId, originalCallControlId }, "Conference bridge executed");
+        } catch (err) {
+          logger.error({ err: String(err), callControlId, originalCallControlId }, "Conference bridge failed");
+        }
+        return;
+      }
+
       if (!ctx) {
         // No client_state means this is an inbound call we answered.
         // If it's in our pending inbound greet queue, now start transcription + greeting.
@@ -982,13 +1004,16 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         return;
       }
 
-      const campaignId = parseInt(ctx.campaignId, 10);
+      // At this point ctx must be an OutboundClientState (conference_bridge and null cases returned above)
+      const outboundCtx = ctx as OutboundClientState;
+
+      const campaignId = parseInt(outboundCtx.campaignId, 10);
 
       // Look up lead name
       const [lead] = await db
         .select({ name: leadsTable.name, id: leadsTable.id })
         .from(leadsTable)
-        .where(and(eq(leadsTable.phone, ctx.phone), eq(leadsTable.campaignId, campaignId)))
+        .where(and(eq(leadsTable.phone, outboundCtx.phone), eq(leadsTable.campaignId, campaignId)))
         .limit(1);
 
       // Look up agent name + hold music
@@ -1013,17 +1038,17 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       const leadName = lead?.name;
       const firstName = leadName?.split(" ")[0];
       const callVoiceId =
-        ctx.voice && ctx.voice !== "default" ? ctx.voice : DEFAULT_ELEVEN_VOICE;
+        outboundCtx.voice && outboundCtx.voice !== "default" ? outboundCtx.voice : DEFAULT_ELEVEN_VOICE;
 
       // Build system prompt, then append background sound context if set
       let systemPrompt = buildSystemPrompt(
-        ctx.script,
-        ctx.campaignName,
+        outboundCtx.script,
+        outboundCtx.campaignName,
         agentName,
         leadName,
-        ctx.transferNumber ?? undefined
+        outboundCtx.transferNumber ?? undefined
       );
-      const bgKey = ctx.backgroundSound && ctx.backgroundSound !== "none" ? ctx.backgroundSound : null;
+      const bgKey = outboundCtx.backgroundSound && outboundCtx.backgroundSound !== "none" ? outboundCtx.backgroundSound : null;
       if (bgKey && BACKGROUND_CONTEXT_MAP[bgKey]) {
         systemPrompt = `${systemPrompt}\n\n${BACKGROUND_CONTEXT_MAP[bgKey]}`;
       }
@@ -1031,25 +1056,25 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       // First message — short name-check greeting; system prompt handles the rest
       const firstMessage = firstName
         ? `Hi, is this ${firstName}?`
-        : `Hello! This is ${agentName} calling from ${ctx.campaignName}. Is this a good time?`;
+        : `Hello! This is ${agentName} calling from ${outboundCtx.campaignName}. Is this a good time?`;
 
       logger.info(
-        { callControlId, campaignId, phone: ctx.phone, leadName, agentName, voiceId: callVoiceId, backgroundSound: ctx.backgroundSound },
+        { callControlId, campaignId, phone: outboundCtx.phone, leadName, agentName, voiceId: callVoiceId, backgroundSound: outboundCtx.backgroundSound },
         "Outbound call answered — starting ElevenLabs ConvAI bridge"
       );
 
       // Register bridge state
       initBridge(callControlId, {
         campaignId,
-        campaignName: ctx.campaignName,
+        campaignName: outboundCtx.campaignName,
         agentName,
-        callerNumber: ctx.phone,
+        callerNumber: outboundCtx.phone,
         direction: "outbound",
         startedAt: new Date(),
         leadId: lead?.id,
-        transferNumber: ctx.transferNumber ?? undefined,
+        transferNumber: outboundCtx.transferNumber ?? undefined,
         holdMusicUrl: outboundHoldMusicUrl,
-        backgroundSound: ctx.backgroundSound ?? undefined,
+        backgroundSound: outboundCtx.backgroundSound ?? undefined,
         voiceId: callVoiceId,
         systemPrompt,
         firstMessage,
@@ -1085,7 +1110,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         callControlId,
         campaignId,
         leadId: lead?.id,
-        phoneNumber: ctx.phone,
+        phoneNumber: outboundCtx.phone,
         providerUsed: "telnyx",
         status: "in_progress",
         startedAt: new Date().toISOString(),
