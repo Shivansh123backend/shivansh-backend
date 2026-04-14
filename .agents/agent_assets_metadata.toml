@@ -18,3 +18,9 @@ id = "4uSAtbyMOakp5dMgU-K9i"
 uri = "file://lib/api-spec/openapi.yaml"
 type = "unspecified"
 title = "Shivansh API Spec (OpenAPI)"
+
+[[outputs]]
+id = "KmstH1PzsxNP6657n937a"
+uri = "file://LOVABLE_REFERENCE.md"
+type = "text"
+title = "SHIVANSH — Lovable Reference"
