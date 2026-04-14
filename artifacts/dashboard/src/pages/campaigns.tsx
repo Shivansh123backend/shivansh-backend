@@ -23,7 +23,8 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Play, Square, Plus, X, Rocket, Phone, Mic2, Users, FileText,
   ChevronRight, ChevronLeft, BookOpen, Upload, Volume2, Pause,
-  Check, RefreshCw, Brain, Music, Zap, Activity, AlertCircle, CheckCircle2, Clock
+  Check, RefreshCw, Brain, Music, Zap, Activity, AlertCircle, CheckCircle2, Clock,
+  Settings2
 } from "lucide-react";
 
 type Campaign = {
@@ -213,10 +214,196 @@ function FileUploadArea({
   );
 }
 
+// ── Shared Dialing Engine Fields Component ─────────────────────────────────────
+interface DialingEngineProps {
+  dialingMode: string; setDialingMode: (v: string) => void;
+  dialingRatio: string; setDialingRatio: (v: string) => void;
+  dialingSpeed: string; setDialingSpeed: (v: string) => void;
+  dropRateLimit: string; setDropRateLimit: (v: string) => void;
+  retryAttempts: string; setRetryAttempts: (v: string) => void;
+  retryIntervalMinutes: string; setRetryIntervalMinutes: (v: string) => void;
+  workingHoursStart: string; setWorkingHoursStart: (v: string) => void;
+  workingHoursEnd: string; setWorkingHoursEnd: (v: string) => void;
+  workingHoursTimezone: string; setWorkingHoursTimezone: (v: string) => void;
+  amdEnabled: boolean; setAmdEnabled: (v: boolean) => void;
+}
+
+const TIMEZONES = [
+  { value: "UTC", label: "UTC" },
+  { value: "America/New_York", label: "Eastern (ET)" },
+  { value: "America/Chicago", label: "Central (CT)" },
+  { value: "America/Denver", label: "Mountain (MT)" },
+  { value: "America/Los_Angeles", label: "Pacific (PT)" },
+  { value: "America/Toronto", label: "Toronto (ET)" },
+  { value: "America/Sao_Paulo", label: "São Paulo (BRT)" },
+  { value: "Europe/London", label: "London (GMT/BST)" },
+  { value: "Europe/Paris", label: "Paris (CET)" },
+  { value: "Europe/Moscow", label: "Moscow (MSK)" },
+  { value: "Asia/Dubai", label: "Dubai (GST)" },
+  { value: "Asia/Kolkata", label: "India (IST)" },
+  { value: "Asia/Singapore", label: "Singapore (SGT)" },
+  { value: "Asia/Tokyo", label: "Tokyo (JST)" },
+  { value: "Australia/Sydney", label: "Sydney (AEDT)" },
+];
+
+function DialingEngineFields({
+  dialingMode, setDialingMode,
+  dialingRatio, setDialingRatio,
+  dialingSpeed, setDialingSpeed,
+  dropRateLimit, setDropRateLimit,
+  retryAttempts, setRetryAttempts,
+  retryIntervalMinutes, setRetryIntervalMinutes,
+  workingHoursStart, setWorkingHoursStart,
+  workingHoursEnd, setWorkingHoursEnd,
+  workingHoursTimezone, setWorkingHoursTimezone,
+  amdEnabled, setAmdEnabled,
+}: DialingEngineProps) {
+  const isPredictive = dialingMode === "predictive";
+
+  return (
+    <div className="space-y-4">
+      {/* Dialing Mode */}
+      <div className="space-y-1.5">
+        <Label className="text-[10px] font-mono uppercase text-muted-foreground">Dialing Mode</Label>
+        <Select value={dialingMode} onValueChange={setDialingMode}>
+          <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="manual">Manual — agent initiates each call</SelectItem>
+            <SelectItem value="preview">Preview — agent reviews lead before dialing</SelectItem>
+            <SelectItem value="progressive">Progressive — dial one lead per available agent</SelectItem>
+            <SelectItem value="predictive">Predictive — dial multiple leads simultaneously</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-[10px] font-mono text-muted-foreground/70">
+          {dialingMode === "predictive" && "Dials ratio × agents simultaneously. Maximises talk time but may increase drop rate."}
+          {dialingMode === "progressive" && "One call per available agent slot. Balanced efficiency."}
+          {dialingMode === "preview" && "Agent sees lead info before call is placed."}
+          {dialingMode === "manual" && "Agent manually triggers each outbound call."}
+        </p>
+      </div>
+
+      {/* Speed + Ratio row */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label className="text-[10px] font-mono uppercase text-muted-foreground">Dialing Speed <span className="text-muted-foreground/60 normal-case">(calls/min)</span></Label>
+          <Input
+            type="number"
+            min="1" max="120"
+            value={dialingSpeed}
+            onChange={e => setDialingSpeed(e.target.value)}
+            className="font-mono text-sm"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className={`text-[10px] font-mono uppercase ${isPredictive ? "text-muted-foreground" : "text-muted-foreground/40"}`}>
+            Dialing Ratio <span className="text-muted-foreground/60 normal-case">(predictive only)</span>
+          </Label>
+          <Input
+            type="number"
+            min="1" max="20"
+            value={dialingRatio}
+            onChange={e => setDialingRatio(e.target.value)}
+            disabled={!isPredictive}
+            className={`font-mono text-sm ${!isPredictive ? "opacity-40" : ""}`}
+          />
+        </div>
+      </div>
+
+      {/* Drop rate + Max concurrent */}
+      <div className="space-y-1.5">
+        <Label className="text-[10px] font-mono uppercase text-muted-foreground">Max Drop Rate <span className="text-muted-foreground/60 normal-case">(%)</span></Label>
+        <Input
+          type="number"
+          min="1" max="50"
+          value={dropRateLimit}
+          onChange={e => setDropRateLimit(e.target.value)}
+          className="font-mono text-sm"
+        />
+        <p className="text-[10px] font-mono text-muted-foreground/70">If abandoned calls exceed this %, dialing speed is automatically reduced.</p>
+      </div>
+
+      {/* Retry settings */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label className="text-[10px] font-mono uppercase text-muted-foreground">Retry Attempts</Label>
+          <Input
+            type="number"
+            min="0" max="10"
+            value={retryAttempts}
+            onChange={e => setRetryAttempts(e.target.value)}
+            className="font-mono text-sm"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-[10px] font-mono uppercase text-muted-foreground">Retry After <span className="text-muted-foreground/60 normal-case">(minutes)</span></Label>
+          <Input
+            type="number"
+            min="1" max="1440"
+            value={retryIntervalMinutes}
+            onChange={e => setRetryIntervalMinutes(e.target.value)}
+            className="font-mono text-sm"
+          />
+        </div>
+      </div>
+
+      {/* Working hours */}
+      <div className="space-y-2">
+        <Label className="text-[10px] font-mono uppercase text-muted-foreground">Working Hours <span className="text-muted-foreground/60 normal-case">(leave blank = always)</span></Label>
+        <div className="grid grid-cols-3 gap-2">
+          <div className="space-y-1">
+            <p className="text-[9px] font-mono text-muted-foreground/60 uppercase">Start</p>
+            <Input
+              type="time"
+              value={workingHoursStart}
+              onChange={e => setWorkingHoursStart(e.target.value)}
+              className="font-mono text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <p className="text-[9px] font-mono text-muted-foreground/60 uppercase">End</p>
+            <Input
+              type="time"
+              value={workingHoursEnd}
+              onChange={e => setWorkingHoursEnd(e.target.value)}
+              className="font-mono text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <p className="text-[9px] font-mono text-muted-foreground/60 uppercase">Timezone</p>
+            <Select value={workingHoursTimezone} onValueChange={setWorkingHoursTimezone}>
+              <SelectTrigger className="font-mono text-xs h-9"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {TIMEZONES.map(tz => (
+                  <SelectItem key={tz.value} value={tz.value} className="text-xs font-mono">{tz.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </div>
+
+      {/* AMD toggle */}
+      <div className="flex items-center justify-between rounded border border-border px-3 py-2.5">
+        <div>
+          <p className="text-xs font-mono font-medium text-foreground">Answering Machine Detection (AMD)</p>
+          <p className="text-[10px] font-mono text-muted-foreground mt-0.5">Automatically detect voicemail and skip — prevents wasted AI time on answering machines</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setAmdEnabled(!amdEnabled)}
+          className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors ${amdEnabled ? "bg-primary" : "bg-muted"}`}
+        >
+          <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${amdEnabled ? "translate-x-4" : "translate-x-0"}`} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── 3-step Create Campaign Modal ───────────────────────────────────────────────
 function CreateModal({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState(0);
-  const steps = ["Basics", "Agent Training", "Voice & Number"];
+  const steps = ["Basics", "Agent Training", "Voice & Number", "Dialing Engine"];
 
   // Step 1 — Basics
   const [name, setName] = useState("");
@@ -235,6 +422,18 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const [selectedNumber, setSelectedNumber] = useState("");
   const [backgroundSound, setBackgroundSound] = useState("none");
   const [holdMusic, setHoldMusic] = useState("none");
+
+  // Step 4 — Dialing Engine
+  const [dialingMode, setDialingMode] = useState("progressive");
+  const [dialingRatio, setDialingRatio] = useState("1");
+  const [dialingSpeed, setDialingSpeed] = useState("10");
+  const [dropRateLimit, setDropRateLimit] = useState("3");
+  const [retryAttempts, setRetryAttempts] = useState("2");
+  const [retryIntervalMinutes, setRetryIntervalMinutes] = useState("60");
+  const [workingHoursStart, setWorkingHoursStart] = useState("");
+  const [workingHoursEnd, setWorkingHoursEnd] = useState("");
+  const [workingHoursTimezone, setWorkingHoursTimezone] = useState("UTC");
+  const [amdEnabled, setAmdEnabled] = useState(false);
 
   const { data: dbVoices } = useListVoices() as { data: Array<{ id: number; name: string; voiceId: string; gender: string; accent: string; previewUrl?: string; description?: string }> | undefined };
   const { data: numbers } = useListNumbers() as { data: Array<{ id: number; phoneNumber: string; provider: string; status: string }> | undefined };
@@ -264,6 +463,16 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           backgroundSound: backgroundSound as "none" | "office" | "typing" | "cafe",
           holdMusic: holdMusic as "none" | "jazz" | "corporate" | "smooth" | "classical",
           humanLike,
+          dialingMode: dialingMode as "manual" | "progressive" | "predictive" | "preview",
+          dialingRatio: parseInt(dialingRatio) || 1,
+          dialingSpeed: parseInt(dialingSpeed) || 10,
+          dropRateLimit: parseInt(dropRateLimit) || 3,
+          retryAttempts: parseInt(retryAttempts) || 2,
+          retryIntervalMinutes: parseInt(retryIntervalMinutes) || 60,
+          workingHoursStart: workingHoursStart || undefined,
+          workingHoursEnd: workingHoursEnd || undefined,
+          workingHoursTimezone,
+          amdEnabled,
         } as Parameters<typeof createCampaign.mutate>[0]["data"],
       },
       {
@@ -506,6 +715,22 @@ function CreateModal({ onClose }: { onClose: () => void }) {
               </div>
             </>
           )}
+
+          {/* ── Step 3: Dialing Engine ── */}
+          {step === 3 && (
+            <DialingEngineFields
+              dialingMode={dialingMode} setDialingMode={setDialingMode}
+              dialingRatio={dialingRatio} setDialingRatio={setDialingRatio}
+              dialingSpeed={dialingSpeed} setDialingSpeed={setDialingSpeed}
+              dropRateLimit={dropRateLimit} setDropRateLimit={setDropRateLimit}
+              retryAttempts={retryAttempts} setRetryAttempts={setRetryAttempts}
+              retryIntervalMinutes={retryIntervalMinutes} setRetryIntervalMinutes={setRetryIntervalMinutes}
+              workingHoursStart={workingHoursStart} setWorkingHoursStart={setWorkingHoursStart}
+              workingHoursEnd={workingHoursEnd} setWorkingHoursEnd={setWorkingHoursEnd}
+              workingHoursTimezone={workingHoursTimezone} setWorkingHoursTimezone={setWorkingHoursTimezone}
+              amdEnabled={amdEnabled} setAmdEnabled={setAmdEnabled}
+            />
+          )}
         </div>
 
         {/* Footer nav */}
@@ -575,6 +800,19 @@ function LaunchModal({
   const [backgroundSound, setBackgroundSound] = useState(campaign.backgroundSound ?? "none");
   const [holdMusic, setHoldMusic] = useState(campaign.holdMusic ?? "none");
   const [humanLike, setHumanLike] = useState(campaign.humanLike ?? "true");
+  const [showDialingEngine, setShowDialingEngine] = useState(false);
+
+  // Dialing engine state (seeded from campaign)
+  const [dialingMode, setDialingMode] = useState((campaign as Record<string, unknown>).dialingMode as string ?? "progressive");
+  const [dialingRatio, setDialingRatio] = useState(String((campaign as Record<string, unknown>).dialingRatio ?? "1"));
+  const [dialingSpeed, setDialingSpeed] = useState(String((campaign as Record<string, unknown>).dialingSpeed ?? "10"));
+  const [dropRateLimit, setDropRateLimit] = useState(String((campaign as Record<string, unknown>).dropRateLimit ?? "3"));
+  const [retryAttempts, setRetryAttempts] = useState(String((campaign as Record<string, unknown>).retryAttempts ?? "2"));
+  const [retryIntervalMinutes, setRetryIntervalMinutes] = useState(String((campaign as Record<string, unknown>).retryIntervalMinutes ?? "60"));
+  const [workingHoursStart, setWorkingHoursStart] = useState((campaign as Record<string, unknown>).workingHoursStart as string ?? "");
+  const [workingHoursEnd, setWorkingHoursEnd] = useState((campaign as Record<string, unknown>).workingHoursEnd as string ?? "");
+  const [workingHoursTimezone, setWorkingHoursTimezone] = useState((campaign as Record<string, unknown>).workingHoursTimezone as string ?? "UTC");
+  const [amdEnabled, setAmdEnabled] = useState(Boolean((campaign as Record<string, unknown>).amdEnabled));
 
   const pendingLeads = (leads ?? []).filter((l: { status: string }) => l.status === "pending");
   const calledLeads = (leads ?? []).filter((l: { status: string }) => ["called", "callback", "completed"].includes(l.status));
@@ -595,6 +833,16 @@ function LaunchModal({
           backgroundSound,
           holdMusic,
           humanLike,
+          dialingMode,
+          dialingRatio: parseInt(dialingRatio) || 1,
+          dialingSpeed: parseInt(dialingSpeed) || 10,
+          dropRateLimit: parseInt(dropRateLimit) || 3,
+          retryAttempts: parseInt(retryAttempts) || 2,
+          retryIntervalMinutes: parseInt(retryIntervalMinutes) || 60,
+          workingHoursStart: workingHoursStart || undefined,
+          workingHoursEnd: workingHoursEnd || undefined,
+          workingHoursTimezone,
+          amdEnabled,
         }),
       });
       if (resetLeads && calledLeads.length > 0) {
@@ -741,6 +989,36 @@ function LaunchModal({
             >
               <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${humanLike === "true" ? "translate-x-4" : "translate-x-0"}`} />
             </button>
+          </div>
+
+          {/* Collapsible Dialing Engine */}
+          <div className="space-y-2">
+            <button
+              type="button"
+              className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-muted-foreground hover:text-foreground w-full text-left"
+              onClick={() => setShowDialingEngine(d => !d)}
+            >
+              <Settings2 className="w-3 h-3" />
+              Dialing Engine Settings
+              <span className="text-[9px] text-muted-foreground/50 normal-case ml-1">({dialingMode})</span>
+              <ChevronRight className={`w-3 h-3 transition-transform ml-auto ${showDialingEngine ? "rotate-90" : ""}`} />
+            </button>
+            {showDialingEngine && (
+              <div className="border border-border rounded p-3">
+                <DialingEngineFields
+                  dialingMode={dialingMode} setDialingMode={setDialingMode}
+                  dialingRatio={dialingRatio} setDialingRatio={setDialingRatio}
+                  dialingSpeed={dialingSpeed} setDialingSpeed={setDialingSpeed}
+                  dropRateLimit={dropRateLimit} setDropRateLimit={setDropRateLimit}
+                  retryAttempts={retryAttempts} setRetryAttempts={setRetryAttempts}
+                  retryIntervalMinutes={retryIntervalMinutes} setRetryIntervalMinutes={setRetryIntervalMinutes}
+                  workingHoursStart={workingHoursStart} setWorkingHoursStart={setWorkingHoursStart}
+                  workingHoursEnd={workingHoursEnd} setWorkingHoursEnd={setWorkingHoursEnd}
+                  workingHoursTimezone={workingHoursTimezone} setWorkingHoursTimezone={setWorkingHoursTimezone}
+                  amdEnabled={amdEnabled} setAmdEnabled={setAmdEnabled}
+                />
+              </div>
+            )}
           </div>
 
           {/* Collapsible prompt */}
