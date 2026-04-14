@@ -19,6 +19,8 @@ export const leadsTable = pgTable("leads", {
   lastCalledAt: timestamp("last_called_at", { withTimezone: true }),
   priority: integer("priority").notNull().default(0),
   dncFlag: boolean("dnc_flag").notNull().default(false),
+  notes: text("notes"),
+  callbackAt: timestamp("callback_at", { withTimezone: true }),   // scheduled callback time
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

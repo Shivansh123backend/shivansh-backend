@@ -39,6 +39,7 @@ export const campaignsTable = pgTable("campaigns", {
   workingHoursTimezone: text("working_hours_timezone").default("UTC"),
   // AMD
   amdEnabled: boolean("amd_enabled").notNull().default(false),
+  vmDropMessage: text("vm_drop_message"),   // TTS message to leave on voicemail (null = hang up)
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

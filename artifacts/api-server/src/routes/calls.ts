@@ -519,4 +519,64 @@ router.post("/calls/inbound", authenticate, async (req, res): Promise<void> => {
   res.json({ callId: call.id, routedTo, assignedAgentId, campaignId: campaign.id });
 });
 
+// ── POST /calls/:callControlId/conference ─────────────────────────────────────
+// Adds a third party to an active call via a Telnyx conference bridge.
+// Body: { to: E.164 phone number }
+const conferenceSchema = z.object({ to: z.string().min(7) });
+
+router.post("/calls/:callControlId/conference", authenticate, async (req, res): Promise<void> => {
+  const { callControlId } = req.params as { callControlId: string };
+
+  const parsed = conferenceSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" });
+    return;
+  }
+
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
+
+  const conferenceName = `conf_${callControlId.slice(-8)}_${Date.now()}`;
+
+  try {
+    // 1. Transfer the original call leg into a conference room
+    await import("axios").then(({ default: axios }) =>
+      axios.post(
+        `https://api.telnyx.com/v2/calls/${callControlId}/actions/join_conference`,
+        {
+          call_control_id: callControlId,
+          conference_name: conferenceName,
+          beep: "always",
+        },
+        { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
+      )
+    );
+
+    // 2. Dial the third party out and drop them into the same conference
+    const { default: axios } = await import("axios");
+    const { data: newCall } = await axios.post(
+      "https://api.telnyx.com/v2/calls",
+      {
+        connection_id: "2935188068224730263",
+        to:            parsed.data.to,
+        from:          "+18005551234", // will be overridden by Telnyx if profile has a default
+        webhook_url:   `${process.env.BASE_URL ?? ""}/webhooks/telnyx`,
+        record:        false,
+        answering_machine_detection: "disabled",
+        custom_headers: [{ name: "X-Conference", value: conferenceName }],
+      },
+      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
+    );
+
+    res.json({
+      conferenceName,
+      thirdPartyCallControlId: newCall?.data?.call_control_id ?? null,
+      message: "Conference initiated — third party is being dialed",
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: "Conference initiation failed", detail: msg });
+  }
+});
+
 export default router;

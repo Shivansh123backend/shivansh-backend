@@ -282,6 +282,83 @@ DNC leads and `do_not_call` status leads are automatically excluded. A `409` is 
 
 ---
 
+## Callbacks
+
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/callbacks` | any | List leads with `status=callback`; optional `?campaignId=N` |
+| POST | `/callbacks/schedule` | any | Schedule callback `{ leadId, callbackAt, notes? }` |
+| PATCH | `/callbacks/:id` | any | Update `{ status?, notes?, callbackAt? }` |
+
+**Callback object:**
+```ts
+{
+  id: number
+  name: string
+  phone: string           // also phone_number
+  email: string | null
+  campaignId: number      // also campaign_id
+  campaignName: string | null
+  status: string
+  notes: string | null
+  callbackAt: string | null   // also callback_at, ISO 8601
+  createdAt: string
+}
+```
+
+**Schedule body:** `{ "leadId": 123, "callbackAt": "2025-04-15T14:30:00.000Z", "notes": "optional" }`
+**Update to done:** `PATCH /callbacks/:id { "status": "completed" }`
+
+---
+
+## Human Agents / Stats
+
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| GET | `/agents` | any | All agents with live Redis status |
+| GET | `/agents/stats` | any | Per-agent stats today; optional `?agentId=N` |
+| GET | `/agents/available` | any | First available agent |
+| POST | `/agents/create` | admin | Create agent `{ name, phone_number }` |
+| PATCH | `/agents/status` | any | Update own status `{ id, status }` |
+| DELETE | `/agents/:id` | admin | Remove agent |
+
+**Stats response item:**
+```ts
+{
+  id: number
+  name: string
+  phone_number: string
+  status: "available" | "busy"
+  current_call: string | null
+  stats: {
+    callsToday: number
+    avgDuration: number          // seconds
+    dispositions: Record<string, number>  // e.g. { "vm": 3, "interested": 5 }
+  }
+}
+```
+
+---
+
+## Conference (3-Way Calling)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/calls/:callControlId/conference` | Add a third party to an active call |
+
+**Body:** `{ "to": "+14155550100" }` (E.164)
+
+**Response:**
+```json
+{
+  "conferenceName": "conf_XXXXXXXX_1712345678000",
+  "thirdPartyCallControlId": "...",
+  "message": "Conference initiated — third party is being dialed"
+}
+```
+
+---
+
 ## WebSocket (Live Monitor)
 
 **URL:** `wss://shivanshbackend.replit.app` (same host, `/socket.io` path, Socket.io v4)
@@ -296,6 +373,8 @@ Connect with: `{ auth: { token } }` in Socket.io handshake options.
 | `call:ended` | `{ id, callControlId, disposition, duration }` |
 | `call:transcript` | `{ id, callControlId, role: "user"\|"agent", text, timestamp }` |
 | `agent:status` | `{ agentId, status, name }` |
+| `agent:stats:refresh` | `{ ts }` — signal to re-poll `/agents/stats` |
+| `agent:incoming_call` | `{ callId, callerPhone, campaignId }` |
 
 ---
 
@@ -321,6 +400,8 @@ Connect with: `{ auth: { token } }` in Socket.io handshake options.
 | **Live Monitor** | `/live-monitor` | Real-time call board via WebSocket — active call cards with transcript stream, agent grid |
 | **CDR / Recordings** | `/cdr` | Filterable table with `numberUsed`, `answerType`, `disposition`, duration; inline audio player for `recordingUrl` |
 | **Campaign Analytics** | `/analytics` | Disposition breakdown pie chart, calls-per-hour bar chart, voicemail rate trend line — all from `/call-logs` |
+| **Agent Softphone** | `/softphone` | Dial pad, active call controls, 3-way conference, live transcript, per-agent stats — see `LOVABLE_SOFTPHONE_PROMPT.md` |
+| **Callbacks** | `/callbacks` | Scheduled callback manager — see `LOVABLE_SOFTPHONE_PROMPT.md` |
 
 ---
 

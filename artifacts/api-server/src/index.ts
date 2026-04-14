@@ -8,6 +8,7 @@ import { closeRedis } from "./lib/redis.js";
 import { closeQueue } from "./queue/callQueue.js";
 import { ensureAdminUser, ensurePhoneNumbers, ensureElevenLabsVoices } from "./lib/startup.js";
 import { handleTelnyxMediaSocket, warmupElevenAgent } from "./services/elevenBridge.js";
+import { startCallbackScheduler } from "./routes/callbacks.js";
 
 const rawPort = process.env["PORT"];
 
@@ -76,6 +77,10 @@ ensureElevenLabsVoices().catch((err) => {
 
 warmupElevenAgent().catch((err) => {
   logger.warn({ err: String(err) }, "ElevenLabs agent warmup failed — will retry on first call");
+});
+
+startCallbackScheduler().catch((err) => {
+  logger.warn({ err: String(err) }, "Callback scheduler failed to start");
 });
 
 httpServer.listen(port, () => {

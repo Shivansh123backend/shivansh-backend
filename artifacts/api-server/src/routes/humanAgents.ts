@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { humanAgentsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { humanAgentsTable, callsTable } from "@workspace/db";
+import { eq, and, gte, isNotNull, sql as drizzleSql } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { getAgentStatus, setAgentStatus } from "../lib/redis.js";
 import { emitToSupervisors } from "../websocket/index.js";
@@ -141,6 +141,80 @@ router.get("/agents", authenticate, async (req, res): Promise<void> => {
   );
 
   res.json(enriched);
+});
+
+// ── GET /agents/stats ─────────────────────────────────────────────────────────
+// Per-agent call stats for today: call count, avg duration, disposition breakdown.
+router.get("/agents/stats", authenticate, async (req, res): Promise<void> => {
+  const agentIdRaw = req.query.agentId;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  // Get all agents
+  const agents = await db.select().from(humanAgentsTable);
+
+  const statsRows = await db
+    .select({
+      humanAgentId: callsTable.humanAgentId,
+      disposition:  callsTable.disposition,
+      calls:        drizzleSql<number>`count(*)::int`,
+      avgDuration:  drizzleSql<number>`coalesce(avg(${callsTable.duration}), 0)::int`,
+    })
+    .from(callsTable)
+    .where(
+      and(
+        gte(callsTable.createdAt, todayStart),
+        isNotNull(callsTable.humanAgentId),
+        ...(agentIdRaw
+          ? [eq(callsTable.humanAgentId, parseInt(String(agentIdRaw), 10))]
+          : [])
+      )
+    )
+    .groupBy(callsTable.humanAgentId, callsTable.disposition);
+
+  // Build per-agent map
+  const agentMap = new Map<number, {
+    callsToday: number;
+    avgDuration: number;
+    dispositions: Record<string, number>;
+  }>();
+
+  for (const row of statsRows) {
+    if (row.humanAgentId == null) continue;
+    const id = row.humanAgentId;
+    if (!agentMap.has(id)) {
+      agentMap.set(id, { callsToday: 0, avgDuration: 0, dispositions: {} });
+    }
+    const entry = agentMap.get(id)!;
+    entry.callsToday += row.calls;
+    entry.avgDuration = row.avgDuration; // last row wins (same avg across grouped dispositions — minor)
+    if (row.disposition) {
+      entry.dispositions[row.disposition] = (entry.dispositions[row.disposition] ?? 0) + row.calls;
+    }
+  }
+
+  const result = await Promise.all(
+    agents
+      .filter((a) => agentIdRaw ? a.id === parseInt(String(agentIdRaw), 10) : true)
+      .map(async (a) => {
+        const stats = agentMap.get(a.id) ?? { callsToday: 0, avgDuration: 0, dispositions: {} };
+        const redisStatus = await getAgentStatus(a.id);
+        return {
+          id:           a.id,
+          name:         a.name,
+          phone_number: a.phoneNumber,
+          status:       redisStatus?.status ?? a.status,
+          current_call: redisStatus?.current_call ?? null,
+          stats: {
+            callsToday:   stats.callsToday,
+            avgDuration:  stats.avgDuration,
+            dispositions: stats.dispositions,
+          },
+        };
+      })
+  );
+
+  res.json(result);
 });
 
 export default router;

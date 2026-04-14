@@ -294,6 +294,7 @@ const lastAiResponse            = new Map<string, string>();          // callCon
 const aiSpeakEndedAt            = new Map<string, number>();          // callControlId → timestamp AI finished speaking
 const lastProcessedText         = new Map<string, { text: string; ts: number }>(); // dedup window
 const pendingTransferAfterPlay  = new Set<string>();                  // callControlId → execute transfer after next playback.ended
+const pendingVmDropHangup       = new Set<string>();                  // callControlId → hang up after VM drop message finishes playing
 const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
 const AI_SPEAK_COOLDOWN_MS      = 1000;                               // ignore transcriptions this many ms after AI speaks
 
@@ -903,13 +904,44 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         result === "machine_end_beep" ||
         result === "machine_end_silence"
       ) {
+        const bridge = getBridgeInfo(callControlId);
+
+        // Voicemail drop: if campaign has a vmDropMessage and we heard a beep, leave the message
+        if (result === "machine_end_beep" && bridge?.campaignId) {
+          const [camp] = await db
+            .select({ vmDropMessage: campaignsTable.vmDropMessage, voice: campaignsTable.voice })
+            .from(campaignsTable)
+            .where(eq(campaignsTable.id, bridge.campaignId));
+
+          if (camp?.vmDropMessage) {
+            logger.info({ callControlId, campaignId: bridge.campaignId }, "AMD: voicemail beep — leaving VM drop message");
+            try {
+              const voiceId = bridge.voiceId ?? DEFAULT_ELEVEN_VOICE;
+              const audioUrl = await generateTTS(voiceId, camp.vmDropMessage);
+              await telnyxAction(callControlId, "playback_start", {
+                audio_url: audioUrl,
+                overlay: false,
+                stop_condition: "detecting_silence",
+              });
+              // Hang up after playback — handled by playback.ended event
+              pendingVmDropHangup.add(callControlId);
+              bridge.transcript.push(`AI Agent (VM Drop): ${camp.vmDropMessage}`);
+              logger.info({ callControlId }, "VM drop message playing — will hang up on playback.ended");
+              return; // Don't hang up immediately; let playback.ended do it
+            } catch (err) {
+              logger.warn({ err: String(err), callControlId }, "VM drop TTS failed — falling back to hangup");
+            }
+          }
+        }
+
+        // Default: hang up immediately on voicemail
         try { await telnyxAction(callControlId, "hangup", {}); } catch { /* already gone */ }
 
-        const bridge = getBridgeInfo(callControlId);
         if (bridge) {
           const durationSecs = Math.round(
             (Date.now() - bridge.startedAt.getTime()) / 1000
           );
+          const numberUsed = callOwnNumber.get(callControlId) ?? null;
           await db.insert(callLogsTable).values({
             phoneNumber: bridge.callerNumber,
             campaignId: bridge.campaignId,
@@ -918,8 +950,11 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             direction: "outbound",
             duration: durationSecs,
             callControlId,
+            numberUsed,
+            answerType: "voicemail",
           }).catch(() => {});
           closeBridge(callControlId);
+          callOwnNumber.delete(callControlId);
         }
       }
       return;
@@ -1232,6 +1267,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       aiSpeaking.delete(callControlId);
       aiSpeakEndedAt.set(callControlId, Date.now()); // start cooldown window
 
+      // ── If this was a VM drop message, hang up now ───────────────────────────
+      if (pendingVmDropHangup.has(callControlId)) {
+        pendingVmDropHangup.delete(callControlId);
+        logger.info({ callControlId }, "VM drop message finished — hanging up");
+        try { await telnyxAction(callControlId, "hangup", {}); } catch { /* already gone */ }
+        return;
+      }
+
       // ── If a transfer is pending, execute it now that TTS has finished ──────
       if (pendingTransferAfterPlay.has(callControlId)) {
         pendingTransferAfterPlay.delete(callControlId);
@@ -1373,6 +1416,9 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         disposition,
         duration: durationSecs,
       });
+
+      // Signal all connected clients to refresh per-agent stats
+      emitToSupervisors("agent:stats:refresh", { ts: Date.now() });
 
       // Stop transcription cleanly
       await telnyxAction(callControlId, "transcription_stop", {}).catch(() => {});
