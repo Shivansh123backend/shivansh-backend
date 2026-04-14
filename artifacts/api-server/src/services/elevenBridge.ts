@@ -393,6 +393,12 @@ async function connectToElevenLabs(
 
       // ── Conversation ended on ElevenLabs side ─────────────────────────────
       if (type === "conversation_ended" || type === "end_call") {
+        // If a transfer is pending, the ElevenLabs WS was deliberately closed
+        // by the transfer path — do NOT hang up or it will kill the transferred call.
+        if (bridge.pendingTransfer) {
+          logger.info({ callControlId }, "ElevenLabs ended — transfer pending, skipping hangup");
+          return;
+        }
         logger.info({ callControlId }, "ElevenLabs signalled conversation end");
         bridge.onCallEnded?.();
         return;

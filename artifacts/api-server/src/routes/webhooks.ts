@@ -316,7 +316,15 @@ SCRIPT COMPLETION — MANDATORY:
   2. THEN say EXACTLY this phrase (word for word): "Let me transfer you to an expert who can help you further — one moment please!"
   3. Say NOTHING else after that. Stop completely. The transfer will happen automatically.
 - This final transfer step is REQUIRED — do not skip it, do not ask for confirmation, do not ask another question.
-- Do NOT loop back to any question already answered.`;
+- Do NOT loop back to any question already answered.
+
+─── PACING REMINDER — applies to EVERY single response you generate ───
+Slow down. Take your time. You are never in a rush.
+• Write "..." pauses between thoughts in EVERY reply — not just the first few.
+• Maximum 2 short sentences per response. Then stop.
+• Start with a reaction word before every substantive statement: "Yeah...", "Oh...", "Hmm...", "Right...", "Got it...", "Okay so..."
+• Never write a paragraph. Never stack two questions. Never rush to the next point.
+• If you feel like adding more — don't. Say less. Pause more. Wait for them.`;
 }
 
 // ── Telnyx Call Control helpers ───────────────────────────────────────────────

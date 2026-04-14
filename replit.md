@@ -165,3 +165,12 @@ All providers extend `CallProvider` (call/transfer/hangup). Registry provides `c
 - `admin` — full access
 - `supervisor` — read/monitoring only
 - `agent` — can update own status, receive incoming call notifications
+
+## ElevenLabs ConvAI Bridge — Key Notes
+
+- **Transfer detection**: fires on `agent_response` text (4s delay) OR `transcript` caller phrases (3s delay); `pendingTransfer` flag prevents double-fire
+- **Transfer bug fix (2026-04-14)**: `conversation_ended` / `end_call` ElevenLabs events no longer call `onCallEnded` (which hangs up) when `pendingTransfer = true`. Previously the WS close triggered a hangup, killing the transferred call.
+- **AI pacing fix (2026-04-14)**: Added `─── PACING REMINDER ───` block at the very END of every system prompt so it's the last thing the model reads before each generation — prevents the AI from speeding up mid-conversation.
+- **Hold music**: served via `/api/audio/hold/:preset` proxy; returns streamed MP3 to Telnyx transfer `audio_url`.
+- **Auth token key**: `localStorage.getItem("auth_token")` — NOT "token"
+- **Audio cache**: `voiceRegistry.ts` → `audioCache`; token URL `GET /api/audio/:token` (no auth, CORS `*`)
