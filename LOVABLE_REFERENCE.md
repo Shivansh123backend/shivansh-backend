@@ -202,6 +202,54 @@ Authorization: Bearer <token>
 
 ---
 
+## SMS
+
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| POST | `/sms/send` | any | Send single SMS |
+| POST | `/sms/campaign/:campaign_id` | admin | Blast SMS to all eligible campaign leads |
+| GET | `/sms/logs/:campaign_id` | any | SMS logs for a campaign |
+| GET | `/sms/logs` | admin | All SMS logs |
+
+**Single send body:**
+```json
+{ "to": "+14155550100", "from": "+18005551234", "message": "Hello!" }
+```
+`from` is optional — server picks a number from the pool automatically.
+
+**Campaign blast body:**
+```json
+{ "message": "Hi {{name}}, this is SHIVANSH calling about your enquiry. Reply STOP to opt out." }
+```
+Merge tags: `{{name}}`, `{{phone_number}}`, `{{email}}`
+
+**Campaign blast response** — always `202 Accepted` (sending is async):
+```json
+{
+  "accepted": true,
+  "campaign_id": 3,
+  "total_leads": 87,
+  "message": "SMS campaign started — 87 eligible leads queued"
+}
+```
+DNC leads and `do_not_call` status leads are automatically excluded. A `409` is returned if a blast is already in progress for that campaign.
+
+**SMS log object:**
+```ts
+{
+  id: number
+  phone_number: string
+  campaign_id: number | null
+  message: string
+  status: "sent" | "failed"
+  provider_message_id: string | null
+  error: string | null
+  timestamp: string
+}
+```
+
+---
+
 ## Voices
 
 | Method | Path | Role | Description |
