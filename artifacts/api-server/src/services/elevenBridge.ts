@@ -236,8 +236,6 @@ async function connectToElevenLabs(
     // Override voice + prompt + first message per call
     elevenWs.send(JSON.stringify({
       type: "conversation_initiation_client_data",
-      // Tell ElevenLabs what audio format it will receive / should send
-      // We convert µ-law 8kHz → PCM 16kHz before sending
       custom_llm_extra_body: {},
       conversation_config_override: {
         agent: {
@@ -248,7 +246,15 @@ async function connectToElevenLabs(
         tts: {
           voice_id: bridge.voiceId,
           model_id: "eleven_turbo_v2_5",
-          optimize_streaming_latency: 3,
+          // 0=off 1=light 2=medium 3=max — lower = more natural prosody, ~1400ms latency
+          optimize_streaming_latency: 1,
+          voice_settings: {
+            stability: 0.42,          // lower = more natural variation in tone
+            similarity_boost: 0.75,
+            style: 0.30,              // expressiveness — adds emotional range
+            use_speaker_boost: true,
+            speed: 0.93,              // slightly slower = more human-like pacing
+          },
         },
         asr: {
           quality: "high",
@@ -256,8 +262,8 @@ async function connectToElevenLabs(
           user_input_audio_format: "pcm_16000",
         },
         turn: {
-          turn_timeout: 8,
-          silence_end_call_timeout: 25,
+          turn_timeout: 10,           // give caller more time to respond naturally
+          silence_end_call_timeout: 30,
         },
       },
     }));
@@ -301,6 +307,33 @@ async function connectToElevenLabs(
           const label = te.speaker === "user" ? "Caller" : "AI Agent";
           bridge.transcript.push(`${label}: ${te.message}`);
           logger.debug({ callControlId, speaker: te.speaker, msg: te.message }, "ElevenLabs transcript");
+
+          // ── Detect caller asking for human transfer directly ───────────────
+          // Triggers even if the AI hasn't said the transfer phrase yet
+          if (te.speaker === "user" && !bridge.pendingTransfer && bridge.transferNumber) {
+            const CALLER_TRANSFER_PHRASES = [
+              "speak to a human", "talk to a human", "speak to a person",
+              "talk to a person", "real person", "actual person",
+              "speak to someone", "talk to someone", "speak with someone",
+              "get a human", "get a person", "get an agent",
+              "transfer me", "transfer to", "put me through",
+              "speak to an agent", "talk to an agent", "connect me to",
+              "i want a human", "i need a human", "i want to speak",
+              "let me speak to", "can i speak to", "can i talk to",
+            ];
+            const lowerMsg = te.message.toLowerCase();
+            if (CALLER_TRANSFER_PHRASES.some((p) => lowerMsg.includes(p))) {
+              bridge.pendingTransfer = true;
+              logger.info({ callControlId, message: te.message }, "Caller requested human — triggering transfer in 3s");
+              setTimeout(() => {
+                const cb = activeBridges.get(callControlId);
+                if (!cb) return;
+                cb.onTransferRequested?.(cb.transferNumber!);
+                if (elevenWs.readyState === WebSocket.OPEN) elevenWs.close(1000, "caller_requested_human");
+                if (telnyxWs.readyState === WebSocket.OPEN) telnyxWs.send(JSON.stringify({ event: "clear" }));
+              }, 3_000);
+            }
+          }
         }
         return;
       }
