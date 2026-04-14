@@ -236,7 +236,9 @@ async function connectToElevenLabs(
     // Override voice + prompt + first message per call
     elevenWs.send(JSON.stringify({
       type: "conversation_initiation_client_data",
-      custom_llm_extra_body: {},
+      custom_llm_extra_body: {
+        temperature: 0.92,            // more varied, natural word choices — less predictable/robotic
+      },
       conversation_config_override: {
         agent: {
           prompt: { prompt: bridge.systemPrompt },
@@ -246,24 +248,25 @@ async function connectToElevenLabs(
         tts: {
           voice_id: bridge.voiceId,
           model_id: "eleven_turbo_v2_5",
-          // 0=off 1=light 2=medium 3=max — higher = more buffering = slower startup = more human
-          optimize_streaming_latency: 2,
+          // 0=off 1=light 2=medium 3=max
+          optimize_streaming_latency: 1,
           voice_settings: {
-            stability: 0.58,          // higher = steadier, more measured delivery
-            similarity_boost: 0.75,
-            style: 0.20,              // lower style = less rushing, calmer tone
+            stability: 0.38,          // LOW = more natural pitch variation (high = robotic monotone)
+            similarity_boost: 0.80,
+            style: 0.35,              // moderate expressiveness — emotion without rushing
             use_speaker_boost: true,
-            speed: 0.78,              // noticeably slower — conversational, not rushed
+            speed: 0.85,              // natural conversational pace — not too slow, not rushed
           },
         },
         asr: {
           quality: "high",
           provider: "elevenlabs",
           user_input_audio_format: "pcm_16000",
+          keywords: [],
         },
         turn: {
-          turn_timeout: 15,           // longer wait — let caller think and finish speaking
-          silence_end_call_timeout: 40,
+          turn_timeout: 12,
+          silence_end_call_timeout: 35,
         },
       },
     }));

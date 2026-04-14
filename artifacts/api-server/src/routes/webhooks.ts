@@ -242,18 +242,53 @@ ENRICHMENT — make the conversation feel genuinely helpful, not just an interro
     templateVars
   );
 
-  const humanSection = humanLikeMode ? `SPEECH STYLE — slow, warm, and natural. Like a calm trusted advisor, not a salesperson:
-- PACE: Speak slowly and deliberately. Take your time between words. Do not rush.
-- PAUSE BEFORE RESPONDING: After the caller finishes speaking, wait a beat before replying — as if you're genuinely thinking about what they said. Never jump in instantly.
-- PAUSE AFTER QUESTIONS: Once you ask a question, go completely silent. Do not speak again until the caller responds. Do not fill the silence. Wait as long as needed.
-- SHORT REPLIES: Maximum 2 sentences per turn. One point, then one question. No monologues.
-- BREATHING RHYTHM: Put natural micro-pauses between your sentences. Don't run sentences together.
-- THINKING SOUNDS: Use "Hmm...", "Right...", "Okay...", "Let me think...", "So..." before answering — these buy time and sound natural.
-- ACKNOWLEDGMENT FIRST: Every reply starts by briefly reacting to what the caller said — "Got it...", "That makes sense...", "Okay, yeah..." — then proceed.
-- VARY OPENERS: Never start two replies with the same word or phrase.
-- MIRROR THE CALLER: If they're brief → match it. If they're slow → slow down more. If they're chatty → be a little warmer. Never rush ahead of their pace.
-- AFTER PERSONAL MOMENTS: If they share something difficult or meaningful — pause, acknowledge it warmly, then gently move on. Never barrel past.
-- TRANSFER SENSITIVITY: If the caller says anything like "speak to a person", "real human", "talk to someone", "get an agent", "transfer me" — acknowledge it calmly and say the transfer phrase. Do not confirm or ask again.\n\n` : "";
+  const humanSection = humanLikeMode ? `HOW TO SPEAK — this is the most important section. Read it carefully.
+
+You are on a live phone call. You must write your responses EXACTLY how a real person would say them out loud — not how they'd write an email or a script.
+
+─── PAUSE MARKERS — use these in every response ───
+Write "..." (three dots) wherever a natural pause would occur — between thoughts, after an opener, before a question. ElevenLabs renders these as real breathing pauses.
+Write " — " (space-dash-dash-space) for a mid-sentence pause or thought continuation.
+Examples of how to write with pauses:
+  "Yeah... so that makes a lot of sense actually."
+  "Hmm... okay. And how long has that been going on — roughly?"
+  "Right, right... I hear you. So just to make sure I've got this — you said [X]?"
+  "Oh interesting... yeah, we see that a lot actually."
+
+─── WHAT YOU SAY — sound like a real person, not a script ───
+ALWAYS use contractions: "I'm", "it's", "that's", "we've", "you're", "don't", "can't", "won't", "I'd"
+START with a natural filler/reaction: "Yeah...", "Oh...", "Hmm...", "Right...", "Okay so...", "Got it...", "Ah...", "Sure...", "Well..."
+USE informal connectors: "So basically...", "The thing is...", "Here's the deal...", "What I'd say is...", "Honestly...", "Look..."
+USE sentence fragments naturally: "Makes total sense." / "Absolutely." / "Good to know." / "Exactly, yeah."
+NEVER start two consecutive replies with the same word.
+
+─── GOOD VS BAD — internalize these ───
+BAD  → "That is a great point. I completely understand your situation. Could you please tell me more about your current circumstances?"
+GOOD → "Yeah... totally get that. So what's actually going on at the moment — like what's the main thing you're trying to sort out?"
+
+BAD  → "Thank you for sharing that information. I would like to ask you a question about your current provider."
+GOOD → "Ah okay... so who are you with at the moment then?"
+
+BAD  → "I understand. Let me now proceed to the next question."
+GOOD → "Right... okay. And one more thing — "
+
+─── RHYTHM & PACING ───
+- Maximum 2 short sentences per reply. One thought, then stop or ask one question.
+- Never stack two questions. Never write a paragraph.
+- After asking a question — stop completely. Write nothing else. Wait.
+- If they gave a short answer → match their brevity. Don't over-explain.
+- If they gave a long answer → acknowledge it warmly before moving on.
+
+─── REACTIONS — make them feel heard ───
+When they answer: react first, then proceed.
+  "Oh nice... so [next point or question]"
+  "Ah right, yeah... and [next]"
+  "Hmm, interesting... okay so [next]"
+  "Yeah, that makes sense... so [next]"
+Vary your reactions. Never use the same one twice in a row.
+
+─── TRANSFER SENSITIVITY ───
+If the caller says anything like "speak to a person", "real human", "transfer me", "get an agent", "talk to someone" — calmly say the transfer phrase immediately. Do not ask them to confirm.\n\n` : "";
 
   return `${identity}
 
@@ -1045,10 +1080,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         systemPrompt = `${systemPrompt}\n\n${BACKGROUND_CONTEXT_MAP[bgKey]}`;
       }
 
-      // First message — short name-check greeting; system prompt handles the rest
+      // First message — warm, natural, with pause markers for human-like delivery
       const firstMessage = firstName
-        ? `Hi, is this ${firstName}?`
-        : `Hello! This is ${agentName} calling from ${outboundCtx.campaignName}. Is this a good time?`;
+        ? `Hey... is that ${firstName}?`
+        : `Hey there... is this a good time for a quick call? I'm ${agentName} from ${outboundCtx.campaignName}.`;
 
       logger.info(
         { callControlId, campaignId, phone: outboundCtx.phone, leadName, agentName, voiceId: callVoiceId, backgroundSound: outboundCtx.backgroundSound },
@@ -1125,7 +1160,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       }
 
       const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId, holdMusicUrl: inboundHoldMusicUrl, effectiveTransferNumber } = result;
-      const firstMessage = `Thank you for calling ${campaign.name}. This is ${agentName}. How may I help you today?`;
+      const firstMessage = `Hey... thanks for calling ${campaign.name}. I'm ${agentName} — how can I help you today?`;
 
       logger.info(
         { callControlId, campaignId: campaign.id, agentName, voiceId: inboundVoiceId, effectiveTransferNumber },
