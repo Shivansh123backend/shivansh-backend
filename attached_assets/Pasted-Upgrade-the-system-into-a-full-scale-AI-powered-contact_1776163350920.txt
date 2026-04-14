@@ -1,0 +1,460 @@
+Upgrade the system into a full-scale AI-powered contact center dialer combining Vicidial (dialer logic) and VAPI (AI calling) capabilities.
+
+---
+
+GOAL:
+
+Build a production-grade dialer with:
+
+* Multi-campaign support
+* Parallel + predictive dialing
+* Dynamic dialing speed
+* Agent + number resource management
+* Supervisor controls (listen, whisper, barge)
+* Inbound + outbound routing
+* Answer detection (AMD)
+* Spam/risk protection
+* Queue-based stability
+* Advanced CDR + real-time monitoring
+
+---
+
+========================
+
+1. CAMPAIGN SYSTEM
+   ========================
+
+Add fields:
+
+* dialing_mode (manual, progressive, predictive, preview)
+* max_parallel_calls
+* dialing_ratio
+* dialing_speed (calls per second)
+* assigned_agents (array)
+* assigned_numbers (array)
+
+---
+
+========================
+2. DIALING MODES
+================
+
+manual:
+
+* trigger single call
+
+progressive:
+
+* dial next lead when agent free
+
+predictive:
+
+* dial leads ahead of agent availability
+
+preview:
+
+* show lead before dialing
+
+---
+
+========================
+3. GLOBAL NUMBER POOL
+=====================
+
+Table: numbers
+
+Fields:
+
+* id
+* phone_number
+* status (available, busy, blocked)
+* usage_count
+* spam_score
+* last_used_at
+
+---
+
+RULES:
+
+* Numbers are NOT permanently tied to campaigns
+* Any campaign can use available numbers
+* If number in use → cannot be reused
+* After call ends → return to pool
+
+---
+
+========================
+4. NUMBER AVAILABILITY SYSTEM
+=============================
+
+Before dialing:
+
+* check number.status = available
+
+On call start:
+
+* number.status = busy
+
+On call end:
+
+* number.status = available
+
+---
+
+========================
+5. SPAM / RISK ENGINE
+=====================
+
+Rules:
+
+* usage_count++
+* if usage_count > threshold → mark "risk"
+* if spam_score high → mark "blocked"
+
+Return UI flags:
+
+* 🟢 available
+* 🟡 risk
+* 🔴 blocked
+
+Blocked numbers:
+→ cannot be used
+
+---
+
+========================
+6. REDIS CALL QUEUE (CRITICAL)
+==============================
+
+Key:
+
+call_queue:{campaign_id}
+
+---
+
+FLOW:
+
+* push leads into queue
+* worker processes queue
+
+---
+
+========================
+7. PARALLEL DIALING ENGINE
+==========================
+
+Steps:
+
+1. fetch available agents
+2. fetch available numbers
+3. calculate target_calls
+
+target_calls = agents_available * dialing_ratio
+
+limit:
+
+if target_calls > max_parallel_calls:
+→ cap to max_parallel_calls
+
+---
+
+========================
+8. DIALING SPEED CONTROL
+========================
+
+Dial calls in batches:
+
+dialing_speed = calls per second
+
+Example:
+
+dialing_speed = 5
+→ 5 calls every second
+
+Implement:
+
+* batch execution loop
+* delay 100–300ms between calls
+
+---
+
+========================
+9. ADAPTIVE SPEED ENGINE
+========================
+
+If:
+
+* agents idle → increase speed
+* voicemail high → reduce speed
+* failures increase → slow down
+
+---
+
+========================
+10. ANSWER DETECTION (AMD)
+==========================
+
+Use Telnyx AMD:
+
+On answer:
+
+if human:
+→ AI / agent flow
+
+if voicemail:
+→ play voicemail script
+→ hangup
+
+Store:
+
+answer_type = human / voicemail
+
+---
+
+========================
+11. AGENT SYSTEM
+================
+
+Table: agents
+
+Fields:
+
+* id
+* name
+* phone_number
+* status (available, busy)
+* campaign_id
+
+---
+
+LOGIC:
+
+* assign agents per campaign
+* mark busy when call starts
+* release after call ends
+
+---
+
+========================
+12. AGENT + NUMBER SYNC
+=======================
+
+On call start:
+
+* number → busy
+* agent → busy
+
+On call end:
+
+* number → available
+* agent → available
+
+---
+
+========================
+13. SUPERVISOR FEATURES
+=======================
+
+Routes:
+
+POST /supervisor/listen/:call_id
+POST /supervisor/whisper/:call_id
+POST /supervisor/barge/:call_id
+
+---
+
+FUNCTIONS:
+
+listen:
+
+* join silently
+
+whisper:
+
+* send audio only to agent
+
+barge:
+
+* join full call
+
+---
+
+========================
+14. LIVE CALL TRACKING
+======================
+
+Redis:
+
+active_calls:{call_id}
+
+Store:
+
+* campaign_id
+* number_used
+* lead_number
+* agent_id
+* start_time
+* status
+
+---
+
+API:
+
+GET /dashboard/live
+
+Return:
+
+* active calls
+* duration (seconds)
+* number dialing
+* lead
+* campaign
+
+---
+
+========================
+15. INBOUND ROUTING
+===================
+
+Table: inbound_routes
+
+Fields:
+
+* did_number
+* campaign_id
+* fallback_number
+
+---
+
+FLOW:
+
+Inbound call:
+
+* detect DID
+* map to campaign
+* AI greeting:
+  "Hello, how can I help you?"
+* process input
+* transfer if needed
+
+---
+
+========================
+16. CALLBACK SYSTEM
+===================
+
+If missed call returns:
+
+* identify campaign via DID
+* route correctly
+
+---
+
+========================
+17. CALL RECORDING
+==================
+
+* start recording on connect
+* stop on hangup
+* store recording_url
+
+---
+
+========================
+18. ADVANCED CDR
+================
+
+Table: call_logs
+
+Fields:
+
+* call_id
+* campaign_id
+* from_number
+* to_number
+* number_used
+* agent_id
+* start_time
+* end_time
+* duration_seconds
+* answer_type
+* disposition
+* recording_url
+
+---
+
+========================
+19. VOICE SYSTEM
+================
+
+Priority:
+
+1. ElevenLabs
+2. OpenAI TTS
+3. fallback audio
+
+---
+
+========================
+20. QUEUE + STABILITY
+=====================
+
+CRITICAL:
+
+* no uncontrolled loops
+* controlled async worker
+* retry max 1 time
+* delay between calls
+
+---
+
+========================
+21. ERROR HANDLING
+==================
+
+* log all failures
+* retry once
+* skip lead if failed
+
+---
+
+========================
+22. SUPERVISOR DASHBOARD
+========================
+
+GET /dashboard/supervisor
+
+Return:
+
+* active calls
+* busy numbers
+* free numbers
+* agent status
+* campaigns running
+
+---
+
+========================
+23. FAIL SAFE
+=============
+
+If AI fails:
+
+→ "Connecting you to our team"
+
+---
+
+========================
+GOAL
+====
+
+System must:
+
+* dial multiple leads simultaneously
+* dynamically control dialing speed
+* manage numbers globally
+* detect human vs voicemail
+* support inbound + outbound flows
+* provide supervisor visibility
+* prevent number spam
+* remain stable under load

@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -14,6 +14,11 @@ export const leadsTable = pgTable("leads", {
   source: leadSourceEnum("source").notNull().default("manual"),
   status: leadStatusEnum("status").notNull().default("pending"),
   metadata: text("metadata"),
+  // Retry + priority
+  retryCount: integer("retry_count").notNull().default(0),
+  lastCalledAt: timestamp("last_called_at", { withTimezone: true }),
+  priority: integer("priority").notNull().default(0),
+  dncFlag: boolean("dnc_flag").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

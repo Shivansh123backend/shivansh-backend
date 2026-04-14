@@ -9,6 +9,7 @@ import {
   aiAgentsTable,
   voicesTable,
   phoneNumbersTable,
+  dncListTable,
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
@@ -36,6 +37,17 @@ const createCampaignSchema = z.object({
   backgroundSound: z.enum(["none", "office", "typing", "cafe"]).default("none"),
   holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).default("none"),
   humanLike: z.string().default("true"),
+  // Dialing engine
+  dialingMode: z.enum(["manual", "progressive", "predictive", "preview"]).default("progressive"),
+  dialingRatio: z.number().min(1).max(20).default(1),
+  dialingSpeed: z.number().min(1).max(120).default(10),
+  dropRateLimit: z.number().min(1).max(50).default(3),
+  retryAttempts: z.number().min(0).max(10).default(2),
+  retryIntervalMinutes: z.number().min(1).max(1440).default(60),
+  workingHoursStart: z.string().nullish(),
+  workingHoursEnd: z.string().nullish(),
+  workingHoursTimezone: z.string().default("UTC"),
+  amdEnabled: z.boolean().default(false),
 });
 
 const assignAgentSchema = z.object({
@@ -101,18 +113,32 @@ router.get("/campaigns/options", authenticate, (_req, res): void => {
 const updateCampaignSchema = z.object({
   name: z.string().min(1).optional(),
   type: z.enum(["outbound", "inbound", "both"]).optional(),
+  agentId: z.number().nullish(),
+  routingType: z.enum(["ai", "human", "ai_then_human"]).optional(),
   agentPrompt: z.string().nullish(),
   knowledgeBase: z.string().nullish(),
   recordingNotes: z.string().nullish(),
   voice: z.string().nullish(),
   fromNumber: z.string().nullish(),
   transferNumber: z.string().nullish(),
+  transferRules: z.string().nullish(),
   maxConcurrentCalls: z.number().min(1).max(100).optional(),
   backgroundSound: z.enum(["none", "office", "typing", "cafe"]).optional(),
   holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).optional(),
   humanLike: z.string().optional(),
   // Allow status changes via PATCH (stop/pause/resume from frontend)
   status: z.enum(["draft", "active", "paused", "completed"]).optional(),
+  // Dialing engine
+  dialingMode: z.enum(["manual", "progressive", "predictive", "preview"]).optional(),
+  dialingRatio: z.number().min(1).max(20).nullish(),
+  dialingSpeed: z.number().min(1).max(120).nullish(),
+  dropRateLimit: z.number().min(1).max(50).nullish(),
+  retryAttempts: z.number().min(0).max(10).nullish(),
+  retryIntervalMinutes: z.number().min(1).max(1440).nullish(),
+  workingHoursStart: z.string().nullish(),
+  workingHoursEnd: z.string().nullish(),
+  workingHoursTimezone: z.string().optional(),
+  amdEnabled: z.boolean().optional(),
 });
 
 router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
@@ -229,24 +255,95 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
   }
 });
 
+// ── Working hours helper ──────────────────────────────────────────────────────
+function isWithinWorkingHours(campaign: typeof campaignsTable.$inferSelect): boolean {
+  if (!campaign.workingHoursStart || !campaign.workingHoursEnd) return true;
+  try {
+    const tz = campaign.workingHoursTimezone ?? "UTC";
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+    const parts = formatter.formatToParts(now);
+    const h = parseInt(parts.find(p => p.type === "hour")?.value ?? "0", 10);
+    const m = parseInt(parts.find(p => p.type === "minute")?.value ?? "0", 10);
+    const nowMins = h * 60 + m;
+    const [sh, sm] = campaign.workingHoursStart.split(":").map(Number);
+    const [eh, em] = campaign.workingHoursEnd.split(":").map(Number);
+    const startMins = (sh ?? 0) * 60 + (sm ?? 0);
+    const endMins = (eh ?? 23) * 60 + (em ?? 59);
+    return nowMins >= startMins && nowMins <= endMins;
+  } catch {
+    return true;
+  }
+}
+
+// ── DNC lookup (cached in-memory for the duration of a campaign run) ──────────
+async function buildDncSet(): Promise<Set<string>> {
+  const rows = await db.select({ phone: dncListTable.phoneNumber }).from(dncListTable);
+  return new Set(rows.map(r => r.phone.replace(/[^\d+]/g, "")));
+}
+
 async function triggerCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
   const { script, voiceName, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(campaignId, campaign);
 
+  const retryAttempts = campaign.retryAttempts ?? 2;
+  const retryIntervalMs = (campaign.retryIntervalMinutes ?? 60) * 60 * 1000;
+  const maxConcurrency = Math.min(campaign.maxConcurrentCalls ?? 5, 20);
+  const dialingSpeed = Math.max(1, campaign.dialingSpeed ?? 10); // calls per minute
+  const msPerCall = Math.floor(60_000 / dialingSpeed);
+
+  // Build DNC set once for the entire run
+  const dncSet = await buildDncSet();
+
+  // Fetch pending leads, ordered by priority desc
   const pendingLeads = await db
     .select()
     .from(leadsTable)
     .where(and(eq(leadsTable.campaignId, campaignId), eq(leadsTable.status, "pending")));
 
-  const concurrency = Math.min(campaign.maxConcurrentCalls ?? 5, 20);
+  // Sort: higher priority first, then by created date
+  pendingLeads.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 
-  logger.info({ campaignId, count: pendingLeads.length, concurrency }, `Campaign starting — triggering calls concurrently (${concurrency} at a time)`);
+  logger.info(
+    { campaignId, count: pendingLeads.length, concurrency: maxConcurrency, dialingSpeed, mode: campaign.dialingMode },
+    `Campaign starting — dialing engine active`,
+  );
 
-  // Process leads in concurrent batches
+  // Track drop rate
+  let totalCalls = 0;
+  let abandonedCalls = 0;
+  const dropRateLimit = campaign.dropRateLimit ?? 3;
+
   async function processLead(lead: typeof pendingLeads[0]): Promise<void> {
+    const normPhone = lead.phone.replace(/[^\d+]/g, "");
+
+    // DNC check
+    if (dncSet.has(normPhone) || lead.dncFlag) {
+      logger.info({ leadId: lead.id, phone: lead.phone }, "Lead skipped — on DNC list");
+      await db.update(leadsTable).set({ status: "do_not_call" }).where(eq(leadsTable.id, lead.id));
+      return;
+    }
+
+    // Retry exhaustion check
+    if ((lead.retryCount ?? 0) > retryAttempts) {
+      logger.info({ leadId: lead.id }, "Lead skipped — retry limit reached");
+      await db.update(leadsTable).set({ status: "completed" }).where(eq(leadsTable.id, lead.id));
+      return;
+    }
+
+    // Working hours check
+    if (!isWithinWorkingHours(campaign)) {
+      logger.info({ campaignId }, "Outside working hours — pausing dialing");
+      return;
+    }
+
     const [logEntry] = await db
       .insert(callLogsTable)
       .values({ phoneNumber: lead.phone, campaignId, status: "initiated", direction: "outbound" })
       .returning();
+
+    totalCalls++;
 
     const result = await enqueueCall({
       phone: lead.phone,
@@ -258,27 +355,62 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
       campaign_name: campaign.name,
       background_sound: backgroundSound !== "none" ? backgroundSound : undefined,
       hold_music_url: holdMusicUrl ?? undefined,
+      amd_enabled: campaign.amdEnabled ? "true" : undefined,
     });
+
+    const newRetryCount = (lead.retryCount ?? 0) + (result.success ? 0 : 1);
 
     await db
       .update(callLogsTable)
       .set({ status: result.success ? "completed" : "failed" })
       .where(eq(callLogsTable.id, logEntry.id));
 
-    await db
-      .update(leadsTable)
-      .set({ status: "called" })
-      .where(eq(leadsTable.id, lead.id));
+    if (result.success) {
+      await db
+        .update(leadsTable)
+        .set({ status: "called", lastCalledAt: new Date(), retryCount: newRetryCount })
+        .where(eq(leadsTable.id, lead.id));
+    } else {
+      abandonedCalls++;
+      // Schedule retry: reset to pending if retry limit not reached
+      if (newRetryCount <= retryAttempts) {
+        setTimeout(async () => {
+          const [still] = await db
+            .select({ status: campaignsTable.status })
+            .from(campaignsTable)
+            .where(eq(campaignsTable.id, campaignId));
+          if (still?.status === "active") {
+            await db
+              .update(leadsTable)
+              .set({ status: "pending", retryCount: newRetryCount, lastCalledAt: new Date() })
+              .where(eq(leadsTable.id, lead.id));
+          }
+        }, retryIntervalMs);
+      } else {
+        await db
+          .update(leadsTable)
+          .set({ status: "called", retryCount: newRetryCount, lastCalledAt: new Date() })
+          .where(eq(leadsTable.id, lead.id));
+      }
+    }
+
+    // Adaptive drop-rate: slow down if we're dropping too many
+    if (totalCalls > 10) {
+      const dropRate = (abandonedCalls / totalCalls) * 100;
+      if (dropRate > dropRateLimit) {
+        logger.warn({ dropRate, dropRateLimit, campaignId }, "Drop rate exceeded — throttling");
+        await delay(2000);
+      }
+    }
   }
 
-  // Concurrency pool — run `concurrency` leads simultaneously
   let index = 0;
   async function worker(): Promise<void> {
     while (true) {
       const lead = pendingLeads[index++];
       if (!lead) break;
 
-      // Re-check if campaign is still active before each call
+      // Re-check campaign status
       const [current] = await db
         .select({ status: campaignsTable.status })
         .from(campaignsTable)
@@ -290,17 +422,21 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
         logger.error({ err, leadId: lead.id, phone: lead.phone, campaignId }, "Call dispatch failed for lead");
       });
 
-      // Small jitter between calls in the same worker to avoid burst
-      const jitter = 200 + Math.floor(Math.random() * 300);
-      await delay(jitter);
+      // Pace calls according to dialingSpeed (calls/min)
+      await delay(msPerCall + Math.floor(Math.random() * 300));
     }
   }
 
-  // Launch `concurrency` workers in parallel
-  const workers = Array.from({ length: concurrency }, () => worker());
+  // For predictive mode: calculate target concurrency = agents × dialingRatio
+  const dialingRatio = campaign.dialingRatio ?? 1;
+  const effectiveConcurrency = campaign.dialingMode === "predictive"
+    ? Math.min(maxConcurrency * dialingRatio, 20)
+    : maxConcurrency;
+
+  const workers = Array.from({ length: effectiveConcurrency }, () => worker());
   await Promise.allSettled(workers);
 
-  logger.info({ campaignId, count: pendingLeads.length }, `Campaign finished dispatching all calls`);
+  logger.info({ campaignId, totalCalls, abandonedCalls }, `Campaign finished dispatching all calls`);
 
   await db
     .update(campaignsTable)

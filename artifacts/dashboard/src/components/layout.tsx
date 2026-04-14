@@ -23,6 +23,7 @@ import {
   PhoneMissed,
   ChevronDown,
   Bot,
+  ShieldX,
 } from "lucide-react";
 
 // ── Navigation items ────────────────────────────────────────────────────────────
@@ -30,6 +31,7 @@ const ADMIN_NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
   { href: "/leads", label: "Lead Lists", icon: List },
+  { href: "/dnc", label: "DNC List", icon: ShieldX },
   { href: "/agents", label: "AI Agents", icon: Bot },
   { href: "/voices", label: "Voices", icon: Mic2 },
   { href: "/dispositions", label: "Dispositions", icon: Tag },

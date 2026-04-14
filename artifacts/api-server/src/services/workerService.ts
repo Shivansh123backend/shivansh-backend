@@ -27,6 +27,7 @@ export interface EnqueueCallPayload {
   campaign_name?: string;
   background_sound?: string;
   hold_music_url?: string;
+  amd_enabled?: string;
 }
 
 export interface TriggerCallResult {
@@ -70,7 +71,7 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
       "Initiating Telnyx outbound call directly"
     );
 
-    const body = {
+    const body: Record<string, unknown> = {
       connection_id: connectionId,
       to: payload.phone,
       from: payload.from_number,
@@ -79,6 +80,9 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
       webhook_api_version: "2",
       client_state: clientState,
     };
+    if (payload.amd_enabled === "true") {
+      body.answering_machine_detection = "premium";
+    }
 
     const response = await axios.post(`${TELNYX_API_BASE}/calls`, body, {
       headers: {

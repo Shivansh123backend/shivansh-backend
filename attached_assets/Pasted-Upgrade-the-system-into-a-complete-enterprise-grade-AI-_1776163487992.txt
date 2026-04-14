@@ -1,0 +1,422 @@
+Upgrade the system into a complete enterprise-grade AI-powered contact center dialer (Vicidial + VAPI hybrid) with predictive dialing, compliance, agent control, and real-time monitoring.
+
+---
+
+GOAL:
+
+Build a production-ready system that supports:
+
+* Multi-campaign dialing
+* Predictive + progressive dialing
+* Dialing speed & pacing control
+* Agent + number resource management
+* Supervisor monitoring (listen, whisper, barge)
+* Inbound + outbound routing
+* Compliance (DNC + time windows)
+* Lead recycling + retry logic
+* Spam protection
+* Advanced reporting (CDR + analytics)
+* Stable queue-based execution
+
+---
+
+========================
+
+1. CAMPAIGN CONFIG
+   ========================
+
+Fields:
+
+* dialing_mode (manual, progressive, predictive, preview)
+* max_parallel_calls
+* dialing_ratio
+* dialing_speed (calls/sec)
+* drop_rate_limit (max % abandoned calls)
+* retry_attempts
+* retry_interval_minutes
+* working_hours (start_time, end_time, timezone)
+* assigned_agents
+* assigned_numbers
+
+---
+
+========================
+2. LEAD MANAGEMENT
+==================
+
+Fields:
+
+* name
+* phone_number
+* email
+* status (new, called, completed, failed)
+* retry_count
+* last_called_at
+* priority
+* dnc_flag (true/false)
+
+---
+
+LOGIC:
+
+* skip leads with dnc_flag = true
+* skip leads outside working_hours
+* prioritize leads based on priority
+
+---
+
+========================
+3. DNC (DO NOT CALL)
+====================
+
+Table: dnc_list
+
+* phone_number
+
+---
+
+Before dialing:
+
+* check if number in DNC → skip
+
+---
+
+========================
+4. GLOBAL NUMBER POOL
+=====================
+
+Table: numbers
+
+Fields:
+
+* phone_number
+* status (available, busy, blocked)
+* usage_count
+* spam_score
+* last_used_at
+
+---
+
+LOGIC:
+
+* dynamic assignment
+* shared across campaigns
+* block if spam_score high
+
+---
+
+========================
+5. SPAM / RISK ENGINE
+=====================
+
+Rules:
+
+* usage_count++
+* if usage_count > threshold → risk
+* if spam_score high → blocked
+
+---
+
+========================
+6. REDIS QUEUE SYSTEM
+=====================
+
+Key:
+
+call_queue:{campaign_id}
+
+---
+
+FLOW:
+
+* push leads into queue
+* worker processes queue
+
+---
+
+========================
+7. PARALLEL + PREDICTIVE DIALING
+================================
+
+Calculate:
+
+available_agents = agents available
+
+target_calls = available_agents * dialing_ratio
+
+Limit:
+
+if target_calls > max_parallel_calls:
+→ cap
+
+---
+
+========================
+8. DIALING SPEED CONTROL
+========================
+
+dialing_speed = calls/sec
+
+Implement batch dialing:
+
+* run every second
+* place calls = dialing_speed
+* delay 100–300ms
+
+---
+
+========================
+9. DROP RATE CONTROL (CRITICAL)
+===============================
+
+Track:
+
+* total_calls
+* abandoned_calls
+
+If drop_rate > limit:
+
+→ reduce dialing_speed
+
+---
+
+========================
+10. ADAPTIVE PACING
+===================
+
+If:
+
+* agents idle → increase speed
+* voicemail high → decrease speed
+* failures high → slow down
+
+---
+
+========================
+11. ANSWER DETECTION (AMD)
+==========================
+
+Use Telnyx AMD:
+
+If human:
+→ continue flow
+
+If voicemail:
+→ play voicemail message
+→ end call
+
+---
+
+========================
+12. LEAD RETRY SYSTEM
+=====================
+
+If call fails:
+
+* retry_count++
+* schedule retry after retry_interval_minutes
+
+Stop if retry_count > retry_attempts
+
+---
+
+========================
+13. AGENT SYSTEM
+================
+
+Fields:
+
+* name
+* phone_number
+* status (available, busy)
+* campaign_id
+
+---
+
+========================
+14. AGENT + NUMBER SYNC
+=======================
+
+On call start:
+
+* agent → busy
+* number → busy
+
+On call end:
+
+* agent → available
+* number → available
+
+---
+
+========================
+15. SUPERVISOR CONTROLS
+=======================
+
+Routes:
+
+* listen
+* whisper
+* barge
+
+---
+
+========================
+16. LIVE MONITORING
+===================
+
+Redis:
+
+active_calls
+
+Track:
+
+* campaign
+* number_used
+* lead
+* agent
+* duration
+
+---
+
+========================
+17. INBOUND ROUTING
+===================
+
+Table: inbound_routes
+
+Fields:
+
+* did_number
+* campaign_id
+* fallback_number
+
+---
+
+FLOW:
+
+Inbound call:
+
+* detect number
+* route to campaign
+* AI greeting
+* collect input
+* transfer
+
+---
+
+========================
+18. CALLBACK SYSTEM
+===================
+
+If customer calls back:
+
+* match campaign via DID
+* route accordingly
+
+---
+
+========================
+19. CALL RECORDING
+==================
+
+* start on connect
+* stop on hangup
+* save recording_url
+
+---
+
+========================
+20. ADVANCED CDR
+================
+
+Store:
+
+* call duration
+* answer_type
+* number used
+* campaign
+* agent
+* disposition
+
+---
+
+========================
+21. DISPOSITION SYSTEM
+======================
+
+Values:
+
+* interested
+* not_interested
+* voicemail
+* callback
+* transferred
+
+---
+
+========================
+22. VOICE SYSTEM
+================
+
+Priority:
+
+1. ElevenLabs
+2. OpenAI TTS
+3. fallback audio
+
+---
+
+========================
+23. API RATE LIMITING
+=====================
+
+* max calls per second
+* avoid Telnyx blocking
+
+---
+
+========================
+24. ERROR HANDLING
+==================
+
+* retry once
+* log error
+* skip lead
+
+---
+
+========================
+25. SUPERVISOR DASHBOARD
+========================
+
+Show:
+
+* active calls
+* number status
+* agent status
+* campaign performance
+
+---
+
+========================
+26. MULTI-TENANT READY (OPTIONAL)
+=================================
+
+Add:
+
+* organization_id
+
+---
+
+========================
+GOAL
+====
+
+System should:
+
+* behave like Vicidial
+* scale like SaaS
+* support AI + human hybrid
+* remain stable under load
+* comply with dialing rules

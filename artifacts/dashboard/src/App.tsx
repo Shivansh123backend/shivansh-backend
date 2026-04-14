@@ -21,6 +21,7 @@ import SettingsPage from "@/pages/settings";
 import VoicesPage from "@/pages/voices";
 import DialerPage from "@/pages/dialer";
 import CallbacksPage from "@/pages/callbacks";
+import DncPage from "@/pages/dnc";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -71,6 +72,9 @@ function Router() {
       </Route>
       <Route path="/callbacks">
         <ProtectedRoute component={CallbacksPage} />
+      </Route>
+      <Route path="/dnc">
+        <ProtectedRoute component={DncPage} adminOnly />
       </Route>
       <Route path="/calls">
         <ProtectedRoute component={CallsPage} />

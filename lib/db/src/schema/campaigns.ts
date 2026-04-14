@@ -1,10 +1,11 @@
-import { pgTable, text, serial, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
 export const campaignStatusEnum = pgEnum("campaign_status", ["draft", "active", "paused", "completed"]);
 export const campaignTypeEnum = pgEnum("campaign_type", ["outbound", "inbound", "both"]);
 export const routingTypeEnum = pgEnum("routing_type", ["ai", "human", "ai_then_human"]);
+export const dialingModeEnum = pgEnum("dialing_mode", ["manual", "progressive", "predictive", "preview"]);
 
 export const campaignsTable = pgTable("campaigns", {
   id: serial("id").primaryKey(),
@@ -15,7 +16,7 @@ export const campaignsTable = pgTable("campaigns", {
   routingType: routingTypeEnum("routing_type").notNull().default("ai"),
   maxConcurrentCalls: integer("max_concurrent_calls").notNull().default(5),
   transferRules: text("transfer_rules"),
-  // AI calling configuration — used directly by worker service
+  // AI calling configuration
   agentPrompt: text("agent_prompt"),
   knowledgeBase: text("knowledge_base"),
   recordingNotes: text("recording_notes"),
@@ -25,6 +26,19 @@ export const campaignsTable = pgTable("campaigns", {
   backgroundSound: text("background_sound").default("none"),
   holdMusic: text("hold_music").default("none"),
   humanLike: text("human_like").default("true"),
+  // Dialing engine config
+  dialingMode: dialingModeEnum("dialing_mode").notNull().default("progressive"),
+  dialingRatio: integer("dialing_ratio").notNull().default(1),
+  dialingSpeed: integer("dialing_speed").notNull().default(10),
+  dropRateLimit: integer("drop_rate_limit").notNull().default(3),
+  retryAttempts: integer("retry_attempts").notNull().default(2),
+  retryIntervalMinutes: integer("retry_interval_minutes").notNull().default(60),
+  // Working hours (HH:MM in 24h, null = always)
+  workingHoursStart: text("working_hours_start"),
+  workingHoursEnd: text("working_hours_end"),
+  workingHoursTimezone: text("working_hours_timezone").default("UTC"),
+  // AMD
+  amdEnabled: boolean("amd_enabled").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
