@@ -246,14 +246,14 @@ async function connectToElevenLabs(
         tts: {
           voice_id: bridge.voiceId,
           model_id: "eleven_turbo_v2_5",
-          // 0=off 1=light 2=medium 3=max — lower = more natural prosody, ~1400ms latency
-          optimize_streaming_latency: 1,
+          // 0=off 1=light 2=medium 3=max — higher = more buffering = slower startup = more human
+          optimize_streaming_latency: 2,
           voice_settings: {
-            stability: 0.42,          // lower = more natural variation in tone
+            stability: 0.58,          // higher = steadier, more measured delivery
             similarity_boost: 0.75,
-            style: 0.30,              // expressiveness — adds emotional range
+            style: 0.20,              // lower style = less rushing, calmer tone
             use_speaker_boost: true,
-            speed: 0.93,              // slightly slower = more human-like pacing
+            speed: 0.78,              // noticeably slower — conversational, not rushed
           },
         },
         asr: {
@@ -262,8 +262,8 @@ async function connectToElevenLabs(
           user_input_audio_format: "pcm_16000",
         },
         turn: {
-          turn_timeout: 10,           // give caller more time to respond naturally
-          silence_end_call_timeout: 30,
+          turn_timeout: 15,           // longer wait — let caller think and finish speaking
+          silence_end_call_timeout: 40,
         },
       },
     }));
