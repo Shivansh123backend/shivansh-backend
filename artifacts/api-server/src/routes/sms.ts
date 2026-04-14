@@ -2,12 +2,15 @@ import { Router, type IRouter } from "express";
 import axios from "axios";
 import { db } from "@workspace/db";
 import { smsLogsTable, leadsTable, campaignsTable, phoneNumbersTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, notInArray } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { logger } from "../lib/logger.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
+
+/** Prevents firing the same campaign SMS blast twice simultaneously. */
+const activeSmsCampaigns = new Set<number>();
 
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
 const TELNYX_URL = "https://api.telnyx.com/v2/messages";
@@ -162,6 +165,12 @@ router.post(
       return;
     }
 
+    // Lock: prevent duplicate blasts for the same campaign
+    if (activeSmsCampaigns.has(campaignId)) {
+      res.status(409).json({ error: "An SMS blast for this campaign is already in progress" });
+      return;
+    }
+
     const parsed = campaignSmsSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" });
@@ -186,27 +195,33 @@ router.post(
       return;
     }
 
-    // Fetch all pending leads for this campaign
+    // Fetch leads — exclude DNC and do_not_call to stay compliant
     const leads = await db
       .select()
       .from(leadsTable)
-      .where(eq(leadsTable.campaignId, campaignId));
+      .where(
+        and(
+          eq(leadsTable.campaignId, campaignId),
+          notInArray(leadsTable.status, ["do_not_call"]),
+          eq(leadsTable.dncFlag, false)
+        )
+      );
 
     if (leads.length === 0) {
-      res.json({ total_sent: 0, total_failed: 0, total_leads: 0 });
+      res.json({ total_sent: 0, total_failed: 0, total_leads: 0, message: "No eligible leads" });
       return;
     }
 
-    // Respond immediately so the HTTP connection doesn't time out on large campaigns.
-    // The sending loop runs in the background.
+    // Respond immediately — sending loop runs in background
     res.status(202).json({
       accepted: true,
       campaign_id: campaignId,
       total_leads: leads.length,
-      message: `SMS campaign started — ${leads.length} leads queued`,
+      message: `SMS campaign started — ${leads.length} eligible leads queued`,
     });
 
     // ── Background sending loop ────────────────────────────────────────────
+    activeSmsCampaigns.add(campaignId);
     let sent = 0;
     let failed = 0;
 
@@ -234,6 +249,7 @@ router.post(
       await sleep(200 + Math.floor(Math.random() * 300));
     }
 
+    activeSmsCampaigns.delete(campaignId);
     logger.info({ campaignId, sent, failed }, "SMS campaign completed");
   }
 );
