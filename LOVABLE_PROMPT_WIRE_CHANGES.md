@@ -1,17 +1,21 @@
-# SHIVANSH — Wire Latest Backend Changes (Lovable Prompt)
+# SHIVANSH — Final Lovable Wiring Prompt
 
-## Critical rules — read before touching anything
-
-- Backend: `https://shivanshbackend.replit.app` — never change this URL
-- Auth token key: `localStorage.getItem("auth_token")` — NOT "token", NOT "jwt", never change
-- All font: `font-mono` throughout (every element)
-- Colour scheme: dark navy `hsl(222,47%,7%)`, primary cyan `hsl(183,100%,50%)`
-- Do NOT recreate or rename: Login, Dashboard, Campaigns, Leads, Call Logs, DNC, Users, Settings, Voices pages
-- Do NOT change routing, auth logic, or the api.ts helper if one already exists
+Paste this entire document into Lovable as a single message.
 
 ---
 
-## Shared API helper (add to `src/lib/api.ts` if not already there)
+## Non-negotiable rules — read first
+
+- Backend base URL: `https://shivanshbackend.replit.app` — never change this
+- Auth token key: `localStorage.getItem("auth_token")` — never "token", never "jwt"
+- Every page: `font-mono` on all text elements
+- Colour: dark navy background `hsl(222,47%,7%)`, primary cyan `hsl(183,100%,50%)`
+- Do NOT recreate or modify: Login, Dashboard, Campaigns list, Leads, Call Logs, Voices, DNC, Users, Settings pages
+- Do NOT change existing routing or auth logic
+
+---
+
+## Shared API helper — add to `src/lib/api.ts` if not present
 
 ```ts
 const BASE = "https://shivanshbackend.replit.app";
@@ -44,137 +48,149 @@ export const api = {
 
 ---
 
-## Change 1 — Update Campaign create & edit form
+## 1 — Update Campaign create & edit form
 
-### New fields to add
+Add these three fields to both the "Create Campaign" and "Edit Campaign" forms.
 
-The campaign object now has two new fields. Add them to both the "Create Campaign" modal/form and the "Edit Campaign" form/drawer:
-
-#### a) Voice Provider selector + Voice picker
+### Voice Provider selector
 
 ```
 Label: "Voice Provider"
-Control: segmented button / radio group
-Options:
+Control: segmented buttons / radio group  (3 options)
   - "ElevenLabs"  value="elevenlabs"
   - "Cartesia"    value="cartesia"
+  - "Deepgram"    value="deepgram"
 Default: "elevenlabs"
+Campaign field: voiceProvider (string)
 ```
 
-When the selected provider changes, fetch the voice list:
+### Voice picker
+
+Below the provider selector, show a `<select>` dropdown populated from the hardcoded list for the selected provider. Option label format: `"{name} — {gender} / {accent}"`.
+
+When the provider changes, swap the list and clear the selected voice.
+
+Campaign field: `voice` (string — the voice_id value)
+
+**Voice lists (hardcoded — no fetch needed):**
+
+**ElevenLabs** (`voiceProvider = "elevenlabs"`):
 ```
-GET /voices?provider=elevenlabs   →  array of voice objects
-GET /voices?provider=cartesia     →  array of voice objects
-```
-
-Voice object shape:
-```ts
-{ voice_id: string, name: string, gender: "male"|"female", accent: "us"|"uk", description?: string }
-```
-
-Display as a `<select>` (or searchable dropdown) with option text:
-`{name} — {gender} / {accent}` e.g. "Rachel — female / us"
-
-When a voice is selected, save:
-- campaign field `voice` = `voice_id`
-- campaign field `voiceProvider` = selected provider string
-
-Add a **▶ Preview** button next to the voice selector:
-```
-onClick:
-  POST /voices/preview
-  Body: { provider: selectedProvider, voice_id: selectedVoiceId, text: "Hi, this is a voice preview." }
-  Response: { url: "https://..." }
-  → new Audio(url).play()
-```
-Show a loading spinner while fetching. If it fails, show a toast error "Preview failed".
-
-**Voice preview behavior:**
-- ElevenLabs preview → calls ElevenLabs API only
-- Cartesia preview → calls Cartesia API only
-- Deepgram preview → calls Deepgram API only
-- If ANY preview fails → show `toast.error("Preview failed: " + error.detail)` — **never silently fall back to a different provider**
-
-**Hardcoded catalog** (no need to fetch — use these for the dropdowns; fetch from API is the alternative):
-
-ElevenLabs (provider = `elevenlabs`):
-| voice_id | name | gender | accent |
-|---|---|---|---|
-| `21m00Tcm4TlvDq8ikWAM` | Rachel | female | us |
-| `EXAVITQu4vr4xnSDxMaL` | Bella | female | us |
-| `AZnzlk1XvdvUeBnXmlld` | Domi | female | us |
-| `MF3mGyEYCl7XYWbV9V6O` | Elli | female | us |
-| `TxGEqnHWrfWFTfGW9XjX` | Josh | male | us |
-| `VR6AewLTigWG4xSOukaG` | Arnold | male | us |
-| `pNInz6obpgDQGcFmaJgB` | Adam | male | us |
-| `yoZ06aMxZJJ28mfd3POQ` | Sam | male | us |
-
-Cartesia (provider = `cartesia`):
-| voice_id | name | gender | accent |
-|---|---|---|---|
-| `db6b0ed5-d5d3-463d-ae85-518a07d3c2b4` | Skylar | female | us |
-| `0ee8beaa-db49-4024-940d-c7ea09b590b3` | Morgan | female | us |
-| `e07c00bc-4134-4eae-9ea4-1a55fb45746b` | Brooke | female | us |
-| `5f621418-ab01-4bf4-9a9d-73d66032234e` | Willow | female | us |
-| `e5a6cd18-d552-4192-9533-82a08cac8f23` | Patricia | female | us |
-| `62ae83ad-4f6a-430b-af41-a9bede9286ca` | Gemma | female | uk |
-| `2f251ac3-89a9-4a77-a452-704b474ccd01` | Lucy | female | uk |
-| `f24ae0b7-a3d2-4dd1-89df-959bdc4ab179` | Ross | male | us |
-| `3e39e9a5-585c-4f5f-bac6-5e4905c51095` | Cole | male | us |
-| `d709a7e8-9495-4247-aef0-01b3207d11bf` | Donny | male | us |
-| `df872fcd-da17-4b01-a49f-a80d7aaee95e` | Cameron | male | us |
-| `df89f42f-f285-4613-adbf-14eedcec4c9e` | Harrison | male | uk |
-| `4bc3cb8c-adb9-4bb8-b5d5-cbbef950b991` | George | male | uk |
-
-#### b) Voicemail Drop Message
-
-```
-Label: "Voicemail Drop Message"
-Control: <textarea> rows=3, placeholder="Leave blank to hang up silently on voicemail"
-Field name: vmDropMessage (string | null)
+21m00Tcm4TlvDq8ikWAM  Rachel    female  us
+EXAVITQu4vr4xnSDxMaL  Bella     female  us
+MF3mGyEYCl7XYWbV9V6O  Elli      female  us
+LcfcDJNUP1GQjkzn1xUU  Emily     female  us
+pNInz6obpgDQGcFmaJgB  Adam      male    us
+TxGEqnHWrfWFTfGW9XjX  Josh      male    us
+ErXwobaYiN019PkySvjV  Antoni    male    us
+SOYHLrjzK2X1ezoPC6cr  Harry     male    uk
 ```
 
-When AMD detects a voicemail beep on an outbound call, the backend automatically
-plays this TTS message then hangs up. Leave empty to hang up silently.
+**Cartesia** (`voiceProvider = "cartesia"`):
+```
+db6b0ed5-d5d3-463d-ae85-518a07d3c2b4  Skylar    female  us
+0ee8beaa-db49-4024-940d-c7ea09b590b3  Morgan    female  us
+e07c00bc-4134-4eae-9ea4-1a55fb45746b  Brooke    female  us
+5f621418-ab01-4bf4-9a9d-73d66032234e  Willow    female  us
+e5a6cd18-d552-4192-9533-82a08cac8f23  Patricia  female  us
+62ae83ad-4f6a-430b-af41-a9bede9286ca  Gemma     female  uk
+2f251ac3-89a9-4a77-a452-704b474ccd01  Lucy      female  uk
+f24ae0b7-a3d2-4dd1-89df-959bdc4ab179  Ross      male    us
+3e39e9a5-585c-4f5f-bac6-5e4905c51095  Cole      male    us
+d709a7e8-9495-4247-aef0-01b3207d11bf  Donny     male    us
+df872fcd-da17-4b01-a49f-a80d7aaee95e  Cameron   male    us
+df89f42f-f285-4613-adbf-14eedcec4c9e  Harrison  male    uk
+4bc3cb8c-adb9-4bb8-b5d5-cbbef950b991  George    male    uk
+```
 
-### Save these fields
+**Deepgram** (`voiceProvider = "deepgram"`):
+```
+aura-asteria-en   Asteria  female  us
+aura-luna-en      Luna     female  us
+aura-stella-en    Stella   female  us
+aura-athena-en    Athena   female  uk
+aura-hera-en      Hera     female  us
+aura-orion-en     Orion    male    us
+aura-arcas-en     Arcas    male    us
+aura-perseus-en   Perseus  male    us
+aura-helios-en    Helios   male    uk
+aura-zeus-en      Zeus     male    us
+```
 
-In create body: include `voiceProvider`, `voice`, `vmDropMessage` in the POST `/campaigns` body.
-In update body: include them in the PATCH `/campaigns/:id` body.
+### Preview button
+
+Add a **▶ Preview** button next to the voice dropdown.
 
 ```ts
-// Example PATCH body
-{
-  voice: "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4",
-  voiceProvider: "cartesia",
-  vmDropMessage: "Hi, we tried to reach you. Please call us back at your convenience. Goodbye!"
+// On click:
+setPreviewLoading(true);
+try {
+  const res = await api.post("/voices/preview", {
+    provider: selectedProvider,   // "elevenlabs" | "cartesia" | "deepgram"
+    voice_id: selectedVoiceId,
+    text: "Hi there! This is a preview of your selected voice.",
+  });
+  // res = { url: "https://shivanshbackend.replit.app/api/audio/<token>", provider, voice_id }
+  new Audio(res.url).play();
+} catch (e) {
+  toast.error("Preview failed — " + (e.message ?? "unknown error"));
+} finally {
+  setPreviewLoading(false);
 }
 ```
 
-When loading an existing campaign to edit, pre-fill:
-- voiceProvider from `campaign.voiceProvider` (default `"elevenlabs"`)
-- voice from `campaign.voice`
-- vmDropMessage from `campaign.vmDropMessage`
+Show a spinner inside the button while loading. Each provider is called exclusively — never fall back to another provider silently.
+
+### Voicemail Drop Message field
+
+```
+Label: "Voicemail Drop Message"
+Control: <textarea> rows=3
+Placeholder: "Leave blank to hang up silently when voicemail is detected"
+Campaign field: vmDropMessage (string | null)
+```
+
+When AMD detects voicemail on an outbound call the backend automatically plays this message via TTS, then hangs up. Empty = silent hang-up.
+
+### Saving
+
+Include all three fields in create/update calls:
+
+```ts
+// POST /campaigns  or  PATCH /campaigns/:id
+{
+  voiceProvider: "cartesia",
+  voice: "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4",
+  vmDropMessage: "Hi, we tried to reach you. Please call us back at your earliest convenience.",
+}
+```
+
+When loading an existing campaign into the edit form, pre-fill:
+- `voiceProvider` from `campaign.voiceProvider` (default `"elevenlabs"`)
+- `voice` from `campaign.voice`
+- `vmDropMessage` from `campaign.vmDropMessage`
 
 ---
 
-## Change 2 — Build `/callbacks` page
+## 2 — New page: `/callbacks`
 
-Add to sidebar: **Callbacks** (after Leads).
-Show an amber dot badge on the nav item when there are overdue callbacks.
+Add **Callbacks** to the sidebar after Leads. Show a small amber badge on the nav item when any callback is overdue.
 
-### Data fetch
+### Fetch
 
 ```
-GET /callbacks
+GET /callbacks          → array of callback objects
+GET /callbacks?campaignId=N   → filtered by campaign
 ```
 
-Response is an array of callback objects:
+Auto-refresh every 60 seconds.
+
+**Callback object:**
 ```ts
 {
   id: number
   name: string
-  phone: string          // use this for display
+  phone: string
   email: string | null
   campaignId: number
   campaignName: string | null
@@ -185,172 +201,195 @@ Response is an array of callback objects:
 }
 ```
 
-Auto-refresh every 60 seconds.
-
 ### Page layout
 
-```
-┌───────────────────────────────────────────────────────┐
-│ SCHEDULED CALLBACKS                  [+ Schedule New] │
-├──────────┬────────────┬──────────────┬──────────┬─────┤
-│ Due At   │ Lead       │ Campaign     │ Notes    │ Act │
-├──────────┼────────────┼──────────────┼──────────┼─────┤
-│ 2:30 PM  │ John Smith │ Q2 Outbound  │ Follow up│[✏][✓]│
-│ Tomorrow │ Jane Doe   │ Enterprise   │          │[✏][✓]│
-└──────────┴────────────┴──────────────┴──────────┴─────┘
-```
+Header: `SCHEDULED CALLBACKS` + `[+ Schedule New]` button (top-right).
 
-- Rows where `callbackAt` < now: highlight with `border-l-4 border-amber-400`
-- Sort: overdue first, then ascending by callbackAt
+Table columns: **Due At** | **Lead** | **Phone** | **Campaign** | **Notes** | **Actions**
+
+- Rows where `callbackAt < now`: add `border-l-4 border-amber-400`
+- Sort: overdue rows first, then ascending `callbackAt`
 - Empty state: `"No callbacks scheduled"`
 
-### Actions
+### Row actions
 
-**[✏ Reschedule]** — opens a small modal:
+**[✏ Reschedule]** — opens a modal:
 ```
-Reschedule Callback for {name}
-DateTime picker (pre-filled with current callbackAt)
-Notes textarea (pre-filled)
-[Cancel] [Save]
+Title: "Reschedule — {name}"
+Fields:
+  Date & Time: datetime-local (pre-filled with callbackAt)
+  Notes: textarea (pre-filled)
+Buttons: [Cancel]  [Save]
+
+On Save:
+  PATCH /callbacks/:id  { callbackAt: ISO8601string, notes }
+  → close modal, refresh list, toast.success("Rescheduled")
 ```
-On save: `PATCH /callbacks/:id { callbackAt: ISO8601, notes }`
 
 **[✓ Done]** — confirm dialog "Mark as complete?", then:
-`PATCH /callbacks/:id { status: "completed" }`
-→ remove row from list
+```
+PATCH /callbacks/:id  { status: "completed" }
+→ remove from list
+```
 
-**[+ Schedule New]** button — opens a modal:
+### Schedule New modal
+
 ```
-Schedule Callback
-Lead phone or name: [search input]
-  → on input change, fetch: GET /leads?search={query}&status=pending
-  → show dropdown of matching leads: "{name} — {phone}"
-  → on select, store leadId
-Date & Time: [datetime-local input]
-Notes: [textarea optional]
-[Cancel] [Schedule]
+Title: "Schedule Callback"
+
+Field 1 — Lead search:
+  Input placeholder: "Search lead by name or phone"
+  On each keystroke (debounce 300ms):
+    GET /leads?search={query}
+    Show dropdown: "{name} — {phone}"
+  On select: store leadId
+
+Field 2 — Date & Time:
+  datetime-local input (min = now)
+
+Field 3 — Notes (optional):
+  textarea
+
+Buttons: [Cancel]  [Schedule]
+
+On Schedule:
+  POST /callbacks/schedule  { leadId, callbackAt: ISO8601, notes }
+  → 201 response → close modal, refresh list
+  → toast.success("Callback scheduled")
 ```
-On submit: `POST /callbacks/schedule { leadId, callbackAt, notes }`
-→ `201` → close modal, refresh list, show toast "Callback scheduled"
 
 ---
 
-## Change 3 — Build `/softphone` page
+## 3 — New page: `/softphone`
 
-Add to sidebar: **Softphone** (after Callbacks). Only visible to `admin` and `agent` roles.
+Add **Softphone** to the sidebar after Callbacks. Visible to all roles.
 
-### Layout (three columns)
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  AGENT SOFTPHONE                    [● ONLINE ▼]             │
-├─────────────────┬──────────────────────┬─────────────────────┤
-│  MY STATS       │     DIALPAD          │   ACTIVE CALL       │
-│  (today)        │                      │   (empty=idle)      │
-│                 │  [+1 (555) 000-0000] │                     │
-│  Calls: 12      │  [1][2][3]           │                     │
-│  Avg:  4m 12s   │  [4][5][6]           │                     │
-│  VM:   3        │  [7][8][9]           │                     │
-│  Ans:  8        │  [*][0][#]           │                     │
-│                 │  [⌫]  [✆ CALL]      │                     │
-├─────────────────┴──────────────────────┴─────────────────────┤
-│  CALLBACKS DUE TODAY                                          │
-│  (same table as /callbacks but filtered to today/overdue)     │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Status toggle
-
-On mount: read `agentId` from `localStorage.getItem("auth_user")` parsed as JSON → `.id`.
+### Layout — three columns
 
 ```
-GET /agents/stats?agentId={id}   → find own agent record
+┌────────────────────────────────────────────────────────────┐
+│  AGENT SOFTPHONE                      [ ● ONLINE ▼ ]      │
+├──────────────────┬──────────────────┬──────────────────────┤
+│  MY STATS TODAY  │    DIAL PAD      │   ACTIVE CALL        │
+│                  │                  │                      │
+│  Calls:    12    │ ┌──────────────┐ │  (idle or live call) │
+│  Avg dur: 4m12s  │ │+1 _________  │ │                      │
+│  Voicemail:  3   │ └──────────────┘ │                      │
+│  Answered:   8   │ [1][2][3]        │                      │
+│                  │ [4][5][6]        │                      │
+│                  │ [7][8][9]        │                      │
+│                  │ [*][0][#]        │                      │
+│                  │ [⌫]  [✆ CALL]  │                      │
+├──────────────────┴──────────────────┴──────────────────────┤
+│  CALLBACKS DUE TODAY                                        │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Show status pill: `● ONLINE` (green) / `● OFFLINE` (amber).
-On toggle: `POST /agents/status { id: agentId, status: "available" | "busy" }`
+### On mount
+
+Read the logged-in user:
+```ts
+const user = JSON.parse(localStorage.getItem("auth_user") ?? "{}");
+const agentId = user.id;
+```
+
+### Status toggle (top-right)
+
+Fetch current status from `GET /agents/stats?agentId={agentId}` → find own entry → `status` field.
+
+Display: `● ONLINE` (green) or `● OFFLINE` (amber) as a clickable pill.
+
+On click:
+```ts
+const newStatus = current === "available" ? "busy" : "available";
+await api.post("/agents/status", { id: agentId, status: newStatus });
+```
 
 ### Stats panel (left column)
 
-`GET /agents/stats?agentId={id}`
+```
+GET /agents/stats?agentId={agentId}
+```
 
-Find own entry in the array. Display:
-- **Calls Today**: `stats.callsToday`
-- **Avg Duration**: `stats.avgDuration` seconds → format as `Xm Ys`
-- **VM**: `stats.dispositions.vm ?? 0`
-- **Answered**: `stats.dispositions.interested ?? 0` + `stats.dispositions.connected ?? 0`
+Find own entry in the returned array. Display:
+- **Calls today**: `stats.callsToday`
+- **Avg duration**: format `stats.avgDuration` seconds as `Xm Ys`
+- **Voicemail**: `stats.dispositions?.vm ?? 0`
+- **Answered**: `stats.dispositions?.interested ?? 0`
 
-Auto-refresh: re-fetch when WebSocket fires `agent:stats:refresh`.
+Re-fetch when the WebSocket fires `agent:stats:refresh`.
 
-### Dialpad (centre column)
+### Dial pad (centre column)
 
-3×4 grid of digit buttons. Phone number input shows digits as typed.
-Backspace clears last digit. Input accepts manual typing too.
-`[✆ CALL]` button: large, cyan, font-mono bold.
+- Phone input field at top — digits appended on button click, also accepts manual typing
+- 3×4 grid: `1 2 3 / 4 5 6 / 7 8 9 / * 0 #`
+- Backspace `[⌫]` button
+- Large cyan `[✆ CALL]` button
 
-On CALL pressed: store phone in state as `activeCallPhone`, set `callStatus = "dialing"`.
+On CALL press: set `activeCallPhone = inputValue`, `callStatus = "dialing"`.
 
-> **Note:** Actual WebRTC dial-out requires a Telnyx WebRTC token. Fetch it first:
-> `GET /calls/webrtc-token` → `{ token }` then initialise `@telnyx/webrtc` SDK.
-> If the SDK is not installed yet, show a placeholder in the active call panel:
-> `"WebRTC dialling — connect via Telnyx"` and store the number. The WebRTC
-> wiring can be added in a follow-up. Do not break the UI trying to import it.
+> WebRTC dialling requires a Telnyx WebRTC credential. For now, show the active call panel with the phone number and status "Dialling…". Do not attempt to import `@telnyx/webrtc` — it will be wired separately. Never break the UI over a missing import.
 
 ### Active call panel (right column)
 
-**Idle state:**
+**Idle:**
 ```
 📵  No Active Call
 Dial a number or wait for an inbound transfer
 ```
 
-**Active state** (when a call is live — driven by WebSocket `call:started`):
+**Active** (driven by WebSocket `call:started` or manual dial):
 ```
 📞 ACTIVE CALL
-+1 (555) 000-0000
-⏱ 02:14
+{phone}
+⏱ {elapsed}          ← live timer
 
-[🔇 MUTE]  [⏸ HOLD]  [🔴 HANG UP]
+[ 🔇 MUTE ]  [ ⏸ HOLD ]  [ 🔴 HANG UP ]
 
-── 3-WAY CONFERENCE ────────────────
-Add phone:  [+1__________] [➕ ADD]
+── 3-WAY CONFERENCE ──────────────────────
+Add number:  [_______________]  [ ➕ ADD ]
 
-── LIVE TRANSCRIPT ─────────────────
-[user]  Hi, I was told to call back…
-[agent] Hello! Great to hear from you…
+── LIVE TRANSCRIPT ───────────────────────
+[caller]  "Hi, I was told to call back..."
+[agent]   "Hello! Great to hear from you..."
 
-── DISPOSITION ─────────────────────
-[✅ Interested] [❌ Not interested]
-[📅 Callback]   [🚫 DNC]
+── DISPOSITION ───────────────────────────
+[ ✅ Interested ]  [ ❌ Not interested ]
+[ 📅 Schedule CB ] [ 🚫 DNC           ]
 ```
 
-**Conference (Add):**
+**Conference — ADD button:**
 ```ts
-// POST /calls/{callControlId}/conference
-api.post(`/calls/${callControlId}/conference`, { to: thirdPartyNumber })
-// Response: { thirdPartyCallControlId, message }
-// Show toast: "Dialling {number} — will bridge when they answer"
+await api.post(`/calls/${callControlId}/conference`, { to: thirdPartyNumber });
+// Response: { conferenceName, thirdPartyCallControlId, message }
+// toast.info("Dialling " + thirdPartyNumber + " — bridging when answered")
 ```
-
-**Hang up:** call `call.hangup()` on the Telnyx call object (or show confirmation modal).
 
 **Disposition buttons:**
-- Interested: `PATCH /call-logs` (find call log by callControlId) `{ disposition: "interested" }`
-- Not interested: `{ disposition: "not_interested" }`
-- Callback: open datetime picker → `POST /callbacks/schedule { leadId, callbackAt }`
-- DNC: `POST /dnc { phoneNumber: activeCallPhone }`
+```ts
+// Interested
+api.patch(`/call-logs/${callLogId}/disposition`, { disposition: "interested" })
 
-### Callbacks due today (bottom strip)
+// Not interested
+api.patch(`/call-logs/${callLogId}/disposition`, { disposition: "not_interested" })
 
+// Schedule callback — open datetime picker then:
+api.post("/callbacks/schedule", { leadId, callbackAt })
+
+// DNC
+api.post("/dnc", { phoneNumber: activeCallPhone })
 ```
-GET /callbacks
+
+**Incoming call banner** (full-width overlay, z-50, amber border):
 ```
-Filter client-side to rows where `callbackAt` is today or in the past.
-Show as a compact table: Due At | Lead | Phone | [📞 Dial].
+📞  Incoming Call
+Caller: {callerPhone}     Campaign: {campaignId}
+[ ANSWER ]   [ DECLINE ]
+```
+ANSWER → set `activeCallPhone`, `callStatus = "active"`, dismiss banner.  
+DECLINE → dismiss banner.
 
-[📞 Dial]: pre-fill dialpad with the lead's phone and set focus to CALL button.
-
-### WebSocket subscription
+### WebSocket setup
 
 ```ts
 import { io } from "socket.io-client";
@@ -360,10 +399,9 @@ const socket = io("https://shivanshbackend.replit.app", {
   transports: ["websocket"],
 });
 
-socket.on("call:started", (data) => {
-  // data: { id, callControlId, phoneNumber, campaignId }
-  setCallControlId(data.callControlId);
-  setActiveCallPhone(data.phoneNumber);
+socket.on("call:started", ({ callControlId, phoneNumber }) => {
+  setCallControlId(callControlId);
+  setActiveCallPhone(phoneNumber);
   setCallStatus("active");
   setCallStartedAt(Date.now());
 });
@@ -374,82 +412,76 @@ socket.on("call:ended", () => {
   refetchStats();
 });
 
-socket.on("call:transcript", (data) => {
-  // data: { callControlId, speaker: "caller"|"agent", text }
-  appendTranscript(data);
+socket.on("call:transcript", ({ speaker, text }) => {
+  appendTranscript({ speaker, text });
 });
 
 socket.on("agent:stats:refresh", () => refetchStats());
 
-socket.on("agent:incoming_call", (data) => {
-  // data: { callId, callerPhone, campaignId }
-  showIncomingCallBanner(data);
+socket.on("agent:incoming_call", ({ callerPhone, campaignId }) => {
+  showIncomingCallBanner({ callerPhone, campaignId });
 });
 ```
 
-**Incoming call banner** (top overlay, z-50):
+### Callbacks due today (bottom strip)
+
+```ts
+const { data } = await api.get("/callbacks");
+const dueToday = data.filter(c =>
+  c.callbackAt && new Date(c.callbackAt) <= new Date()
+);
 ```
-📞 Incoming Call
-Caller: {callerPhone}   Campaign: {campaignId}
-[ANSWER]  [DECLINE]
-```
-ANSWER: close banner, set `activeCallPhone = callerPhone`, `callStatus = "active"`.
-DECLINE: close banner.
+
+Compact table: **Due At** | **Lead** | **Phone** | **[📞 Dial]**
+
+`[📞 Dial]` → pre-fill the dialpad with `c.phone`, focus the CALL button.
 
 ---
 
-## Change 4 — Add Human Agent stats panel to existing Agents page
+## 4 — Agent stats on existing Agents page
 
-If there is already an Agents page or section, add a stats sub-section:
+If there is an Agents page or section, add a per-agent stats card below each agent row or as an expandable panel.
 
 ```
 GET /agents/stats
 ```
 
-For each agent, display as a row/card:
+Display per agent:
 ```
-John Smith    ● AVAILABLE
-Calls today: 8   Avg dur: 3m 42s
-Interested: 5   VM: 2   No ans: 1
+{name}                    ● {status}
+Calls today: {callsToday}   Avg: {avgDuration formatted}
+Interested: {dispositions.interested ?? 0}
+Voicemail:  {dispositions.vm ?? 0}
 ```
 
-The `agent:stats:refresh` WebSocket event should trigger a re-fetch.
+Re-fetch on WebSocket `agent:stats:refresh` event.
 
 ---
 
-## Change 5 — Sidebar nav additions
+## 5 — Sidebar additions
 
-Add these two items in order (after Leads, before Settings):
+Add in this order (after Leads, before Settings):
 
+| Label | Route | Badge |
+|---|---|---|
+| Softphone | `/softphone` | none |
+| Callbacks | `/callbacks` | amber dot when any `callbackAt < now` |
+
+Badge logic for Callbacks:
+```ts
+// Poll GET /callbacks every 60s
+const overdue = callbacks.filter(c => c.callbackAt && new Date(c.callbackAt) < new Date());
+// Show amber dot if overdue.length > 0
 ```
-📞  Softphone    /softphone
-🔁  Callbacks    /callbacks
-```
 
-- Callbacks: show small amber badge when `callbacks.filter(c => new Date(c.callbackAt) < new Date()).length > 0`
-- Both items: `font-mono`, same styling as existing nav items
+Same `font-mono` style as existing nav items.
 
 ---
 
-## What NOT to change
+## Error handling — apply everywhere
 
-- Login page and auth flow
-- Dashboard KPIs
-- Campaigns list/table
-- Leads table and CSV upload
-- Call Logs / CDR table
-- DNC page
-- Voices page (existing ElevenLabs voice management)
-- Users page
-- Settings page
-- Any existing route handlers in api.ts
-
----
-
-## Error handling rules
-
-- Every `api.get/post/patch` call: wrap in try/catch
-- On error: `toast.error(error.message ?? "Something went wrong")`
-- On 401: the `apiFetch` helper already redirects — no extra handling needed
-- Loading states: show a muted `"Loading…"` text or spinner, never blank
-- Empty states: always show a friendly message, never null/undefined crash
+- Wrap every `api.*` call in `try/catch`
+- On catch: `toast.error(e.message ?? "Something went wrong")`
+- 401 is handled automatically by `apiFetch` (redirect to login)
+- Loading states: show spinner or muted `"Loading…"` text — never blank
+- Empty states: always render a friendly message — never crash on null/undefined
