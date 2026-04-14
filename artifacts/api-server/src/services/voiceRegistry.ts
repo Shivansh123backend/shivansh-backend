@@ -73,11 +73,23 @@ const DEEPGRAM_VOICES: VoiceEntry[] = [
 ];
 
 const CARTESIA_VOICES: VoiceEntry[] = [
-  { voice_id: "c45bc5ec-dc68-4feb-8829-6ac6b09a947f", name: "Sophie",          gender: "female", accent: "us", description: "Warm, conversational" },
-  { voice_id: "b7d50908-b17c-442d-ad8d-810c63997ed9", name: "California Girl", gender: "female", accent: "us" },
-  { voice_id: "79a125e8-cd45-4c13-8a67-188112f4dd22", name: "British Lady",    gender: "female", accent: "uk" },
-  { voice_id: "a0e99841-438c-4a64-b679-ae501e7d6091", name: "Barbershop Man",  gender: "male",   accent: "us" },
-  { voice_id: "694f9389-aac1-45b6-b726-9d9369183238", name: "Nonfiction Man",  gender: "male",   accent: "us" },
+  // Female — US
+  { voice_id: "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4", name: "Skylar",   gender: "female", accent: "us", description: "Approachable, friendly guide" },
+  { voice_id: "0ee8beaa-db49-4024-940d-c7ea09b590b3", name: "Morgan",   gender: "female", accent: "us", description: "Polished, professional" },
+  { voice_id: "e07c00bc-4134-4eae-9ea4-1a55fb45746b", name: "Brooke",   gender: "female", accent: "us", description: "Confident, conversational" },
+  { voice_id: "5f621418-ab01-4bf4-9a9d-73d66032234e", name: "Willow",   gender: "female", accent: "us", description: "Friendly, down-to-earth" },
+  { voice_id: "e5a6cd18-d552-4192-9533-82a08cac8f23", name: "Patricia", gender: "female", accent: "us", description: "Energetic customer service" },
+  // Female — UK
+  { voice_id: "62ae83ad-4f6a-430b-af41-a9bede9286ca", name: "Gemma",    gender: "female", accent: "uk", description: "Confident, professional" },
+  { voice_id: "2f251ac3-89a9-4a77-a452-704b474ccd01", name: "Lucy",     gender: "female", accent: "uk", description: "Reassuring, capable" },
+  // Male — US
+  { voice_id: "f24ae0b7-a3d2-4dd1-89df-959bdc4ab179", name: "Ross",     gender: "male",   accent: "us", description: "Steady, customer support" },
+  { voice_id: "3e39e9a5-585c-4f5f-bac6-5e4905c51095", name: "Cole",     gender: "male",   accent: "us", description: "Articulate, approachable" },
+  { voice_id: "d709a7e8-9495-4247-aef0-01b3207d11bf", name: "Donny",    gender: "male",   accent: "us", description: "Balanced, neutral" },
+  { voice_id: "df872fcd-da17-4b01-a49f-a80d7aaee95e", name: "Cameron",  gender: "male",   accent: "us", description: "Laidback, conversational" },
+  // Male — UK
+  { voice_id: "df89f42f-f285-4613-adbf-14eedcec4c9e", name: "Harrison", gender: "male",   accent: "uk", description: "Crisp, professional" },
+  { voice_id: "4bc3cb8c-adb9-4bb8-b5d5-cbbef950b991", name: "George",   gender: "male",   accent: "uk", description: "Steady, British" },
 ];
 
 export const VOICE_CATALOG: Record<VoiceProvider, VoiceEntry[]> = {

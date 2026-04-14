@@ -288,9 +288,26 @@ DNC leads and `do_not_call` status leads are automatically excluded. A `409` is 
 ### Providers
 | Provider | Env key needed | Notes |
 |----------|---------------|-------|
-| `elevenlabs` | `ELEVENLABS_API_KEY` | ConvAI + TTS; 8 curated voices |
-| `deepgram` | `DEEPGRAM_API_KEY` | Aura TTS; 10 voices |
-| `cartesia` | `CARTESIA_API_KEY` | Sonic-2 TTS; 5 voices |
+| `elevenlabs` | `ELEVENLABS_API_KEY` | ConvAI + TTS; 8 curated voices — always works |
+| `deepgram` | `DEEPGRAM_API_KEY` | Aura TTS; 10 voices — requires Deepgram Aura TTS plan; falls back to ElevenLabs if 401 |
+| `cartesia` | `CARTESIA_API_KEY` | Sonic-2 TTS; **13 verified voices** (7F, 6M; US + UK accents) |
+
+**Verified Cartesia voices (all live-tested):**
+| voice_id | name | gender | accent |
+|---|---|---|---|
+| `db6b0ed5-d5d3-463d-ae85-518a07d3c2b4` | Skylar | female | us |
+| `0ee8beaa-db49-4024-940d-c7ea09b590b3` | Morgan | female | us |
+| `e07c00bc-4134-4eae-9ea4-1a55fb45746b` | Brooke | female | us |
+| `5f621418-ab01-4bf4-9a9d-73d66032234e` | Willow | female | us |
+| `e5a6cd18-d552-4192-9533-82a08cac8f23` | Patricia | female | us |
+| `62ae83ad-4f6a-430b-af41-a9bede9286ca` | Gemma | female | uk |
+| `2f251ac3-89a9-4a77-a452-704b474ccd01` | Lucy | female | uk |
+| `f24ae0b7-a3d2-4dd1-89df-959bdc4ab179` | Ross | male | us |
+| `3e39e9a5-585c-4f5f-bac6-5e4905c51095` | Cole | male | us |
+| `d709a7e8-9495-4247-aef0-01b3207d11bf` | Donny | male | us |
+| `df872fcd-da17-4b01-a49f-a80d7aaee95e` | Cameron | male | us |
+| `df89f42f-f285-4613-adbf-14eedcec4c9e` | Harrison | male | uk |
+| `4bc3cb8c-adb9-4bb8-b5d5-cbbef950b991` | George | male | uk |
 
 ### Assigning voice to a campaign
 ```json

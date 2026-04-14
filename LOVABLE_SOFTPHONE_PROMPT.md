@@ -292,6 +292,76 @@ Show a yellow dot badge on Callbacks nav item when there are overdue callbacks.
 
 ---
 
+## Telnyx WebRTC Browser SDK (for outbound dialing from dialpad)
+
+Install: `npm install @telnyx/webrtc`
+
+```ts
+import { TelnyxRTC } from "@telnyx/webrtc";
+
+// 1. Fetch token from backend
+const { token } = await api.get("/calls/webrtc-token");
+
+// 2. Create client
+const client = new TelnyxRTC({ login_token: token });
+
+// 3. Handle events
+client.on("telnyx.ready", () => console.log("WebRTC ready"));
+client.on("telnyx.error", (err) => console.error(err));
+client.on("telnyx.notification", (notification) => {
+  if (notification.type === "callUpdate") {
+    const call = notification.call;
+    // call.state: "new" | "trying" | "recovering" | "ringing" | "answering" | "early" | "active" | "held" | "hangup" | "destroy" | "purge"
+    if (call.state === "active") setActiveCall(call);
+    if (call.state === "destroy") setActiveCall(null);
+  }
+});
+
+// 4. Connect
+client.connect();
+
+// 5. Make a call
+const call = client.newCall({
+  destinationNumber: "+12125550100",
+  callerIdNumber: agentPhoneNumber,  // agent's registered Telnyx number
+});
+
+// 6. Call controls
+call.mute();       // mute mic
+call.unmute();
+call.hold();       // put on hold
+call.unhold();
+call.hangup();     // end call
+call.answer();     // answer inbound
+```
+
+The `call.id` (call_control_id) returned when the call becomes active is what you pass to
+`POST /calls/{callControlId}/conference { to: "+1..." }` to add a third party.
+
+---
+
+## Conference / 3-Way Call
+
+Once a call is active and you have `callControlId`:
+
+```
+POST /calls/{callControlId}/conference
+{ "to": "+12125550101" }
+```
+
+Response:
+```json
+{
+  "thirdPartyCallControlId": "...",
+  "originalCallControlId": "...",
+  "message": "Third party is being dialed — will be bridged when they answer"
+}
+```
+
+Show a toast: "Dialing +12125550101 — will connect when they answer."
+
+---
+
 ## Notes / constraints
 
 - Do NOT recreate Login, Dashboard, Campaigns, Leads, Call Logs, Voices, DNC, Users, or Settings pages.
@@ -301,3 +371,5 @@ Show a yellow dot badge on Callbacks nav item when there are overdue callbacks.
 - The softphone page is accessible to `agent` and `admin` roles.
 - The callbacks page is accessible to all authenticated roles.
 - Use `socket.io-client` for WebSocket — **not** native WebSocket.
+- Telnyx WebRTC requires HTTPS (already satisfied by the Replit deployment).
+- The `/calls/webrtc-token` endpoint creates a short-lived Telnyx telephony credential — call it fresh each session; do not cache across page reloads.
