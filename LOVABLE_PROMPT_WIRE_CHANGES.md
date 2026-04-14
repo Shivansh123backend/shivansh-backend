@@ -10,7 +10,8 @@ Paste this entire document into Lovable as a single message.
 - Auth token key: `localStorage.getItem("auth_token")` — never "token", never "jwt"
 - Every page: `font-mono` on all text elements
 - Colour: dark navy background `hsl(222,47%,7%)`, primary cyan `hsl(183,100%,50%)`
-- Do NOT recreate or modify: Login, Dashboard, Campaigns list, Leads, Call Logs, Voices, DNC, Users, Settings pages
+- Do NOT recreate or modify: Login, Dashboard, Campaigns list, Leads, Call Logs, DNC, Users, Settings pages
+- The Voices page MUST be updated as described in Section 0 below — do not skip it
 - Do NOT change existing routing or auth logic
 
 ---
@@ -45,6 +46,140 @@ export const api = {
   delete: (path: string)            => apiFetch(path, { method: "DELETE" }),
 };
 ```
+
+---
+
+## 0 — Update Voices page (`/voices`)
+
+Replace the existing Voices page content entirely. Keep the same route `/voices` and sidebar entry.
+
+### Layout
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  VOICES                                                  │
+│  ┌──────────────┬──────────────┬──────────────┐         │
+│  │  ElevenLabs  │   Cartesia   │   Deepgram   │         │
+│  └──────────────┴──────────────┴──────────────┘         │
+│                                                          │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Voice card grid (responsive, 2–4 cols)           │  │
+│  └───────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
+
+Three tabs at the top: **ElevenLabs** | **Cartesia** | **Deepgram**. Default tab: ElevenLabs.
+
+### Voice card
+
+Each voice is displayed as a card:
+
+```
+┌─────────────────────────────┐
+│  Rachel                     │
+│  female · us                │
+│  Calm, natural              │
+│                             │
+│  [ ▶ Preview ]              │
+└─────────────────────────────┘
+```
+
+- Name: large, `font-mono`, cyan
+- Gender · accent: muted small text
+- Description: muted italic (omit if empty)
+- `[ ▶ Preview ]` button: outlined cyan, full width
+
+### Preview button behaviour
+
+```ts
+async function previewVoice(provider: string, voice_id: string) {
+  setLoadingId(voice_id);
+  try {
+    const res = await api.post("/voices/preview", {
+      provider,
+      voice_id,
+      text: "Hi there! This is a preview of your selected voice for the SHIVANSH calling platform.",
+    });
+    // res = { url: string, provider: string, voice_id: string }
+    const audio = new Audio(res.url);
+    audio.play();
+  } catch (e: any) {
+    toast.error("Preview failed — " + (e.message ?? "unknown error"));
+  } finally {
+    setLoadingId(null);
+  }
+}
+```
+
+- Only one preview plays at a time — stop any currently playing audio before starting a new one
+- While loading: show a spinner inside the button for that card only
+- On error: toast with the error message — never fall back to a different provider
+
+### Voice data (hardcoded — render directly, no fetch required)
+
+**ElevenLabs tab:**
+```ts
+const ELEVENLABS = [
+  { voice_id: "21m00Tcm4TlvDq8ikWAM", name: "Rachel",  gender: "female", accent: "us", description: "Calm, natural" },
+  { voice_id: "EXAVITQu4vr4xnSDxMaL", name: "Bella",   gender: "female", accent: "us", description: "Expressive, warm" },
+  { voice_id: "MF3mGyEYCl7XYWbV9V6O", name: "Elli",    gender: "female", accent: "us", description: "Light, friendly" },
+  { voice_id: "LcfcDJNUP1GQjkzn1xUU", name: "Emily",   gender: "female", accent: "us", description: "Clear, professional" },
+  { voice_id: "pNInz6obpgDQGcFmaJgB", name: "Adam",    gender: "male",   accent: "us", description: "Deep, confident" },
+  { voice_id: "TxGEqnHWrfWFTfGW9XjX", name: "Josh",    gender: "male",   accent: "us", description: "Young, energetic" },
+  { voice_id: "ErXwobaYiN019PkySvjV", name: "Antoni",  gender: "male",   accent: "us", description: "Well-rounded" },
+  { voice_id: "SOYHLrjzK2X1ezoPC6cr", name: "Harry",   gender: "male",   accent: "uk", description: "Whispery, casual" },
+];
+```
+
+**Cartesia tab:**
+```ts
+const CARTESIA = [
+  { voice_id: "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4", name: "Skylar",   gender: "female", accent: "us", description: "Approachable, friendly" },
+  { voice_id: "0ee8beaa-db49-4024-940d-c7ea09b590b3", name: "Morgan",   gender: "female", accent: "us", description: "Polished, professional" },
+  { voice_id: "e07c00bc-4134-4eae-9ea4-1a55fb45746b", name: "Brooke",   gender: "female", accent: "us", description: "Confident, conversational" },
+  { voice_id: "5f621418-ab01-4bf4-9a9d-73d66032234e", name: "Willow",   gender: "female", accent: "us", description: "Friendly, down-to-earth" },
+  { voice_id: "e5a6cd18-d552-4192-9533-82a08cac8f23", name: "Patricia", gender: "female", accent: "us", description: "Energetic, customer service" },
+  { voice_id: "62ae83ad-4f6a-430b-af41-a9bede9286ca", name: "Gemma",    gender: "female", accent: "uk", description: "Confident, professional" },
+  { voice_id: "2f251ac3-89a9-4a77-a452-704b474ccd01", name: "Lucy",     gender: "female", accent: "uk", description: "Reassuring, capable" },
+  { voice_id: "f24ae0b7-a3d2-4dd1-89df-959bdc4ab179", name: "Ross",     gender: "male",   accent: "us", description: "Steady, customer support" },
+  { voice_id: "3e39e9a5-585c-4f5f-bac6-5e4905c51095", name: "Cole",     gender: "male",   accent: "us", description: "Articulate, approachable" },
+  { voice_id: "d709a7e8-9495-4247-aef0-01b3207d11bf", name: "Donny",    gender: "male",   accent: "us", description: "Balanced, neutral" },
+  { voice_id: "df872fcd-da17-4b01-a49f-a80d7aaee95e", name: "Cameron",  gender: "male",   accent: "us", description: "Laidback, conversational" },
+  { voice_id: "df89f42f-f285-4613-adbf-14eedcec4c9e", name: "Harrison", gender: "male",   accent: "uk", description: "Crisp, professional" },
+  { voice_id: "4bc3cb8c-adb9-4bb8-b5d5-cbbef950b991", name: "George",   gender: "male",   accent: "uk", description: "Steady, British" },
+];
+```
+
+**Deepgram tab:**
+```ts
+const DEEPGRAM = [
+  { voice_id: "aura-asteria-en",  name: "Asteria",  gender: "female", accent: "us", description: "Natural, conversational" },
+  { voice_id: "aura-luna-en",     name: "Luna",     gender: "female", accent: "us", description: "Warm, approachable" },
+  { voice_id: "aura-stella-en",   name: "Stella",   gender: "female", accent: "us", description: "Bright, clear" },
+  { voice_id: "aura-athena-en",   name: "Athena",   gender: "female", accent: "uk", description: "Polished, British" },
+  { voice_id: "aura-hera-en",     name: "Hera",     gender: "female", accent: "us", description: "Confident, professional" },
+  { voice_id: "aura-orion-en",    name: "Orion",    gender: "male",   accent: "us", description: "Deep, authoritative" },
+  { voice_id: "aura-arcas-en",    name: "Arcas",    gender: "male",   accent: "us", description: "Steady, clear" },
+  { voice_id: "aura-perseus-en",  name: "Perseus",  gender: "male",   accent: "us", description: "Energetic, direct" },
+  { voice_id: "aura-helios-en",   name: "Helios",   gender: "male",   accent: "uk", description: "Refined, British" },
+  { voice_id: "aura-zeus-en",     name: "Zeus",     gender: "male",   accent: "us", description: "Rich, commanding" },
+];
+```
+
+### Filter bar
+
+Above the card grid, add two filter pills:
+- **Gender**: All | Female | Male
+- **Accent**: All | US | UK
+
+Filtering is client-side — no fetch needed.
+
+### Provider badge on each card
+
+Small pill in the top-right corner of each card showing the provider name:
+- ElevenLabs → `#5A67D8` (indigo)
+- Cartesia → `hsl(183,100%,50%)` (cyan)
+- Deepgram → `#38A169` (green)
 
 ---
 
