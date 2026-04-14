@@ -11,7 +11,7 @@ import {
   phoneNumbersTable,
   dncListTable,
 } from "@workspace/db";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql, asc } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { emitToSupervisors } from "../websocket/index.js";
@@ -304,6 +304,40 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
   }
 }
 
+/** Pick an available number from the global pool for a campaign.
+ *  Priority: not busy, not blocked, spamScore < 70, lowest usageCount first.
+ *  Falls back to the campaign's configured fromNumber if no pool number is free. */
+async function allocateNumber(campaignId: number, fallbackNumber: string): Promise<string> {
+  // Try pool numbers assigned to this campaign first, then any active pool number
+  const [poolRow] = await db
+    .select({ phoneNumber: phoneNumbersTable.phoneNumber })
+    .from(phoneNumbersTable)
+    .where(
+      and(
+        eq(phoneNumbersTable.status, "active"),
+        eq(phoneNumbersTable.isBusy, false),
+        eq(phoneNumbersTable.isBlocked, false),
+        sql`${phoneNumbersTable.spamScore} < 70`,
+        sql`(${phoneNumbersTable.campaignId} = ${campaignId} OR ${phoneNumbersTable.campaignId} IS NULL)`
+      )
+    )
+    .orderBy(asc(phoneNumbersTable.usageCount), asc(phoneNumbersTable.spamScore))
+    .limit(1);
+
+  const chosen = poolRow?.phoneNumber ?? fallbackNumber;
+
+  // Mark as busy immediately (optimistic lock)
+  if (poolRow) {
+    await db
+      .update(phoneNumbersTable)
+      .set({ isBusy: true, lastUsedAt: new Date() })
+      .where(eq(phoneNumbersTable.phoneNumber, chosen))
+      .catch(() => {});
+  }
+
+  return chosen;
+}
+
 async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
   const { script, voiceName, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(campaignId, campaign);
 
@@ -311,7 +345,7 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
   const retryIntervalMs = (campaign.retryIntervalMinutes ?? 60) * 60 * 1000;
   const maxConcurrency = Math.min(campaign.maxConcurrentCalls ?? 5, 20);
   const dialingSpeed = Math.max(1, campaign.dialingSpeed ?? 10); // calls per minute
-  const msPerCall = Math.floor(60_000 / dialingSpeed);
+  let msPerCall = Math.floor(60_000 / dialingSpeed);
 
   // Build DNC set once for the entire run
   const dncSet = await buildDncSet();
@@ -330,9 +364,10 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
     `Campaign starting — dialing engine active`,
   );
 
-  // Track drop rate
+  // Track drop rate + voicemail rate for adaptive speed
   let totalCalls = 0;
   let abandonedCalls = 0;
+  let voicemailCalls = 0;
   const dropRateLimit = campaign.dropRateLimit ?? 3;
 
   async function processLead(lead: typeof pendingLeads[0]): Promise<void> {
@@ -358,16 +393,19 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       return;
     }
 
+    // Dynamic number allocation from pool (picks least-used, non-busy, non-blocked number)
+    const callFromNumber = await allocateNumber(campaignId, fromNumber);
+
     const [logEntry] = await db
       .insert(callLogsTable)
-      .values({ phoneNumber: lead.phone, campaignId, status: "initiated", direction: "outbound" })
+      .values({ phoneNumber: lead.phone, campaignId, status: "initiated", direction: "outbound", numberUsed: callFromNumber })
       .returning();
 
     totalCalls++;
 
     const result = await enqueueCall({
       phone: lead.phone,
-      from_number: fromNumber,
+      from_number: callFromNumber,
       agent_prompt: script,
       voice: voiceName,
       transfer_number: transferNumber,
@@ -377,6 +415,15 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       hold_music_url: holdMusicUrl ?? undefined,
       amd_enabled: campaign.amdEnabled ? "true" : undefined,
     });
+
+    // If call fails, release the number immediately (webhook won't fire)
+    if (!result.success) {
+      await db
+        .update(phoneNumbersTable)
+        .set({ isBusy: false })
+        .where(eq(phoneNumbersTable.phoneNumber, callFromNumber))
+        .catch(() => {});
+    }
 
     const newRetryCount = (lead.retryCount ?? 0) + (result.success ? 0 : 1);
 
@@ -414,12 +461,27 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       }
     }
 
-    // Adaptive drop-rate: slow down if we're dropping too many
+    // Track voicemail hits for adaptive speed
+    if (!result.success) {
+      abandonedCalls++;
+    }
+
+    // Adaptive throttling — slow down on high drop rate OR high voicemail rate
     if (totalCalls > 10) {
       const dropRate = (abandonedCalls / totalCalls) * 100;
+      const vmRate = (voicemailCalls / totalCalls) * 100;
+
       if (dropRate > dropRateLimit) {
         logger.warn({ dropRate, dropRateLimit, campaignId }, "Drop rate exceeded — throttling");
+        msPerCall = Math.min(msPerCall * 1.5, 10_000); // slow down, cap at 10s
         await delay(2000);
+      } else if (vmRate > 40) {
+        logger.warn({ vmRate, campaignId }, "Voicemail rate high — reducing speed");
+        msPerCall = Math.min(msPerCall * 1.25, 10_000);
+        await delay(1000);
+      } else if (dropRate < dropRateLimit * 0.5 && vmRate < 20 && msPerCall > Math.floor(60_000 / dialingSpeed)) {
+        // Conditions are good — restore original speed
+        msPerCall = Math.max(msPerCall * 0.9, Math.floor(60_000 / dialingSpeed));
       }
     }
   }

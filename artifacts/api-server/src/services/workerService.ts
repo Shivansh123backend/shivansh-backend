@@ -60,6 +60,7 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
     script: payload.agent_prompt,
     voice: payload.voice,
     phone: payload.phone,
+    fromNumber: payload.from_number,
     transferNumber: payload.transfer_number ?? null,
     backgroundSound: payload.background_sound ?? null,
   };

@@ -18,7 +18,7 @@ import {
   leadsTable,
   voicesTable,
 } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import axios from "axios";
 import OpenAI from "openai";
@@ -1205,6 +1205,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         bridge.campaignName
       );
 
+      // Resolve the from-number used for this call
+      const numberUsed = callOwnNumber.get(callControlId) ?? null;
+
+      // Derive answerType from disposition
+      const answerType = disposition === "vm" ? "voicemail"
+        : disposition === "no_answer" ? "no_answer"
+        : "human";
+
       if (bridge.direction === "outbound") {
         await db.insert(callLogsTable).values({
           phoneNumber: bridge.callerNumber,
@@ -1217,6 +1225,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           transcript,
           summary,
           callControlId,
+          numberUsed,
+          answerType,
         }).catch((err) =>
           logger.error({ err: String(err), callControlId }, "Failed to insert outbound call log")
         );
@@ -1253,6 +1263,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           transcript,
           summary,
           callControlId,
+          numberUsed,
+          answerType,
         }).catch((err) =>
           logger.error({ err: String(err), callControlId }, "Failed to insert inbound call log")
         );
@@ -1261,6 +1273,26 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           { callControlId, campaignId: bridge.campaignId, disposition, durationSecs },
           "Inbound call finalized"
         );
+      }
+
+      // ── Number pool release ────────────────────────────────────────────────
+      // Mark number available, increment usageCount, bump spamScore on vm/no_answer
+      if (numberUsed) {
+        const isUnproductive = disposition === "no_answer" || disposition === "vm";
+        await db
+          .update(phoneNumbersTable)
+          .set({
+            isBusy: false,
+            lastUsedAt: new Date(),
+            usageCount: sql`${phoneNumbersTable.usageCount} + 1`,
+            spamScore: isUnproductive
+              ? sql`LEAST(${phoneNumbersTable.spamScore} + 1, 100)`
+              : phoneNumbersTable.spamScore,
+          })
+          .where(eq(phoneNumbersTable.phoneNumber, numberUsed))
+          .catch((err) => logger.warn({ err: String(err), numberUsed }, "Number pool release failed"));
+
+        logger.info({ numberUsed, disposition, isUnproductive }, "Number released to pool");
       }
 
       // Live monitor: call ended

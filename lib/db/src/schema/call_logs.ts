@@ -14,6 +14,8 @@ export const callLogsTable = pgTable("call_logs", {
   transcript: text("transcript"),
   summary: text("summary"),
   callControlId: text("call_control_id"),
+  numberUsed: text("number_used"),
+  answerType: text("answer_type"),
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
 });
 

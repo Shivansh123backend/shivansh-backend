@@ -1,0 +1,446 @@
+Upgrade the system into a fully stable, production-grade AI-powered contact center platform with both inbound and outbound capabilities, ensuring no crashes across uploads, dialing, or routing.
+
+---
+
+GOAL:
+
+Ensure system:
+
+* Never breaks during CSV/Excel/manual uploads
+* Handles inbound and outbound calls correctly
+* Maintains number + agent state consistently
+* Uses queue-based dialing only
+* Supports real-time monitoring and supervisor controls
+* Prevents overload, duplication, and race conditions
+
+---
+
+========================
+
+1. UNIFIED INPUT PIPELINE (CRITICAL)
+   ========================
+
+All lead sources must go through same pipeline:
+
+* manual entry
+* CSV upload
+* Excel upload
+* Google Sheets
+
+---
+
+PROCESS:
+
+1. receive data
+2. normalize
+3. validate
+4. deduplicate
+5. store in DB
+6. DO NOT trigger calls
+
+---
+
+RULE:
+
+❌ Upload should NEVER trigger dialing
+
+---
+
+========================
+2. VALIDATION LAYER
+===================
+
+For each lead:
+
+* must have phone_number
+* convert to E.164 format
+* remove spaces/symbols
+* reject invalid numbers
+
+---
+
+========================
+3. DUPLICATE PROTECTION
+=======================
+
+Check:
+
+phone_number + campaign_id
+
+If exists:
+
+→ skip or update
+
+---
+
+========================
+4. BULK UPLOAD SAFETY
+=====================
+
+If leads > 100:
+
+* process in batches (50)
+* delay 500ms between batches
+
+---
+
+========================
+5. DNC + COMPLIANCE
+===================
+
+Table: dnc_list
+
+Before dialing:
+
+* skip numbers in DNC
+* skip outside working hours
+
+---
+
+========================
+6. GLOBAL NUMBER POOL
+=====================
+
+Table: numbers
+
+Fields:
+
+* phone_number
+* status (available, busy, blocked)
+* usage_count
+* spam_score
+
+---
+
+RULES:
+
+* shared across campaigns
+* dynamic allocation
+* release after call
+
+---
+
+========================
+7. SPAM / RISK ENGINE
+=====================
+
+Rules:
+
+* increase usage_count per call
+* if threshold exceeded → risk
+* if spam_score high → block
+
+---
+
+========================
+8. QUEUE-ONLY DIALING (MANDATORY)
+=================================
+
+All calls must go through Redis:
+
+call_queue:{campaign_id}
+
+---
+
+RULE:
+
+❌ No direct API loop calls
+
+---
+
+========================
+9. SAFE CAMPAIGN START
+======================
+
+On start:
+
+* push leads into queue
+* start controlled worker
+
+---
+
+========================
+10. PARALLEL DIALING ENGINE
+===========================
+
+Steps:
+
+1. fetch available agents
+2. fetch available numbers
+3. calculate target_calls
+
+target_calls = agents_available * dialing_ratio
+
+limit:
+
+if > max_parallel_calls → cap
+
+---
+
+========================
+11. DIALING SPEED CONTROL
+=========================
+
+dialing_speed = calls/sec
+
+Implement:
+
+* batch execution every second
+* delay 100–300ms
+
+---
+
+========================
+12. ADAPTIVE SPEED
+==================
+
+If:
+
+* agents idle → increase speed
+* voicemail high → reduce speed
+* failures high → slow down
+
+---
+
+========================
+13. DROP RATE CONTROL
+=====================
+
+Track:
+
+* abandoned_calls
+* total_calls
+
+If drop_rate exceeds limit:
+
+→ reduce speed
+
+---
+
+========================
+14. WORKER PROTECTION
+=====================
+
+Add:
+
+* concurrency guard
+* queue lock
+* max calls per second
+* retry limit = 1
+
+---
+
+========================
+15. ANSWER DETECTION (AMD)
+==========================
+
+If human:
+
+→ AI or agent flow
+
+If voicemail:
+
+→ play voicemail message
+→ end call
+
+---
+
+========================
+16. AGENT SYSTEM
+================
+
+Fields:
+
+* name
+* phone_number
+* status
+
+---
+
+========================
+17. AGENT + NUMBER SYNC
+=======================
+
+On call start:
+
+* agent → busy
+* number → busy
+
+On call end:
+
+* agent → available
+* number → available
+
+---
+
+========================
+18. INBOUND ROUTING (CRITICAL)
+==============================
+
+Table: inbound_routes
+
+Fields:
+
+* did_number
+* campaign_id
+* route_type (ai, forward, hybrid)
+* forward_number
+
+---
+
+WEBHOOK HANDLER:
+
+On inbound call:
+
+1. detect DID
+2. find route
+
+---
+
+IF route_type = "ai":
+
+→ AI greeting
+→ conversation
+
+---
+
+IF route_type = "forward":
+
+→ transfer to forward_number
+
+---
+
+IF route_type = "hybrid":
+
+→ AI greeting → then transfer
+
+---
+
+DEFAULT:
+
+→ fallback number
+
+---
+
+========================
+19. CALLBACK SYSTEM
+===================
+
+If user calls back:
+
+* match DID to campaign
+* route accordingly
+
+---
+
+========================
+20. LIVE CALL TRACKING
+======================
+
+Redis:
+
+active_calls
+
+Store:
+
+* campaign
+* number used
+* lead
+* agent
+* start time
+
+---
+
+========================
+21. SUPERVISOR CONTROLS
+=======================
+
+Routes:
+
+* listen
+* whisper
+* barge
+
+---
+
+========================
+22. CALL RECORDING
+==================
+
+* start on connect
+* stop on end
+* store recording_url
+
+---
+
+========================
+23. ADVANCED CDR
+================
+
+Store:
+
+* duration
+* answer_type
+* number_used
+* campaign
+* agent
+* disposition
+
+---
+
+========================
+24. VOICE SYSTEM
+================
+
+Priority:
+
+1. ElevenLabs
+2. OpenAI TTS
+3. fallback
+
+---
+
+========================
+25. ERROR HANDLING
+==================
+
+* log errors
+* retry once
+* skip failed leads
+
+---
+
+========================
+26. FRONTEND SAFETY
+===================
+
+Frontend must:
+
+* NOT trigger calls on upload
+* only call via "Start Campaign"
+* show loading + errors
+
+---
+
+========================
+27. SYSTEM GUARANTEE
+====================
+
+Flow MUST always be:
+
+Upload → Validate → Store → Queue → Worker → Call
+
+---
+
+========================
+GOAL
+====
+
+System must:
+
+* handle bulk uploads without breaking
+* run calls smoothly with queue
+* route inbound calls correctly
+* maintain consistent state
+* prevent overload and crashes
+* provide stable real-time operation
