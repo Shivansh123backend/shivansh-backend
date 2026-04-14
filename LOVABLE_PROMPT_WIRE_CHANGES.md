@@ -89,6 +89,12 @@ onClick:
 ```
 Show a loading spinner while fetching. If it fails, show a toast error "Preview failed".
 
+**Voice preview behavior:**
+- ElevenLabs preview → calls ElevenLabs API only
+- Cartesia preview → calls Cartesia API only
+- Deepgram preview → calls Deepgram API only
+- If ANY preview fails → show `toast.error("Preview failed: " + error.detail)` — **never silently fall back to a different provider**
+
 **Hardcoded catalog** (no need to fetch — use these for the dropdowns; fetch from API is the alternative):
 
 ElevenLabs (provider = `elevenlabs`):
