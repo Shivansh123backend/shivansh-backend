@@ -1371,7 +1371,39 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     // ── 4. Call hung up — finalize ────────────────────────────────────────────
     if (eventType === "call.hangup") {
       const bridge = getBridgeInfo(callControlId);
-      if (!bridge) return;
+
+      // No bridge = call was never answered (no-answer, busy, carrier reject, etc.)
+      // Update the initial call_log row that campaigns.ts created with callControlId.
+      if (!bridge) {
+        const hangupCause: string = payload.hangup_cause ?? "";
+        const disposition =
+          hangupCause === "USER_BUSY"        ? "busy"
+          : hangupCause === "NO_ANSWER"      ? "no_answer"
+          : hangupCause === "NORMAL_CLEARING" ? "no_answer"
+          : hangupCause === "ORIGINATOR_CANCEL" ? "no_answer"
+          : hangupCause                      ? `failed:${hangupCause.toLowerCase()}`
+          : "no_answer";
+
+        logger.info({ callControlId, hangupCause, disposition }, "Call hung up before answer — updating log");
+
+        await db
+          .update(callLogsTable)
+          .set({ status: "completed", disposition })
+          .where(eq(callLogsTable.callControlId, callControlId))
+          .catch((err) => logger.warn({ err: String(err), callControlId }, "Failed to update unanswered call log"));
+
+        // Release the Telnyx number from busy
+        const ownNum = callOwnNumber.get(callControlId);
+        if (ownNum) {
+          await db
+            .update(phoneNumbersTable)
+            .set({ isBusy: false })
+            .where(eq(phoneNumbersTable.phoneNumber, ownNum))
+            .catch(() => {});
+          callOwnNumber.delete(callControlId);
+        }
+        return;
+      }
 
       // Clean up background sound tracking
       backgroundSoundActive.delete(callControlId);
@@ -1395,22 +1427,43 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         : "human";
 
       if (bridge.direction === "outbound") {
-        await db.insert(callLogsTable).values({
-          phoneNumber: bridge.callerNumber,
-          campaignId: bridge.campaignId,
-          status: "completed",
-          disposition,
-          direction: "outbound",
-          duration: durationSecs,
-          recordingUrl: bridge.recordingUrl ?? null,
-          transcript,
-          summary,
-          callControlId,
-          numberUsed,
-          answerType,
-        }).catch((err) =>
-          logger.error({ err: String(err), callControlId }, "Failed to insert outbound call log")
-        );
+        // Update the pre-existing log row created when the call was dispatched.
+        // If no row exists yet (race condition), fall back to insert.
+        const [updated] = await db
+          .update(callLogsTable)
+          .set({
+            status: "completed",
+            disposition,
+            duration: durationSecs,
+            recordingUrl: bridge.recordingUrl ?? null,
+            transcript,
+            summary,
+            numberUsed,
+            answerType,
+          })
+          .where(eq(callLogsTable.callControlId, callControlId))
+          .returning()
+          .catch(() => []);
+
+        if (!updated) {
+          // Fallback: no pre-existing row (e.g. manual/inbound dial) — insert fresh
+          await db.insert(callLogsTable).values({
+            phoneNumber: bridge.callerNumber,
+            campaignId: bridge.campaignId,
+            status: "completed",
+            disposition,
+            direction: "outbound",
+            duration: durationSecs,
+            recordingUrl: bridge.recordingUrl ?? null,
+            transcript,
+            summary,
+            callControlId,
+            numberUsed,
+            answerType,
+          }).catch((err) =>
+            logger.error({ err: String(err), callControlId }, "Failed to insert outbound call log fallback")
+          );
+        }
 
         // Update lead status
         const leadStatus = disposition === "callback_requested" ? "callback" : "called";

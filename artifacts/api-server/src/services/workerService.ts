@@ -114,13 +114,15 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
       }).catch(() => {}); // non-fatal if Redis unavailable
     }
 
-    return { success: true, data: response.data };
+    return { success: true, data: response.data, callControlId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const status = (err as Record<string, unknown> & { response?: { status?: number; data?: unknown } })?.response?.status;
-    const detail = (err as Record<string, unknown> & { response?: { status?: number; data?: unknown } })?.response?.data;
+    const resp = (err as Record<string, unknown> & { response?: { status?: number; data?: { errors?: Array<{ detail?: string; title?: string }> } } })?.response;
+    const status = resp?.status;
+    const detail = resp?.data;
+    const telnyxReason = detail?.errors?.[0]?.detail ?? detail?.errors?.[0]?.title ?? msg;
     logger.error({ phone: payload.phone, err: msg, status, detail }, "Telnyx direct call failed");
-    return { success: false, error: `Telnyx API error ${status ?? ""}: ${msg}` };
+    return { success: false, error: `Telnyx ${status ?? "error"}: ${telnyxReason}` };
   }
 }
 

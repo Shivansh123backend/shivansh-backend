@@ -526,7 +526,19 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
   const dropRateLimit = campaign.dropRateLimit ?? 3;
 
   async function processLead(lead: typeof pendingLeads[0]): Promise<void> {
-    const normPhone = lead.phone.replace(/[^\d+]/g, "");
+    // Strip all formatting, then normalize to E.164
+    const stripped = lead.phone.replace(/[^\d+]/g, "");
+    const normPhone =
+      stripped.startsWith("+") ? stripped               // already E.164
+      : stripped.length === 10  ? `+1${stripped}`       // US 10-digit → +1XXXXXXXXXX
+      : stripped.length === 11 && stripped.startsWith("1") ? `+${stripped}` // US 11-digit starting with 1
+      : `+${stripped}`;                                 // best-effort for other formats
+
+    // Basic sanity check — skip obviously invalid numbers
+    if (normPhone.length < 8) {
+      logger.warn({ leadId: lead.id, phone: lead.phone, normPhone }, "Lead skipped — phone number too short");
+      return;
+    }
 
     // DNC check
     if (dncSet.has(normPhone) || lead.dncFlag) {
@@ -559,13 +571,13 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
 
     const [logEntry] = await db
       .insert(callLogsTable)
-      .values({ phoneNumber: lead.phone, campaignId, status: "initiated", direction: "outbound", numberUsed: callFromNumber })
+      .values({ phoneNumber: normPhone, campaignId, status: "initiated", direction: "outbound", numberUsed: callFromNumber })
       .returning();
 
     totalCalls++;
 
     const result = await enqueueCall({
-      phone: lead.phone,
+      phone: normPhone,
       from_number: callFromNumber,
       agent_prompt: script,
       voice: voiceName,
@@ -589,9 +601,14 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
 
     const newRetryCount = (lead.retryCount ?? 0) + (result.success ? 0 : 1);
 
+    // Save callControlId (for webhook to find this log later) + error reason on failure
     await db
       .update(callLogsTable)
-      .set({ status: result.success ? "completed" : "failed" })
+      .set({
+        status: result.success ? "initiated" : "failed",
+        callControlId: result.callControlId ?? null,
+        disposition: result.success ? null : (result.error?.slice(0, 255) ?? "unknown_error"),
+      })
       .where(eq(callLogsTable.id, logEntry.id));
 
     if (result.success) {
