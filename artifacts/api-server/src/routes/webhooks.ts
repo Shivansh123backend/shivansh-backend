@@ -242,12 +242,13 @@ ABSOLUTE RULES:
 - If they want a callback: confirm their preferred time warmly and end.
 ${transferInstruction}
 
-SCRIPT COMPLETION — CRITICAL:
-- Once you have gone through all the campaign questions and received answers:
-  1. Give the caller ONE genuine closing moment — a brief summary, key benefit, or reassurance based on what they told you.
-  2. THEN say: "Let me get one of our team members on the line for you — one moment!"
-- Do NOT loop back to any question already asked.
-- Do NOT keep talking after triggering transfer.`;
+SCRIPT COMPLETION — MANDATORY:
+- Once you have asked ALL campaign questions and received an answer to each one:
+  1. Give the caller ONE brief closing acknowledgement — 1 sentence summarising what they told you or a quick reassurance.
+  2. THEN say EXACTLY this phrase (word for word): "Let me transfer you to an expert who can help you further — one moment please!"
+  3. Say NOTHING else after that. Stop completely. The transfer will happen automatically.
+- This final transfer step is REQUIRED — do not skip it, do not ask for confirmation, do not ask another question.
+- Do NOT loop back to any question already answered.`;
 }
 
 // ── Telnyx Call Control helpers ───────────────────────────────────────────────

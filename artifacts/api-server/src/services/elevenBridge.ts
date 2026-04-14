@@ -344,9 +344,12 @@ async function connectToElevenLabs(
         const text = are?.agent_response ?? "";
         if (text && !bridge.pendingTransfer) {
           const TRANSFER_PHRASES = [
-            "transferring you", "connect you with", "one of our agents",
+            "transfer you to", "transferring you", "transfer to an expert",
+            "connect you with", "connect you to", "one of our agents",
             "one moment please", "putting you through", "let me get a",
             "a live agent", "a team member", "bring in a specialist",
+            "get an expert", "to an expert", "to a specialist",
+            "let me transfer",
           ];
           const lower = text.toLowerCase();
           if (TRANSFER_PHRASES.some((p) => lower.includes(p)) && bridge.transferNumber) {
