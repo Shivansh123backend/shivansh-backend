@@ -4,11 +4,14 @@ import { parse as csvParse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
 import axios from "axios";
 import { db } from "@workspace/db";
-import { leadsTable, campaignsTable } from "@workspace/db";
+import { leadsTable, campaignsTable, dncListTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { logger } from "../lib/logger.js";
 import { z } from "zod";
+
+const BATCH_SIZE = 50;
+const BATCH_DELAY_MS = 500;
 
 const router: IRouter = Router();
 
@@ -20,15 +23,41 @@ const upload = multer({
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Normalise a phone string: strip everything except digits and leading +.
- *  Returns null for obviously invalid numbers (< 7 digits). */
+/** Normalise a phone string toward E.164.
+ *  Strips spaces/symbols, preserves leading +.
+ *  Returns null for numbers with fewer than 10 or more than 15 digits (invalid). */
 function normalisePhone(raw: string | undefined | null): string | null {
   if (!raw) return null;
-  const stripped = String(raw).replace(/[^\d+]/g, "").replace(/(?!^\+)\+/g, "");
-  const digits = stripped.replace(/\D/g, "");
-  if (digits.length < 7) return null;
-  // Preserve leading + if present
-  return stripped.startsWith("+") ? stripped : digits;
+  // Strip everything except digits and a single leading +
+  let s = String(raw).trim().replace(/[^\d+]/g, "");
+  // Remove any + that isn't the very first character
+  s = s.replace(/(?!^\+)\+/g, "");
+  const digits = s.replace(/\D/g, "");
+  // E.164: 10–15 digits total
+  if (digits.length < 10 || digits.length > 15) return null;
+  return s.startsWith("+") ? s : digits;
+}
+
+/** Build a normalised set of all DNC phone numbers for fast O(1) lookup. */
+async function fetchDncSet(): Promise<Set<string>> {
+  const rows = await db.select({ phone: dncListTable.phoneNumber }).from(dncListTable);
+  return new Set(rows.map(r => r.phone.replace(/[^\d+]/g, "")));
+}
+
+/** Insert rows in batches of BATCH_SIZE with BATCH_DELAY_MS between each batch. */
+async function batchInsert(
+  rows: Array<{ name: string; phone: string; email: string | null; campaignId: number; source: "manual" | "csv" | "sheet" }>,
+): Promise<number> {
+  let inserted = 0;
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const result = await db.insert(leadsTable).values(batch).returning({ id: leadsTable.id });
+    inserted += result.length;
+    if (i + BATCH_SIZE < rows.length) {
+      await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
+    }
+  }
+  return inserted;
 }
 
 function normaliseEmail(raw: string | undefined | null): string | null {
@@ -258,22 +287,50 @@ router.post(
       validRows.push({ name, phone, email });
     }
 
-    // Deduplicate
-    const { valid, skipped } = await deduplicateBatch(validRows, campaignId);
-    const totalSkipped = invalidCount + skipped;
+    // DNC filtering — skip any number on the do-not-call list
+    const dncSet = await fetchDncSet();
+    const nonDncRows: NormalisedLead[] = [];
+    let dncCount = 0;
+    for (const r of validRows) {
+      const norm = r.phone.replace(/[^\d+]/g, "");
+      if (dncSet.has(norm)) {
+        dncCount++;
+        logger.info({ phone: r.phone, campaignId }, "Lead skipped during upload — DNC flagged");
+      } else {
+        nonDncRows.push(r);
+      }
+    }
+
+    // Deduplicate against DB
+    const { valid, skipped: dupCount } = await deduplicateBatch(nonDncRows, campaignId);
 
     if (valid.length === 0) {
-      res.json({ total_uploaded: 0, total_skipped: totalSkipped });
+      res.json({
+        total_uploaded: 0,
+        total_skipped: invalidCount + dncCount + dupCount,
+        invalid_numbers: invalidCount,
+        duplicates: dupCount,
+        dnc_skipped: dncCount,
+      });
       return;
     }
 
-    const inserted = await db
-      .insert(leadsTable)
-      .values(valid.map((r) => ({ name: r.name, phone: r.phone, email: r.email, campaignId, source: "csv" as const })))
-      .returning();
+    // Batch insert — 50 rows per batch, 500 ms between batches
+    const totalInserted = await batchInsert(
+      valid.map(r => ({ name: r.name, phone: r.phone, email: r.email, campaignId, source: "csv" as const }))
+    );
 
-    logger.info({ campaignId, uploaded: inserted.length, skipped: totalSkipped }, "Bulk CSV/XLSX upload");
-    res.status(201).json({ total_uploaded: inserted.length, total_skipped: totalSkipped });
+    logger.info(
+      { campaignId, uploaded: totalInserted, invalid: invalidCount, duplicates: dupCount, dnc: dncCount },
+      "Bulk CSV/XLSX upload complete"
+    );
+    res.status(201).json({
+      total_uploaded: totalInserted,
+      total_skipped: invalidCount + dncCount + dupCount,
+      invalid_numbers: invalidCount,
+      duplicates: dupCount,
+      dnc_skipped: dncCount,
+    });
   }
 );
 
@@ -330,21 +387,49 @@ router.post("/leads/import-sheet", authenticate, requireRole("admin"), async (re
     validRows.push({ name, phone, email });
   }
 
-  const { valid, skipped } = await deduplicateBatch(validRows, campaign_id);
-  const totalSkipped = invalidCount + skipped;
+  // DNC filtering
+  const dncSet = await fetchDncSet();
+  const nonDncRows: NormalisedLead[] = [];
+  let dncCount = 0;
+  for (const r of validRows) {
+    const norm = r.phone.replace(/[^\d+]/g, "");
+    if (dncSet.has(norm)) {
+      dncCount++;
+      logger.info({ phone: r.phone, campaign_id }, "Lead skipped during sheet import — DNC flagged");
+    } else {
+      nonDncRows.push(r);
+    }
+  }
+
+  const { valid, skipped: dupCount } = await deduplicateBatch(nonDncRows, campaign_id);
 
   if (valid.length === 0) {
-    res.json({ total_uploaded: 0, total_skipped: totalSkipped });
+    res.json({
+      total_uploaded: 0,
+      total_skipped: invalidCount + dncCount + dupCount,
+      invalid_numbers: invalidCount,
+      duplicates: dupCount,
+      dnc_skipped: dncCount,
+    });
     return;
   }
 
-  const inserted = await db
-    .insert(leadsTable)
-    .values(valid.map((r) => ({ name: r.name, phone: r.phone, email: r.email, campaignId: campaign_id, source: "sheet" as const })))
-    .returning();
+  // Batch insert
+  const totalInserted = await batchInsert(
+    valid.map(r => ({ name: r.name, phone: r.phone, email: r.email, campaignId: campaign_id, source: "sheet" as const }))
+  );
 
-  logger.info({ campaign_id, uploaded: inserted.length, skipped: totalSkipped, sheetId }, "Google Sheets import");
-  res.status(201).json({ total_uploaded: inserted.length, total_skipped: totalSkipped });
+  logger.info(
+    { campaign_id, uploaded: totalInserted, invalid: invalidCount, duplicates: dupCount, dnc: dncCount, sheetId },
+    "Google Sheets import complete"
+  );
+  res.status(201).json({
+    total_uploaded: totalInserted,
+    total_skipped: invalidCount + dncCount + dupCount,
+    invalid_numbers: invalidCount,
+    duplicates: dupCount,
+    dnc_skipped: dncCount,
+  });
 });
 
 // ── PATCH /leads/:id ─────────────────────────────────────────────────────────

@@ -1,0 +1,221 @@
+Upgrade system to ensure stable operation for all lead input methods (manual, CSV, Excel, Google Sheets) and prevent system crashes during bulk dialing.
+
+---
+
+GOAL:
+
+Ensure:
+
+* All lead inputs are validated
+* Bulk uploads do not overload system
+* Calls are processed via queue only
+* No direct dialing from upload
+* System remains stable under load
+
+---
+
+========================
+
+1. UNIFIED LEAD INGESTION PIPELINE
+   ========================
+
+All inputs must go through SAME pipeline:
+
+Sources:
+
+* manual entry
+* CSV upload
+* Excel upload
+* Google Sheets
+
+---
+
+PROCESS:
+
+1. receive data
+2. normalize fields
+3. validate data
+4. deduplicate
+5. store in DB
+6. push to queue ONLY when campaign starts
+
+---
+
+IMPORTANT:
+
+❌ DO NOT trigger calls during upload
+
+---
+
+========================
+2. VALIDATION LAYER (CRITICAL)
+==============================
+
+Before saving each lead:
+
+* phone_number must exist
+* must match E.164 format (+countrycode)
+* remove spaces, symbols
+* reject invalid numbers
+
+---
+
+Example:
+
++91XXXXXXXXXX
+
+---
+
+========================
+3. DUPLICATE HANDLING
+=====================
+
+Before insert:
+
+* check phone_number + campaign_id
+
+If duplicate:
+
+* skip or update
+
+---
+
+========================
+4. BULK UPLOAD THROTTLING
+=========================
+
+If file > 100 leads:
+
+* process in batches (50 per batch)
+* delay between batches (500ms)
+
+---
+
+========================
+5. QUEUE-ONLY DIALING (MANDATORY)
+=================================
+
+All calls must go through Redis queue:
+
+call_queue:{campaign_id}
+
+---
+
+❌ NEVER:
+
+* call worker directly from upload
+* loop API calls directly
+
+---
+
+========================
+6. SAFE CAMPAIGN START
+======================
+
+On start campaign:
+
+* push leads into queue
+* start controlled worker
+
+---
+
+========================
+7. WORKER PROTECTION
+====================
+
+Limit:
+
+* max concurrent calls
+* max calls per second
+
+---
+
+Add:
+
+* concurrency guard
+* queue lock system
+
+---
+
+========================
+8. FAILURE HANDLING
+===================
+
+If call fails:
+
+* retry once
+* if fails again → mark failed
+
+---
+
+========================
+9. INVALID DATA PROTECTION
+==========================
+
+Skip leads with:
+
+* invalid phone
+* empty fields
+* DNC flagged
+
+---
+
+========================
+10. UPLOAD RESPONSE SYSTEM
+==========================
+
+Return:
+
+* total_uploaded
+* total_skipped
+* invalid_numbers
+* duplicates
+
+---
+
+========================
+11. LOGGING (IMPORTANT)
+=======================
+
+Log:
+
+* upload events
+* skipped leads
+* queue push
+* call failures
+
+---
+
+========================
+12. FRONTEND SAFETY
+===================
+
+Frontend must:
+
+* show upload result
+* NOT trigger calls automatically
+* allow manual "Start Campaign"
+
+---
+
+========================
+13. CALL FLOW GUARANTEE
+=======================
+
+Flow must always be:
+
+Upload → Store → Queue → Worker → Call
+
+---
+
+========================
+GOAL
+====
+
+System must:
+
+* handle CSV/Excel/manual inputs without crashing
+* prevent overload from bulk uploads
+* ensure clean data before dialing
+* guarantee stable call execution
+* isolate ingestion from dialing

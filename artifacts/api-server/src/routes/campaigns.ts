@@ -20,6 +20,10 @@ import { z } from "zod";
 
 const router: IRouter = Router();
 
+// ── Campaign run lock — prevents the same campaign from being double-started ──
+// Maps campaignId → true while triggerCampaignCalls is running in this process
+const activeCampaignRuns = new Map<number, boolean>();
+
 
 const createCampaignSchema = z.object({
   name: z.string().min(1),
@@ -285,6 +289,22 @@ async function buildDncSet(): Promise<Set<string>> {
 }
 
 async function triggerCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
+  // Concurrency guard — prevent double-starting the same campaign in this process
+  if (activeCampaignRuns.get(campaignId)) {
+    logger.warn({ campaignId }, "Campaign already running in this process — ignoring duplicate start");
+    return;
+  }
+  activeCampaignRuns.set(campaignId, true);
+
+  try {
+    await _runCampaignCalls(campaignId, campaign);
+  } finally {
+    activeCampaignRuns.delete(campaignId);
+    logger.info({ campaignId }, "Campaign run lock released");
+  }
+}
+
+async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
   const { script, voiceName, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(campaignId, campaign);
 
   const retryAttempts = campaign.retryAttempts ?? 2;
