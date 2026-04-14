@@ -96,6 +96,7 @@ export interface BridgeInfo {
   transferNumber?: string;
   holdMusicUrl?: string;
   backgroundSound?: string;    // "office" | "typing" | "cafe" | "none" | undefined
+  voiceProvider?: string;      // "elevenlabs" | "deepgram" | "cartesia"
   transcript: string[];
   voiceId: string;
   systemPrompt: string;

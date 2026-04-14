@@ -6,12 +6,19 @@ import { authenticate, requireRole } from "../middlewares/auth.js";
 import { logger } from "../lib/logger.js";
 import axios from "axios";
 import { z } from "zod";
+import {
+  VOICE_CATALOG,
+  generateTTSFromProvider,
+  type VoiceProvider,
+} from "../services/voiceRegistry.js";
 
 const router: IRouter = Router();
 
+const SUPPORTED_PROVIDERS: VoiceProvider[] = ["elevenlabs", "deepgram", "cartesia"];
+
 const createVoiceSchema = z.object({
   name: z.string().min(1),
-  provider: z.enum(["elevenlabs", "playht", "azure"]),
+  provider: z.enum(["elevenlabs", "playht", "azure", "deepgram", "cartesia"]),
   voiceId: z.string().min(1),
   gender: z.enum(["male", "female"]),
   accent: z.enum(["us", "uk", "indian", "australian", "canadian", "other"]).default("us"),
@@ -42,9 +49,74 @@ router.post("/voices", authenticate, requireRole("admin"), async (req, res): Pro
   res.status(201).json(voice);
 });
 
+// ── GET /voices?provider=elevenlabs|deepgram|cartesia ─────────────────────────
+// Returns catalog voices (static) merged with DB-stored voices for each provider.
+// If `provider` is omitted, returns all providers grouped.
 router.get("/voices", authenticate, async (req, res): Promise<void> => {
-  const voices = await db.select().from(voicesTable);
-  res.json(voices);
+  const providerParam = req.query.provider as string | undefined;
+
+  // Validate provider param if present
+  if (providerParam && !SUPPORTED_PROVIDERS.includes(providerParam as VoiceProvider)) {
+    // fall through to DB-only for unsupported providers like "playht" / "azure"
+    const voices = await db.select().from(voicesTable).where(
+      eq(voicesTable.provider, providerParam as "elevenlabs" | "playht" | "azure")
+    );
+    res.json(voices);
+    return;
+  }
+
+  if (providerParam) {
+    const provider = providerParam as VoiceProvider;
+    const catalogVoices = VOICE_CATALOG[provider].map((v) => ({
+      voice_id:    v.voice_id,
+      name:        v.name,
+      gender:      v.gender,
+      accent:      v.accent,
+      language:    "en",
+      description: v.description ?? null,
+      provider,
+      source:      "catalog",
+    }));
+    res.json(catalogVoices);
+    return;
+  }
+
+  // No provider — return all three supported providers grouped
+  const grouped: Record<string, typeof VOICE_CATALOG[VoiceProvider]> = {};
+  for (const p of SUPPORTED_PROVIDERS) {
+    grouped[p] = VOICE_CATALOG[p].map((v) => ({ ...v, provider: p, source: "catalog" })) as typeof VOICE_CATALOG[VoiceProvider];
+  }
+  res.json(grouped);
+});
+
+// ── POST /voices/preview — generate TTS preview for any provider ───────────────
+// Body: { provider: "elevenlabs"|"deepgram"|"cartesia", voice_id: string, text?: string }
+// Returns: { url: string } — publicly reachable MP3 served from /api/audio/:token
+router.post("/voices/preview", authenticate, async (req, res): Promise<void> => {
+  const body = req.body as { provider?: string; voice_id?: string; text?: string };
+
+  if (!body.provider || !SUPPORTED_PROVIDERS.includes(body.provider as VoiceProvider)) {
+    res.status(400).json({ error: `provider must be one of: ${SUPPORTED_PROVIDERS.join(", ")}` });
+    return;
+  }
+  if (!body.voice_id) {
+    res.status(400).json({ error: "voice_id is required" });
+    return;
+  }
+
+  const provider  = body.provider as VoiceProvider;
+  const voiceId   = body.voice_id;
+  const text      = body.text ?? "Hello! I'm your AI assistant. I'm here to help you with your calls today.";
+
+  try {
+    const url = await generateTTSFromProvider(provider, voiceId, text);
+    res.json({ url, provider, voice_id: voiceId });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = axios.isAxiosError(err) ? (err.response?.status ?? 502) : 502;
+    logger.error({ err: msg, provider, voiceId }, "Voice preview TTS failed");
+    res.status(status).json({ error: "TTS preview failed", detail: msg, provider, voice_id: voiceId });
+  }
 });
 
 // ── GET /voices/elevenlabs — fetch directly from ElevenLabs API ───────────────

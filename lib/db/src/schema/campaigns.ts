@@ -21,6 +21,7 @@ export const campaignsTable = pgTable("campaigns", {
   knowledgeBase: text("knowledge_base"),
   recordingNotes: text("recording_notes"),
   voice: text("voice"),
+  voiceProvider: text("voice_provider").default("elevenlabs"), // "elevenlabs" | "deepgram" | "cartesia"
   fromNumber: text("from_number"),
   transferNumber: text("transfer_number"),
   backgroundSound: text("background_sound").default("none"),

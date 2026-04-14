@@ -22,6 +22,7 @@ export interface EnqueueCallPayload {
   from_number: string;
   agent_prompt: string;
   voice: string;
+  voice_provider?: string;
   transfer_number?: string;
   campaign_id: string;
   campaign_name?: string;
@@ -59,6 +60,7 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
     campaignName: payload.campaign_name ?? "",
     script: payload.agent_prompt,
     voice: payload.voice,
+    voiceProvider: payload.voice_provider ?? "elevenlabs",
     phone: payload.phone,
     fromNumber: payload.from_number,
     transferNumber: payload.transfer_number ?? null,

@@ -2,7 +2,7 @@ import { pgTable, text, serial, timestamp, pgEnum, integer } from "drizzle-orm/p
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const voiceProviderEnum = pgEnum("voice_provider", ["elevenlabs", "playht", "azure"]);
+export const voiceProviderEnum = pgEnum("voice_provider", ["elevenlabs", "playht", "azure", "deepgram", "cartesia"]);
 export const voiceGenderEnum = pgEnum("voice_gender", ["male", "female"]);
 export const voiceAccentEnum = pgEnum("voice_accent", ["us", "uk", "indian", "australian", "canadian", "other"]);
 

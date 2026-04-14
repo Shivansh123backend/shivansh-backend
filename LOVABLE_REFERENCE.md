@@ -252,13 +252,52 @@ DNC leads and `do_not_call` status leads are automatically excluded. A `409` is 
 
 ## Voices
 
+### Multi-provider catalog
+
 | Method | Path | Role | Description |
 |--------|------|------|-------------|
-| GET | `/voices` | any | Saved voices |
-| GET | `/voices/elevenlabs` | any | Raw ElevenLabs voice list |
-| POST | `/voices/elevenlabs/sync` | admin | Sync voices from ElevenLabs |
-| GET | `/voices/:id/preview` | any | Stream audio preview |
-| POST | `/voices/:id/sample` | any | Generate sample `{ text }` |
+| GET | `/voices` | any | All providers grouped `{ elevenlabs:[…], deepgram:[…], cartesia:[…] }` |
+| GET | `/voices?provider=elevenlabs` | any | Catalog for a single provider (also accepts `deepgram`, `cartesia`) |
+| POST | `/voices/preview` | any | Generate TTS preview, returns `{ url, provider, voice_id }` |
+| GET | `/voices/elevenlabs` | any | Raw ElevenLabs voice list from API |
+| POST | `/voices/elevenlabs/sync` | admin | Sync ElevenLabs voices into DB |
+| GET | `/voices/:id/preview` | any | Stream stored preview audio |
+| POST | `/voices/:id/sample` | any | ElevenLabs sample `{ text }` |
+
+### POST /voices/preview
+```json
+{
+  "provider": "deepgram",
+  "voice_id": "aura-asteria-en",
+  "text": "Hello, this is a preview"
+}
+```
+**Response:**
+```json
+{ "url": "https://shivanshbackend.replit.app/api/audio/<token>", "provider": "deepgram", "voice_id": "aura-asteria-en" }
+```
+- Returns 400 if `provider` or `voice_id` missing/invalid
+- Returns 502 if provider API fails (e.g. missing API key)
+- URL is playable for 10 minutes
+
+### Voice catalog shape (per voice)
+```json
+{ "voice_id": "aura-asteria-en", "name": "Asteria", "gender": "female", "accent": "us", "provider": "deepgram", "source": "catalog" }
+```
+
+### Providers
+| Provider | Env key needed | Notes |
+|----------|---------------|-------|
+| `elevenlabs` | `ELEVENLABS_API_KEY` | ConvAI + TTS; 8 curated voices |
+| `deepgram` | `DEEPGRAM_API_KEY` | Aura TTS; 10 voices |
+| `cartesia` | `CARTESIA_API_KEY` | Sonic-2 TTS; 5 voices |
+
+### Assigning voice to a campaign
+```json
+PATCH /campaigns/:id
+{ "voice": "aura-asteria-en", "voiceProvider": "deepgram" }
+```
+The system automatically falls back: requested provider → ElevenLabs → OpenAI TTS → Telnyx native speak.
 
 ---
 

@@ -1,0 +1,210 @@
+Upgrade system to support multi-provider voice selection, preview, and campaign-level voice execution.
+
+---
+
+GOAL:
+
+Allow user to:
+
+* Select voice provider (ElevenLabs, Deepgram Aura, Cartesia)
+* View available voices
+* Preview voice before selection
+* Assign voice to campaign
+* Ensure calls use selected voice reliably
+
+---
+
+========================
+
+1. VOICE PROVIDER REGISTRY
+   ========================
+
+Create a centralized voice registry:
+
+Providers:
+
+* elevenlabs
+* deepgram
+* cartesia
+
+---
+
+Each provider must return:
+
+* voice_id
+* name
+* gender
+* accent (optional)
+
+---
+
+========================
+2. VOICE LIST API
+=================
+
+GET /voices?provider=elevenlabs
+
+---
+
+Return:
+
+[
+{
+"voice_id": "rachel",
+"name": "Rachel",
+"gender": "female"
+}
+]
+
+---
+
+If no provider passed:
+
+→ return all providers grouped
+
+---
+
+========================
+3. VOICE PREVIEW API (CRITICAL)
+===============================
+
+POST /voices/preview
+
+Body:
+
+{
+"provider": "deepgram",
+"voice_id": "aura-asteria-en",
+"text": "Hello, this is a preview voice"
+}
+
+---
+
+PROCESS:
+
+* generate TTS audio from selected provider
+* return audio as base64 or audio URL
+
+---
+
+IMPORTANT:
+
+* timeout max 5 seconds
+* fallback if provider fails
+
+---
+
+========================
+4. CAMPAIGN VOICE CONFIG
+========================
+
+Add fields:
+
+* voice_provider
+* voice_id
+
+---
+
+Example:
+
+{
+"voice_provider": "deepgram",
+"voice_id": "aura-asteria-en"
+}
+
+---
+
+========================
+5. WORKER VOICE EXECUTION
+=========================
+
+When call starts:
+
+1. read campaign config
+
+2. route to correct provider:
+
+IF provider = elevenlabs → use ElevenLabs API
+IF provider = deepgram → use Deepgram Aura
+IF provider = cartesia → use Cartesia API
+
+---
+
+========================
+6. FALLBACK SYSTEM (VERY IMPORTANT)
+===================================
+
+If selected provider fails:
+
+→ fallback order:
+
+1. ElevenLabs
+2. OpenAI TTS
+3. Static fallback message
+
+---
+
+System must NEVER fail to speak
+
+---
+
+========================
+7. AUDIO OUTPUT
+===============
+
+Convert TTS output into:
+
+* playable audio file
+* or stream directly to Telnyx
+
+---
+
+Use:
+
+/calls/{call_control_id}/actions/playback_start
+
+---
+
+========================
+8. PERFORMANCE SAFETY
+=====================
+
+* cache preview responses (optional)
+* avoid regenerating same voice repeatedly
+* limit preview calls per user
+
+---
+
+========================
+9. FRONTEND EXPECTATION
+=======================
+
+Frontend will:
+
+* call /voices to get list
+* call /voices/preview on play click
+* store selected voice in campaign
+
+---
+
+========================
+10. ERROR HANDLING
+==================
+
+* log provider errors
+* fallback automatically
+* return clean error to frontend
+
+---
+
+========================
+GOAL
+====
+
+System must:
+
+* allow multi-provider voice selection
+* provide instant preview
+* use selected voice during calls
+* fallback automatically if any provider fails
+* remain stable under load

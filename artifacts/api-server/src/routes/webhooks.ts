@@ -32,6 +32,11 @@ import {
   setRecordingUrl,
 } from "../services/elevenBridge.js";
 import { emitToSupervisors } from "../websocket/index.js";
+import {
+  audioCache,
+  generateTTSWithFallback,
+  type VoiceProvider,
+} from "../services/voiceRegistry.js";
 
 const router: IRouter = Router();
 
@@ -273,14 +278,6 @@ async function startRecording(callControlId: string): Promise<void> {
   });
 }
 
-// ── In-memory TTS audio cache (served at /api/audio/:token) ─────────────────
-interface CachedAudio { data: Buffer; contentType: string; expiresAt: number; }
-const audioCache = new Map<string, CachedAudio>();
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of audioCache) if (v.expiresAt < now) audioCache.delete(k);
-}, 30_000);
-
 // ── Per-call conversation history & state ────────────────────────────────────
 interface ConvMessage { role: "system" | "user" | "assistant"; content: string; }
 const callMessages              = new Map<string, ConvMessage[]>();   // callControlId → chat history
@@ -307,52 +304,7 @@ function syntheticId(callControlId: string): number {
   return Math.abs(h) % 9_000_000 + 1_000_000;
 }
 
-function makeAudioToken(): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(8)))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-/** Call ElevenLabs TTS HTTP API, cache the MP3, return a publicly reachable URL */
-async function generateTTS(voiceId: string, text: string): Promise<string> {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) throw new Error("ELEVENLABS_API_KEY not configured");
-
-  let resp;
-  try {
-    resp = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-      {
-        text,
-        model_id: "eleven_turbo_v2",
-        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-      },
-      {
-        headers: {
-          "xi-api-key": apiKey,
-          "Content-Type": "application/json",
-          Accept: "audio/mpeg",
-        },
-        responseType: "arraybuffer",
-        timeout: 20_000,
-      }
-    );
-  } catch (err) {
-    if (axios.isAxiosError(err) && err.response) {
-      const body = Buffer.from(err.response.data as ArrayBuffer).toString("utf-8").slice(0, 300);
-      logger.error({ voiceId, status: err.response.status, body }, "ElevenLabs TTS failed");
-    }
-    throw err;
-  }
-
-  const token = makeAudioToken();
-  audioCache.set(token, {
-    data: Buffer.from(resp.data as ArrayBuffer),
-    contentType: "audio/mpeg",
-    expiresAt: Date.now() + 10 * 60_000, // 10 min TTL
-  });
-  return `${BACKEND_WEBHOOK_URL}/api/audio/${token}`;
-}
+// makeAudioToken, audioCache, generateTTSWithFallback — imported from voiceRegistry
 
 /**
  * Play audio via Telnyx playback_start (ElevenLabs TTS URL).
@@ -420,7 +372,7 @@ async function startTranscriptionAndGreet(callControlId: string): Promise<void> 
   // Speak the greeting via ElevenLabs TTS
   aiSpeaking.add(callControlId);
   try {
-    const audioUrl = await generateTTS(bridge.voiceId, bridge.firstMessage);
+    const audioUrl = await generateTTSWithFallback(bridge.firstMessage, bridge.voiceId, (bridge.voiceProvider ?? "elevenlabs") as VoiceProvider);
     await playWithFallback(callControlId, audioUrl, bridge.firstMessage);
     bridge.transcript.push(`AI Agent: ${bridge.firstMessage}`);
   } catch (err) {
@@ -589,7 +541,7 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
     pendingTransferAfterPlay.add(callControlId);
     aiSpeaking.add(callControlId);
     try {
-      const audioUrl = await generateTTS(bridge.voiceId, aiText);
+      const audioUrl = await generateTTSWithFallback(aiText, bridge.voiceId, (bridge.voiceProvider ?? "elevenlabs") as VoiceProvider);
       await playWithFallback(callControlId, audioUrl, aiText);
     } catch (err) {
       aiSpeaking.delete(callControlId);
@@ -605,10 +557,10 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
     return;
   }
 
-  // Generate ElevenLabs TTS and play via playback_start (fallback to speak)
+  // Generate TTS (multi-provider with fallback) and play via playback_start
   aiSpeaking.add(callControlId);
   try {
-    const audioUrl = await generateTTS(bridge.voiceId, aiText);
+    const audioUrl = await generateTTSWithFallback(aiText, bridge.voiceId, (bridge.voiceProvider ?? "elevenlabs") as VoiceProvider);
     await playWithFallback(callControlId, audioUrl, aiText);
     logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "AI response playing via ElevenLabs TTS");
   } catch (err) {
@@ -857,6 +809,7 @@ interface OutboundClientState {
   campaignName: string;
   script: string;
   voice: string;
+  voiceProvider?: string;
   phone: string;
   transferNumber: string | null;
   backgroundSound: string | null;
@@ -925,7 +878,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             logger.info({ callControlId, campaignId: bridge.campaignId }, "AMD: voicemail beep — leaving VM drop message");
             try {
               const voiceId = bridge.voiceId ?? DEFAULT_ELEVEN_VOICE;
-              const audioUrl = await generateTTS(voiceId, camp.vmDropMessage);
+              const audioUrl = await generateTTSWithFallback(camp.vmDropMessage, voiceId, (bridge.voiceProvider ?? "elevenlabs") as VoiceProvider);
               await telnyxAction(callControlId, "playback_start", {
                 audio_url: audioUrl,
                 overlay: false,
@@ -1075,6 +1028,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         transferNumber: outboundCtx.transferNumber ?? undefined,
         holdMusicUrl: outboundHoldMusicUrl,
         backgroundSound: outboundCtx.backgroundSound ?? undefined,
+        voiceProvider: outboundCtx.voiceProvider ?? "elevenlabs",
         voiceId: callVoiceId,
         systemPrompt,
         firstMessage,
@@ -1149,6 +1103,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         startedAt: new Date(),
         transferNumber: effectiveTransferNumber ?? undefined,  // per-number override > campaign default
         holdMusicUrl: inboundHoldMusicUrl,
+        voiceProvider: campaign.voiceProvider ?? "elevenlabs",
         voiceId: inboundVoiceId,
         systemPrompt,
         firstMessage,

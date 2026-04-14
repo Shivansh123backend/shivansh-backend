@@ -52,6 +52,8 @@ const createCampaignSchema = z.object({
   workingHoursEnd: z.string().nullish(),
   workingHoursTimezone: z.string().default("UTC"),
   amdEnabled: z.boolean().default(false),
+  voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).default("elevenlabs").nullish(),
+  vmDropMessage: z.string().nullish(),
 });
 
 const assignAgentSchema = z.object({
@@ -143,6 +145,8 @@ const updateCampaignSchema = z.object({
   workingHoursEnd: z.string().nullish(),
   workingHoursTimezone: z.string().optional(),
   amdEnabled: z.boolean().optional(),
+  voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).optional(),
+  vmDropMessage: z.string().nullish(),
 });
 
 router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
@@ -478,7 +482,7 @@ async function allocateNumber(campaignId: number, fallbackNumber: string): Promi
 }
 
 async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
-  const { script, voiceName, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(campaignId, campaign);
+  const { script, voiceName, voiceProvider, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(campaignId, campaign);
 
   const retryAttempts = campaign.retryAttempts ?? 2;
   const retryIntervalMs = (campaign.retryIntervalMinutes ?? 60) * 60 * 1000;
@@ -553,6 +557,7 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       from_number: callFromNumber,
       agent_prompt: script,
       voice: voiceName,
+      voice_provider: voiceProvider,
       transfer_number: transferNumber,
       campaign_id: String(campaignId),
       campaign_name: campaign.name,
@@ -760,6 +765,7 @@ TONE: Be a real person having a real conversation. Stay warm, listen actively, a
   }
   let script = parts.join("\n\n");
   let voiceName = campaign.voice ?? "default";
+  let voiceProvider = (campaign.voiceProvider ?? "elevenlabs") as string;
   let fromNumber = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
   const transferNumber = campaign.transferNumber ?? campaign.transferRules ?? undefined;
 
@@ -804,7 +810,7 @@ TONE: Be a real person having a real conversation. Stay warm, listen actively, a
     if (phoneRow) fromNumber = phoneRow.phoneNumber;
   }
 
-  return { script, voiceName, fromNumber, transferNumber, backgroundSound, holdMusicUrl };
+  return { script, voiceName, voiceProvider, fromNumber, transferNumber, backgroundSound, holdMusicUrl };
 }
 
 // Shared logger (pino-style simple wrapper)
@@ -857,7 +863,7 @@ router.post("/campaigns/:id/test-call", authenticate, requireRole("admin"), asyn
   const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, id)).limit(1);
   if (!campaign) { res.status(404).json({ error: "Campaign not found" }); return; }
 
-  const { script, voiceName, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(id, campaign);
+  const { script, voiceName, voiceProvider, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(id, campaign);
 
   const [logEntry] = await db
     .insert(callLogsTable)
@@ -869,6 +875,7 @@ router.post("/campaigns/:id/test-call", authenticate, requireRole("admin"), asyn
     from_number: fromNumber,
     agent_prompt: script,
     voice: voiceName,
+    voice_provider: voiceProvider,
     transfer_number: transferNumber,
     campaign_id: String(id),
     campaign_name: `[TEST] ${campaign.name}`,
