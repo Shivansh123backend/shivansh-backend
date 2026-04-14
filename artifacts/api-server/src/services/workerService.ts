@@ -35,6 +35,7 @@ export interface TriggerCallResult {
   success: boolean;
   data?: unknown;
   error?: string;
+  callControlId?: string;
 }
 
 function isHtmlResponse(data: unknown): boolean {
