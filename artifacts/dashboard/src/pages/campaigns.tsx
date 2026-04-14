@@ -42,6 +42,7 @@ type Campaign = {
   backgroundSound?: string;
   holdMusic?: string;
   humanLike?: string;
+  transferNumber?: string;
 };
 
 type ElevenLabsVoice = {
@@ -422,6 +423,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const [selectedNumber, setSelectedNumber] = useState("");
   const [backgroundSound, setBackgroundSound] = useState("none");
   const [holdMusic, setHoldMusic] = useState("none");
+  const [transferNumber, setTransferNumber] = useState("");
 
   // Step 4 — Dialing Engine
   const [dialingMode, setDialingMode] = useState("progressive");
@@ -462,6 +464,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           fromNumber: selectedNumber || undefined,
           backgroundSound: backgroundSound as "none" | "office" | "typing" | "cafe",
           holdMusic: holdMusic as "none" | "jazz" | "corporate" | "smooth" | "classical",
+          transferNumber: transferNumber || undefined,
           humanLike,
           dialingMode: dialingMode as "manual" | "progressive" | "predictive" | "preview",
           dialingRatio: parseInt(dialingRatio) || 1,
@@ -713,6 +716,20 @@ function CreateModal({ onClose }: { onClose: () => void }) {
                   <p className="text-[10px] font-mono text-muted-foreground">Plays while the caller waits for a human agent to pick up on transfer</p>
                 </div>
               </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
+                  <Phone className="w-3 h-3" /> Transfer-to Number
+                  <span className="text-[9px] text-muted-foreground normal-case tracking-normal">(human agent, E.164 format e.g. +14155551234)</span>
+                </Label>
+                <input
+                  value={transferNumber}
+                  onChange={e => setTransferNumber(e.target.value)}
+                  placeholder="+14155551234"
+                  className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                />
+                <p className="text-[10px] font-mono text-muted-foreground">When the AI completes its script it will transfer the caller to this number</p>
+              </div>
             </>
           )}
 
@@ -799,6 +816,7 @@ function LaunchModal({
   const [showPrompt, setShowPrompt] = useState(false);
   const [backgroundSound, setBackgroundSound] = useState(campaign.backgroundSound ?? "none");
   const [holdMusic, setHoldMusic] = useState(campaign.holdMusic ?? "none");
+  const [transferNumber, setTransferNumber] = useState(campaign.transferNumber ?? "");
   const [humanLike, setHumanLike] = useState(campaign.humanLike ?? "true");
   const [showDialingEngine, setShowDialingEngine] = useState(false);
 
@@ -832,6 +850,7 @@ function LaunchModal({
           agentPrompt: prompt || undefined,
           backgroundSound,
           holdMusic,
+          transferNumber: transferNumber || undefined,
           humanLike,
           dialingMode,
           dialingRatio: parseInt(dialingRatio) || 1,
@@ -974,6 +993,21 @@ function LaunchModal({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          {/* Transfer-to Number */}
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
+              <Phone className="w-3 h-3" /> Transfer-to Number
+              <span className="text-[9px] text-muted-foreground normal-case tracking-normal">(E.164 e.g. +14155551234)</span>
+            </Label>
+            <input
+              value={transferNumber}
+              onChange={e => setTransferNumber(e.target.value)}
+              placeholder="+14155551234"
+              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            />
+            <p className="text-[10px] font-mono text-muted-foreground">AI transfers the caller here after completing the script. Required for live transfer to work.</p>
           </div>
 
           {/* Human-like toggle */}
