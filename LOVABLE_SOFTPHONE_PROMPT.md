@@ -1,375 +1,306 @@
-# SHIVANSH — Agent Softphone + Callbacks UI (Lovable Prompt)
+# LOVABLE WIRING PROMPT — SHIVANSH Agent Softphone + Stats
+
+Paste this entire block as a single Lovable message.
+
+---
 
 ## Context
 
-You are building two new pages for the **SHIVANSH** AI-powered calling SaaS admin dashboard (already partially built in Lovable).
-
-**Existing infrastructure:**
-- Backend: `https://shivanshbackend.replit.app`
-- Auth token key in localStorage: `auth_token` (NOT "token")
-- Design system: dark navy, `font-mono` throughout, primary `hsl(183,100%,50%)`
-- WebSocket: Socket.io v4 at `wss://shivanshbackend.replit.app`
-
-**Add to the existing sidebar navigation** (do not recreate Login or any existing pages):
-1. `/softphone` — Agent Softphone
-2. `/callbacks` — Scheduled Callbacks
+Backend: `https://shivanshbackend.replit.app`
+Auth header: `Authorization: Bearer ${localStorage.getItem("auth_token")}`
+All calls are authenticated unless stated otherwise.
+Primary colour: `hsl(183,100%,50%)` — cyan/teal. Dark navy background only. All text `font-mono`.
 
 ---
 
-## Auth + API helper (reuse if already in project, otherwise add)
-
-```ts
-// src/lib/api.ts
-const BASE = "https://shivanshbackend.replit.app";
-
-async function apiFetch(path: string, init?: RequestInit) {
-  const token = localStorage.getItem("auth_token");
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init?.headers,
-    },
-  });
-  if (res.status === 401) {
-    localStorage.removeItem("auth_token");
-    window.location.href = "/login";
-  }
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export const api = {
-  get:    (path: string)            => apiFetch(path),
-  post:   (path: string, body: any) => apiFetch(path, { method: "POST",  body: JSON.stringify(body) }),
-  patch:  (path: string, body: any) => apiFetch(path, { method: "PATCH", body: JSON.stringify(body) }),
-  delete: (path: string)            => apiFetch(path, { method: "DELETE" }),
-};
-```
-
----
-
-## Page 1: `/softphone` — Agent Softphone
+## SECTION A — Agent Softphone Page (`/softphone`)
 
 ### Purpose
-Browser-based softphone for human agents. Shows live call queue, lets agents dial out manually, manage active calls, add a 3rd party (conference), and view their personal stats for today.
+Browser-based SIP/WebRTC softphone for human agents. Agents can receive transferred calls, dial outbound numbers, and see their current call stats — all without leaving the browser.
 
-### Layout (full-page, dark navy)
+---
+
+### A1 — Page Layout
+
+Full-height dark navy page. Two columns on desktop, stacked on mobile.
+
+**Left column (40%)** — Softphone dialler:
+- Numeric keypad (0–9, *, #) — large tactile buttons, font-mono, white text on dark card
+- Phone number input at top — large monospace display, value updates on keypad press
+- Four action buttons below keypad:
+  - `CALL` — primary cyan, places outbound call
+  - `HANG UP` — red, ends active call
+  - `HOLD` — amber, toggles hold
+  - `MUTE` — slate, toggles mic mute
+- Status indicator below buttons: animated dot + label — `Idle` / `Ringing` / `Connected` / `On Hold`
+- Duration timer: shows `00:00` when idle, counts up when connected
+- Transfer button (appears only when connected): opens small modal with a phone input + `Transfer` button
+
+**Right column (60%)** — Agent stats panel:
+
+#### Today's Stats (header row of 3 cards):
+| Card | API field | Format |
+|------|-----------|--------|
+| Calls Today | `stats.callsToday` | integer |
+| Avg Duration | `stats.avgDuration` | seconds → `m:ss` |
+| Transfer Rate | `stats.dispositions.transferred / callsToday` | percentage |
+
+#### Disposition Breakdown (horizontal bar chart):
+Bars for each disposition key present in `stats.dispositions`:
+- `interested` → green
+- `not_interested` → red
+- `transferred` → cyan
+- `vm` → amber
+- `no_answer` → slate
+- `busy` → orange
+- `connected` → blue
+
+#### Agent Status Toggle:
+Pill selector: `Available` | `Busy` — clicking calls `POST /api/agents/status` (see A3).
+Current status shown as coloured dot next to agent name at top of panel.
+
+---
+
+### A2 — Data Fetching
+
+**Load agent list + stats on mount:**
+```
+GET /api/agents/stats
+→ Array<{
+    id: number,
+    name: string,
+    phone_number: string,
+    status: "available" | "busy",
+    current_call: any | null,
+    stats: {
+      callsToday: number,
+      avgDuration: number,   // seconds
+      dispositions: Record<string, number>
+    }
+  }>
+```
+Display the currently logged-in agent's row (match by name or show all if admin).
+Refresh every 30 seconds OR when WebSocket emits `"agent:stats:refresh"`.
+
+**WebRTC token for softphone:**
+```
+GET /api/calls/webrtc-token
+→ { token: string }
+```
+Use this token to initialise the Telnyx WebRTC client (see A4).
+
+**WebSocket (already connected globally):**
+Listen for `"agent:incoming_call"` → ring notification + auto-populate the caller's number in the dialler display.
+
+---
+
+### A3 — Status Toggle API
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  AGENT SOFTPHONE                        [Status: ● AVAILABLE ▼]          │
-├─────────────────────────┬────────────────────────────┬───────────────────┤
-│     MY STATS TODAY      │        DIAL PAD             │  ACTIVE CALL      │
-│  Calls:    12           │  ┌──────────────────────┐   │  (empty when idle)│
-│  Avg dur:  4m 12s       │  │  +1 (555) 000-0000   │   │                   │
-│  Answered: 8            │  └──────────────────────┘   │                   │
-│  VM:       3            │  [1][2][3]                   │                   │
-│  No ans:   1            │  [4][5][6]                   │                   │
-│                         │  [7][8][9]                   │                   │
-│                         │  [*][0][#]                   │                   │
-│                         │  [⌫]    [✆ CALL]            │                   │
-├─────────────────────────┴────────────────────────────┴───────────────────┤
-│  INCOMING / QUEUE                                                          │
-│  (list of inbound calls routed to this agent)                             │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
-### Agent Status Toggle
-- `GET /agents` — find own agent record by matching phone/name
-- `PATCH /agents/status` → `{ id: agentId, status: "available" | "busy" }`
-- Show as pill button: green `● AVAILABLE` / amber `● BUSY`
-- Changing status updates Redis presence instantly
-
-### My Stats Today panel
-- `GET /agents/stats` → array of agents with `.stats` object
-- Find own agent in array
-- Display: **Calls Today**, **Avg Duration** (seconds → `Xm Ys`), **Dispositions** (interested / vm / no_answer / busy as coloured badges)
-- Auto-refresh every 30s and on `agent:stats:refresh` WebSocket event
-
-### Dial Pad
-- Styled numeric grid (1–9, *, 0, #), backspace button
-- Phone number input field (E.164 format enforced on submit)
-- Large cyan **CALL** button
-- On submit: `POST /calls/initiate` OR `POST /calls/manual` → check which endpoint exists; use `/calls/initiate`
-  ```json
-  { "leadId": 0, "campaignId": 1, "overrideProvider": "telnyx" }
-  ```
-  Actually for ad-hoc dialing, use direct Telnyx route:
-  - `POST /calls/outbound` with `{ to: phoneNumber }` if it exists
-  - Fallback: show a toast "Use campaigns to dial leads"
-- Store returned `callControlId` for active call controls
-
-### Active Call Panel (shown only when a call is live)
-Displayed in the right column while `callControlId` is set:
-
-```
-┌────────────────────────────────────────────┐
-│  📞 ACTIVE CALL                            │
-│  +1 (555) 000-0000                         │
-│  ⏱  02:14                                  │
-│                                            │
-│  [🔇 MUTE]  [⏸ HOLD]  [🔴 HANG UP]        │
-│                                            │
-│  ── 3-WAY CONFERENCE ──                    │
-│  Phone to add: [___________________]       │
-│                     [➕ Add to Call]       │
-│                                            │
-│  TRANSCRIPT (live)                         │
-│  [scrolling transcript from WebSocket]     │
-└────────────────────────────────────────────┘
-```
-
-**Active call actions:**
-
-| Button | API call |
-|--------|----------|
-| Hang Up | `POST /calls/:callControlId/hangup` (if exists) or show message |
-| Mute | client-side indicator only (Telnyx controls mute via WebRTC in real deployments; show as toggle) |
-| Hold | client-side indicator only |
-| Add to Call (conference) | `POST /calls/:callControlId/conference` with `{ to: "+1XXXXXXXXXX" }` |
-
-**Conference response:**
-```json
-{
-  "conferenceName": "conf_XXXXXXXX_1712345678000",
-  "thirdPartyCallControlId": "...",
-  "message": "Conference initiated — third party is being dialed"
-}
-```
-Show a success toast with the conference name.
-
-**Call timer:** Start counting when `call:started` WebSocket event is received for this `callControlId`.
-
-**Live transcript:** Subscribe to `call:transcript` WebSocket events. Append each line:
-```
-[user]  Hi I'm calling about…
-[agent] Hello! How can I help…
-```
-User lines in `--text-muted`, agent lines in `--primary`.
-
-### Incoming Call Alerts
-- Subscribe to `agent:incoming_call` Socket.io event
-- Show a modal / banner:
-  ```
-  📞 Incoming Call
-  Caller: +1 (555) 000-0000
-  Campaign: Outbound Sales Q2
-  [ANSWER] [DECLINE]
-  ```
-- ANSWER: `POST /calls/:callId/answer` (if endpoint exists; otherwise just close the modal and wait for Telnyx)
-- DECLINE: `DELETE /calls/:callId` or just close modal
-
-### WebSocket Connection
-```ts
-import { io } from "socket.io-client";
-
-const socket = io("https://shivanshbackend.replit.app", {
-  auth: { token: localStorage.getItem("auth_token") },
-  transports: ["websocket"],
-});
-
-socket.on("call:started",        (data) => { /* set active call */ });
-socket.on("call:ended",          (data) => { /* clear active call */ });
-socket.on("call:transcript",     (data) => { /* append to transcript */ });
-socket.on("agent:stats:refresh", ()     => { /* refetch /agents/stats */ });
-socket.on("agent:incoming_call", (data) => { /* show incoming call banner */ });
+POST /api/agents/status
+Body: { id: number, status: "available" | "busy" }
+→ { id, name, phone_number, status }
 ```
 
 ---
 
-## Page 2: `/callbacks` — Scheduled Callbacks
+### A4 — WebRTC Dialler Integration
 
-### Purpose
-Manage leads that have been scheduled for a callback at a specific time. Agents can see upcoming callbacks, reschedule them, mark them as done, or trigger an immediate call.
+Use the Telnyx WebRTC Browser SDK (`@telnyx/webrtc`). The token from `GET /api/calls/webrtc-token` is the credential.
 
-### Layout
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  SCHEDULED CALLBACKS                                                       │
-│  [Filter: All Campaigns ▼]  [Filter: All Dates ▼]  [+ Schedule New]       │
-├───────────┬──────────────────┬───────────────────┬──────────┬────────────┤
-│  DUE AT   │  LEAD            │  CAMPAIGN         │  STATUS  │  ACTIONS   │
-├───────────┼──────────────────┼───────────────────┼──────────┼────────────┤
-│  Today    │  John Smith      │  Q2 Outbound      │ callback │ [Call][✏] │
-│  2:30 PM  │  +1555-000-1234  │                   │          │  [Done]    │
-│───────────┼──────────────────┼───────────────────┼──────────┼────────────│
-│  Tomorrow │  Jane Doe        │  Enterprise       │ callback │ [Call][✏] │
-│  10:00 AM │  +1555-000-5678  │                   │          │  [Done]    │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
-### API Calls
-
-**Load callbacks:**
-```
-GET /callbacks?campaignId=<id>
-```
-Response array:
-```ts
-{
-  id: number
-  name: string
-  phone: string          // also phone_number
-  email: string | null
-  campaignId: number     // also campaign_id
-  campaignName: string | null
-  status: string
-  notes: string | null
-  callbackAt: string | null   // also callback_at, ISO 8601
-  createdAt: string
-}
-```
-
-**Schedule a new callback** (modal):
-```
-POST /callbacks/schedule
-{ "leadId": 123, "callbackAt": "2025-04-15T14:30:00.000Z", "notes": "Call back re: pricing" }
-```
-→ `201` returns the updated lead.
-
-**Update a callback** (reschedule or mark done):
-```
-PATCH /callbacks/:id
-{ "status": "completed" }         // mark done
-{ "callbackAt": "ISO8601",
-  "notes": "New note" }           // reschedule
-```
-
-**"Schedule New" modal:**
-- Search for a lead by name/phone: `GET /leads?search=<query>&status=pending`
-- Select a lead from results
-- DateTime picker for `callbackAt`
-- Optional notes textarea
-- Submit → `POST /callbacks/schedule`
-
-**Table row actions:**
-- **[Call]** — navigates to `/softphone` with the phone number pre-filled (use URL params: `/softphone?phone=+15550001234`)
-- **[✏ Reschedule]** — opens modal pre-filled with current `callbackAt` and `notes`
-- **[Done]** — `PATCH /callbacks/:id { status: "completed" }` → removes from list
-
-**Auto-refresh:** Re-fetch `GET /callbacks` every 60s. Show overdue callbacks (callbackAt in the past) in amber/warning colour.
-
-**Empty state:** "No callbacks scheduled. Agents can schedule a callback from an active call or from the Leads page."
-
----
-
-## Design Tokens (copy verbatim)
-
-```css
---background:     hsl(222, 47%, 7%);
---surface:        hsl(222, 40%, 12%);
---surface-raised: hsl(222, 35%, 16%);
---border:         hsl(220, 30%, 20%);
---primary:        hsl(183, 100%, 50%);
---primary-dim:    hsl(183, 80%, 30%);
---text:           hsl(210, 40%, 96%);
---text-muted:     hsl(215, 20%, 60%);
---success:        hsl(142, 71%, 45%);
---warning:        hsl(38, 92%, 50%);
---danger:         hsl(0, 84%, 60%);
-font-family: "JetBrains Mono", "Fira Code", monospace;
-```
-
-All cards use `--surface` background with `1px solid var(--border)` border and `8px` border-radius.
-Buttons: cyan `--primary` with black text, `font-weight: 600`, `border-radius: 6px`.
-Dial pad keys: `--surface-raised` bg, `--primary` text, `48px` square, `border-radius: 8px`.
-
----
-
-## Sidebar additions
-
-Add these two items to the existing sidebar nav (after Leads, before Settings):
-
-```
-📞  Softphone     /softphone
-🔁  Callbacks     /callbacks
-```
-
-Show a yellow dot badge on Callbacks nav item when there are overdue callbacks.
-
----
-
-## Telnyx WebRTC Browser SDK (for outbound dialing from dialpad)
-
-Install: `npm install @telnyx/webrtc`
-
-```ts
+```typescript
 import { TelnyxRTC } from "@telnyx/webrtc";
 
-// 1. Fetch token from backend
-const { token } = await api.get("/calls/webrtc-token");
-
-// 2. Create client
 const client = new TelnyxRTC({ login_token: token });
+client.connect();
 
-// 3. Handle events
-client.on("telnyx.ready", () => console.log("WebRTC ready"));
-client.on("telnyx.error", (err) => console.error(err));
+client.on("telnyx.ready", () => setStatus("Idle"));
 client.on("telnyx.notification", (notification) => {
   if (notification.type === "callUpdate") {
     const call = notification.call;
-    // call.state: "new" | "trying" | "recovering" | "ringing" | "answering" | "early" | "active" | "held" | "hangup" | "destroy" | "purge"
-    if (call.state === "active") setActiveCall(call);
-    if (call.state === "destroy") setActiveCall(null);
+    if (call.state === "ringing") setStatus("Ringing");
+    if (call.state === "active")  setStatus("Connected");
+    if (call.state === "hangup")  setStatus("Idle");
   }
 });
 
-// 4. Connect
-client.connect();
+// Place call:
+const call = client.newCall({ destinationNumber: phoneInput, callerNumber: agentPhoneNumber });
 
-// 5. Make a call
-const call = client.newCall({
-  destinationNumber: "+12125550100",
-  callerIdNumber: agentPhoneNumber,  // agent's registered Telnyx number
-});
+// Hang up:
+activeCall?.hangup();
 
-// 6. Call controls
-call.mute();       // mute mic
-call.unmute();
-call.hold();       // put on hold
-call.unhold();
-call.hangup();     // end call
-call.answer();     // answer inbound
+// Hold:
+activeCall?.hold();   // or .unhold()
+
+// Transfer:
+activeCall?.transfer({ destinationNumber: transferTarget });
 ```
 
-The `call.id` (call_control_id) returned when the call becomes active is what you pass to
-`POST /calls/{callControlId}/conference { to: "+1..." }` to add a third party.
+If `@telnyx/webrtc` is not installed, add it: `npm install @telnyx/webrtc`.
 
 ---
 
-## Conference / 3-Way Call
+### A5 — Incoming Call Notification
 
-Once a call is active and you have `callControlId`:
-
-```
-POST /calls/{callControlId}/conference
-{ "to": "+12125550101" }
-```
-
-Response:
-```json
-{
-  "thirdPartyCallControlId": "...",
-  "originalCallControlId": "...",
-  "message": "Third party is being dialed — will be bridged when they answer"
-}
-```
-
-Show a toast: "Dialing +12125550101 — will connect when they answer."
+When WebSocket fires `"agent:incoming_call"`:
+1. Show a modal/toast at top of page: **"Incoming Transfer — [callerPhone]"**
+2. Auto-fill dialler display with the caller's phone number
+3. Play a short ring sound (use the browser Audio API — 440Hz oscillator for 2 seconds if no MP3)
+4. Show `ANSWER` button — clicking sets status to Connected and starts timer
+5. Auto-dismiss after 30s if not answered
 
 ---
 
-## Notes / constraints
+### A6 — Scheduled Callbacks Panel (bottom of right column)
 
-- Do NOT recreate Login, Dashboard, Campaigns, Leads, Call Logs, Voices, DNC, Users, or Settings pages.
-- Keep all API calls going to `https://shivanshbackend.replit.app`.
-- Auth token is always `localStorage.getItem("auth_token")`.
-- If any endpoint returns `401`, redirect to `/login`.
-- The softphone page is accessible to `agent` and `admin` roles.
-- The callbacks page is accessible to all authenticated roles.
-- Use `socket.io-client` for WebSocket — **not** native WebSocket.
-- Telnyx WebRTC requires HTTPS (already satisfied by the Replit deployment).
-- The `/calls/webrtc-token` endpoint creates a short-lived Telnyx telephony credential — call it fresh each session; do not cache across page reloads.
+Fetch all pending callbacks:
+```
+GET /api/callbacks
+→ Array<{
+    id, name, phone, phone_number, email,
+    campaignId, campaignName, status,
+    callbackAt, callback_at, notes
+  }>
+```
+
+Display as a table:
+| Lead Name | Phone | Campaign | Scheduled Time | Notes | Action |
+|-----------|-------|----------|----------------|-------|--------|
+| ...       | ...   | ...      | formatted datetime | ... | `Call` button |
+
+`Call` button → pre-fills the softphone dialler with that lead's number and auto-initiates the call.
+
+To reschedule a callback:
+```
+PATCH /api/callbacks/:id
+Body: { callbackAt: ISO8601, notes?: string }
+```
+
+To mark complete:
+```
+PATCH /api/callbacks/:id
+Body: { status: "completed" }
+```
+
+---
+
+## SECTION B — Campaign Form: Voicemail Drop + Calling Hours
+
+In the Create/Edit Campaign form, add two new sections:
+
+### B1 — Voicemail Drop
+
+Below the "Transfer Number" field:
+
+```
+Label: Voicemail Drop Message (optional)
+Textarea: placeholder "Leave a message when the call goes to voicemail..."
+Field name: vmDropMessage
+```
+
+If set, the AI will automatically speak this message and hang up when it detects a voicemail beep (AMD). Leave blank to hang up silently on voicemail.
+
+API: included in existing `POST /api/campaigns` / `PATCH /api/campaigns/:id` body as `vmDropMessage`.
+
+### B2 — TCPA Calling Hours
+
+Below the "Dialling Mode" section:
+
+```
+Label: Calling Hours (TCPA Compliance)
+Row: [Start Time HH:MM] [End Time HH:MM] [Timezone dropdown]
+Field names: workingHoursStart, workingHoursEnd, workingHoursTimezone
+Default: 08:00 — 21:00, UTC
+Note text: "Leads outside these hours in their local timezone are automatically skipped."
+```
+
+Timezone dropdown options (at minimum):
+- UTC, US/Eastern, US/Central, US/Mountain, US/Pacific, US/Alaska, US/Hawaii
+- Europe/London, Europe/Paris, Europe/Berlin, Australia/Sydney, Asia/Kolkata
+
+API: included in existing campaign create/update body.
+
+---
+
+## SECTION C — 3-Way Conference Button (Live Calls Table)
+
+In the Live Calls table (wherever active calls are shown), add a `Conference` icon button per row.
+
+Clicking it opens a small modal:
+```
+Title: "Add to Conference Call"
+Input: phone number (E.164 format)
+Button: "Dial In" (primary cyan)
+```
+
+On submit:
+```
+POST /api/calls/:callControlId/conference
+Body: { to: "+1XXXXXXXXXX" }
+→ { thirdPartyCallControlId, originalCallControlId, message }
+```
+
+Show a success toast: "Third party is being dialled — they'll be bridged when they answer."
+
+---
+
+## SECTION D — Sidebar Navigation Update
+
+Add `/softphone` to the sidebar nav:
+
+```
+Icon: Phone (Lucide PhoneCall)
+Label: Softphone
+Path: /softphone
+Visible to: agent role AND admin role
+```
+
+Place it directly below "Callbacks" in the nav order.
+
+---
+
+## SECTION E — Agent Stats in Agents Table
+
+The Agents management page (`/agents`) already lists agents. Enhance each row with live stats from `GET /api/agents/stats`:
+
+| Column | Source |
+|--------|--------|
+| Calls Today | `stats.callsToday` |
+| Avg Duration | `stats.avgDuration` formatted as `m:ss` |
+| Top Disposition | most frequent key in `stats.dispositions` |
+| Status | coloured pill — green=available, red=busy |
+
+Add a `Refresh` button at top right of table that re-fetches `GET /api/agents/stats`.
+
+---
+
+## Summary of API Endpoints Used
+
+| Method | URL | Purpose |
+|--------|-----|---------|
+| GET | `/api/agents/stats` | Per-agent stats (callsToday, avgDuration, dispositions) |
+| POST | `/api/agents/status` | Toggle agent available/busy |
+| GET | `/api/calls/webrtc-token` | Telnyx WebRTC credential token |
+| GET | `/api/callbacks` | List pending callbacks |
+| PATCH | `/api/callbacks/:id` | Update callback status/time |
+| POST | `/api/calls/:callControlId/conference` | 3-way conference dial |
+| GET | `/api/campaigns` | Campaign list (for callback campaign names) |
+| PATCH | `/api/campaigns/:id` | Update campaign (vmDropMessage, workingHours) |
+
+---
+
+## Style Rules (apply everywhere)
+
+- Background: `#0a0f1e` (dark navy)
+- Primary accent: `hsl(183,100%,50%)` — cyan
+- All text and numbers: `font-mono`
+- Cards: `bg-slate-900 border border-slate-800 rounded-xl`
+- Inputs: `bg-slate-800 border-slate-700 text-white font-mono`
+- Status dots: `w-2 h-2 rounded-full` — green `#22c55e` available, red `#ef4444` busy
+- Animations: subtle pulse on active call status indicator
+- No white backgrounds anywhere — dark navy only
+
+---
+
+End of softphone prompt.

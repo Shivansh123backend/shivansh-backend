@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { humanAgentsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { humanAgentsTable, callsTable } from "@workspace/db";
+import { eq, gte, and } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { getAgentStatus, setAgentStatus } from "../lib/redis.js";
 import { emitToSupervisors } from "../websocket/index.js";
@@ -97,6 +97,62 @@ router.post("/agents/status", authenticate, async (req, res): Promise<void> => {
     phone_number: updated.phoneNumber,
     status: updated.status,
   });
+});
+
+// GET /agents/stats — per-agent call stats for today (callsToday, avgDuration, dispositions)
+// MUST be registered BEFORE /agents/available to avoid Express treating "stats" as an :id param
+router.get("/agents/stats", authenticate, async (_req, res): Promise<void> => {
+  const agents = await db.select().from(humanAgentsTable);
+
+  // Start of today UTC
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+
+  const results = await Promise.all(
+    agents.map(async (agent) => {
+      const redisStatus = await getAgentStatus(agent.id);
+
+      // Calls today where this human agent was assigned
+      const todayCalls = await db
+        .select({
+          duration:    callsTable.duration,
+          disposition: callsTable.disposition,
+        })
+        .from(callsTable)
+        .where(
+          and(
+            eq(callsTable.humanAgentId, agent.id),
+            gte(callsTable.createdAt, startOfDay)
+          )
+        );
+
+      const callsToday = todayCalls.length;
+      const totalDuration = todayCalls.reduce((sum, c) => sum + (c.duration ?? 0), 0);
+      const avgDuration = callsToday > 0 ? Math.round(totalDuration / callsToday) : 0;
+
+      const dispositions: Record<string, number> = {};
+      for (const c of todayCalls) {
+        if (c.disposition) {
+          dispositions[c.disposition] = (dispositions[c.disposition] ?? 0) + 1;
+        }
+      }
+
+      return {
+        id:           agent.id,
+        name:         agent.name,
+        phone_number: agent.phoneNumber,
+        status:       redisStatus?.status ?? agent.status,
+        current_call: redisStatus?.current_call ?? null,
+        stats: {
+          callsToday,
+          avgDuration,
+          dispositions,
+        },
+      };
+    })
+  );
+
+  res.json(results);
 });
 
 // GET /agents/available — return the first available agent (used for call transfers)
