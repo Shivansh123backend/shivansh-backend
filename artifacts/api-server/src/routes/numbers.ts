@@ -53,13 +53,15 @@ router.patch("/numbers/:id", authenticate, requireRole("admin"), async (req, res
   }
 
   const updateSchema = z.object({
-    label: z.string().optional(),
-    campaignId: z.union([z.number(), z.null()]).optional(),
-    direction: z.enum(["inbound", "outbound", "both"]).optional(),
+    label:         z.string().optional(),
+    campaignId:    z.union([z.number(), z.null()]).optional(),
+    direction:     z.enum(["inbound", "outbound", "both"]).optional(),
     forwardNumber: z.union([z.string(), z.null()]).optional(),
-    status: z.enum(["active", "inactive"]).optional(),
-    isBlocked: z.boolean().optional(),
-    priority: z.number().optional(),
+    queueId:       z.union([z.number(), z.null()]).optional(),
+    humanAgentId:  z.union([z.number(), z.null()]).optional(),
+    status:        z.enum(["active", "inactive"]).optional(),
+    isBlocked:     z.boolean().optional(),
+    priority:      z.number().optional(),
   });
 
   const parsed = updateSchema.safeParse(req.body);
@@ -74,8 +76,10 @@ router.patch("/numbers/:id", authenticate, requireRole("admin"), async (req, res
   if (parsed.data.priority !== undefined)      updatePayload.priority = parsed.data.priority;
   if (parsed.data.direction !== undefined)     updatePayload.direction = parsed.data.direction;
   if (parsed.data.isBlocked !== undefined)     updatePayload.isBlocked = parsed.data.isBlocked;
-  if ("campaignId" in parsed.data)             updatePayload.campaignId = parsed.data.campaignId ?? null;
+  if ("campaignId" in parsed.data)             updatePayload.campaignId    = parsed.data.campaignId ?? null;
   if ("forwardNumber" in parsed.data)          updatePayload.forwardNumber = parsed.data.forwardNumber ?? null;
+  if ("queueId" in parsed.data)               updatePayload.queueId       = parsed.data.queueId ?? null;
+  if ("humanAgentId" in parsed.data)          updatePayload.humanAgentId  = parsed.data.humanAgentId ?? null;
 
   const [updated] = await db
     .update(phoneNumbersTable)

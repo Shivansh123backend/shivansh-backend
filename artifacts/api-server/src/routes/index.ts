@@ -19,6 +19,7 @@ import exportRouter from "./export.js";
 import callbacksRouter from "./callbacks.js";
 import audioRouter from "./audio.js";
 import dncRouter from "./dnc.js";
+import queuesRouter from "./queues.js";
 import { globalErrorHandler } from "../lib/errors.js";
 import type { Request, Response, NextFunction } from "express";
 
@@ -44,6 +45,7 @@ router.use(exportRouter);
 router.use(callbacksRouter);
 router.use(audioRouter);
 router.use(dncRouter);
+router.use(queuesRouter);
 
 router.use((err: Error, req: Request, res: Response, next: NextFunction) => globalErrorHandler(err, req, res, next));
 

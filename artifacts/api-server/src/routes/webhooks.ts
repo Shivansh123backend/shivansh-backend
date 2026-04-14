@@ -17,6 +17,9 @@ import {
   callLogsTable,
   leadsTable,
   voicesTable,
+  humanAgentsTable,
+  queuesTable,
+  queueMembersTable,
 } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
@@ -745,8 +748,67 @@ async function getCampaignByNumber(toNumber: string) {
 
   const holdMusicUrl = resolveHoldMusicUrl(campaign.holdMusic);
 
-  // Per-number forwardNumber takes priority over campaign.transferNumber
-  const effectiveTransferNumber = phoneRow.forwardNumber ?? campaign.transferNumber ?? null;
+  // ── Resolve effective transfer number (priority order) ──────────────────
+  // 1. Direct forwardNumber on the number (E.164 override)
+  // 2. Specific human agent assigned to the number
+  // 3. Queue assigned to the number (pick best available agent by strategy)
+  // 4. Campaign's transferNumber fallback
+  let effectiveTransferNumber: string | null = null;
+
+  if (phoneRow.forwardNumber) {
+    effectiveTransferNumber = phoneRow.forwardNumber;
+  } else if (phoneRow.humanAgentId) {
+    const [agent] = await db
+      .select({ phoneNumber: humanAgentsTable.phoneNumber })
+      .from(humanAgentsTable)
+      .where(eq(humanAgentsTable.id, phoneRow.humanAgentId));
+    effectiveTransferNumber = agent?.phoneNumber ?? null;
+    logger.info({ humanAgentId: phoneRow.humanAgentId, phone: effectiveTransferNumber }, "Inbound: routing to direct agent");
+  } else if (phoneRow.queueId) {
+    const [queue] = await db
+      .select()
+      .from(queuesTable)
+      .where(and(eq(queuesTable.id, phoneRow.queueId), eq(queuesTable.status, "active")));
+
+    if (queue) {
+      // Fetch queue members with their agent details, ordered by priority
+      const members = await db
+        .select({
+          humanAgentId: queueMembersTable.humanAgentId,
+          priority:     queueMembersTable.priority,
+          agentPhone:   humanAgentsTable.phoneNumber,
+          agentStatus:  humanAgentsTable.status,
+        })
+        .from(queueMembersTable)
+        .innerJoin(humanAgentsTable, eq(queueMembersTable.humanAgentId, humanAgentsTable.id))
+        .where(eq(queueMembersTable.queueId, phoneRow.queueId))
+        .orderBy(queueMembersTable.priority);
+
+      // Filter to available agents
+      const available = members.filter(m => m.agentStatus === "available");
+      const pool = available.length > 0 ? available : members; // fallback to all if none available
+
+      if (pool.length > 0) {
+        let chosen: typeof pool[0];
+        if (queue.strategy === "round-robin") {
+          // Simple round-robin: pick based on current minute as a rotation seed
+          chosen = pool[Math.floor(Date.now() / 30_000) % pool.length];
+        } else if (queue.strategy === "priority") {
+          chosen = pool[0]; // already sorted by priority
+        } else {
+          // least-busy: pick first available (future: track active calls per agent)
+          chosen = pool[0];
+        }
+        effectiveTransferNumber = chosen.agentPhone;
+        logger.info({ queueId: phoneRow.queueId, strategy: queue.strategy, chosen: chosen.agentPhone }, "Inbound: routing via queue");
+      }
+    }
+  }
+
+  // Fallback to campaign's transfer number
+  if (!effectiveTransferNumber) {
+    effectiveTransferNumber = campaign.transferNumber ?? null;
+  }
 
   return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId, holdMusicUrl, effectiveTransferNumber };
 }

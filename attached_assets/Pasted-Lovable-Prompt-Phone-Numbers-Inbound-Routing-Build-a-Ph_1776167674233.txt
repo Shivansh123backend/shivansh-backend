@@ -1,0 +1,52 @@
+Lovable Prompt — Phone Numbers / Inbound Routing
+
+Build a Phone Numbers page (/numbers) for the SHIVANSH dashboard.
+
+Backend: https://shivanshbackend.replit.app
+Auth: Authorization: Bearer <token> from localStorage.getItem("auth_token")
+
+Data:
+
+GET /numbers — list all numbers
+PATCH /numbers/:id — update any field
+POST /numbers/add — add a number
+DELETE /numbers/:id — remove a number
+GET /campaigns — for the campaign assignment dropdown
+Number object:
+
+{
+  id: number
+  phoneNumber: string        // E.164
+  label: string | null       // friendly name
+  provider: "telnyx" | "twilio" | "voip"
+  campaignId: number | null  // assigned campaign
+  direction: "inbound" | "outbound" | "both"
+  forwardNumber: string | null  // call-forward override for inbound calls
+  status: "active" | "inactive"
+  isBlocked: boolean
+  spamScore: number          // 0–100
+  usageCount: number
+  isBusy: boolean
+  lastUsedAt: string | null
+}
+
+Page layout:
+
+Table with one row per number. Columns:
+
+Number — E.164 + label below in muted text (editable inline)
+Direction — pill selector: INBOUND / OUTBOUND / BOTH — clicking cycles/changes via PATCH /numbers/:id { direction }
+Forward To — editable text field for forwardNumber (shown only when direction is inbound or both). Placeholder: +1 number to forward inbound calls. Save on blur via PATCH /numbers/:id { forwardNumber }
+Campaign — dropdown of all campaigns + "Unassigned" — saves via PATCH /numbers/:id { campaignId }
+Spam Score — colour-coded badge: green (0–29), amber (30–69), red (70+)
+Status — toggle chip active / inactive via PATCH
+Blocked — toggle switch; blocked numbers are shown with a red tint row
+Busy — read-only dot indicator (cyan = in use, grey = free)
+Actions — delete button (calls DELETE /numbers/:id, asks for confirmation)
+Add Number button opens a modal/drawer with fields: phone number, label, provider, direction, forwardNumber, campaignId.
+
+Key behaviour:
+
+When direction is set to inbound or both, show the Forward To field for that row — this is the number inbound calls will be transferred to (overrides the campaign's transfer number)
+When direction is outbound, hide Forward To and show a muted "outbound only" note
+Blocked rows: dim the row and show a red BLOCKED chip; the number won't receive calls or be used for dialling

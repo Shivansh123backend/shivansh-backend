@@ -14,7 +14,9 @@ export const phoneNumbersTable = pgTable("phone_numbers", {
   provider: phoneProviderEnum("provider").notNull(),
   campaignId: integer("campaign_id"),
   direction: phoneDirectionEnum("direction").notNull().default("both"),
-  forwardNumber: text("forward_number"),        // per-number call-forward override
+  forwardNumber: text("forward_number"),        // direct E.164 forward (highest priority)
+  queueId: integer("queue_id"),                 // route inbound to a queue of human agents
+  humanAgentId: integer("human_agent_id"),      // route inbound directly to one human agent
   status: phoneStatusEnum("status").notNull().default("active"),
   priority: integer("priority").notNull().default(1),
   // Spam / usage tracking

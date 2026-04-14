@@ -9,3 +9,4 @@ export * from "./call_logs";
 export * from "./human_agents";
 export * from "./sms_logs";
 export * from "./dnc_list";
+export * from "./queues";
