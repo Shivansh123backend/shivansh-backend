@@ -96,7 +96,13 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
 }
 
 // ── CSV / XLSX bulk upload modal ───────────────────────────────────────────────
-type UploadResult = { total_uploaded: number; total_skipped: number };
+type UploadResult = {
+  total_uploaded: number;
+  total_skipped: number;
+  invalid_numbers: number;
+  duplicates: number;
+  dnc_skipped: number;
+};
 
 function UploadModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
   const [campaignId, setCampaignId] = useState("");
@@ -220,15 +226,19 @@ function UploadModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
 
           {/* Result banner */}
           {result && (
-            <div className={`flex items-start gap-2.5 rounded p-3 border text-xs font-mono
+            <div className={`rounded p-3 border text-xs font-mono space-y-1.5
               ${result.total_uploaded > 0 ? "bg-green-500/10 border-green-500/30 text-green-400" : "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"}`}>
-              {result.total_uploaded > 0 ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
-              <div>
-                <p className="font-semibold">{result.total_uploaded} lead{result.total_uploaded !== 1 ? "s" : ""} imported</p>
-                {result.total_skipped > 0 && (
-                  <p className="text-[10px] opacity-80 mt-0.5">{result.total_skipped} row{result.total_skipped !== 1 ? "s" : ""} skipped (invalid phone or duplicate)</p>
-                )}
+              <div className="flex items-center gap-2">
+                {result.total_uploaded > 0 ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+                <p className="font-semibold">{result.total_uploaded} lead{result.total_uploaded !== 1 ? "s" : ""} imported successfully</p>
               </div>
+              {(result.total_skipped > 0) && (
+                <div className="pl-6 space-y-0.5 text-[10px] opacity-80">
+                  {result.invalid_numbers > 0 && <p>· {result.invalid_numbers} invalid / non-E.164 phone number{result.invalid_numbers !== 1 ? "s" : ""}</p>}
+                  {result.duplicates > 0 && <p>· {result.duplicates} duplicate{result.duplicates !== 1 ? "s" : ""} already in campaign</p>}
+                  {result.dnc_skipped > 0 && <p>· {result.dnc_skipped} on Do Not Call list — skipped</p>}
+                </div>
+              )}
             </div>
           )}
 
@@ -340,15 +350,19 @@ function PasteModal({ onClose, campaigns }: { onClose: () => void; campaigns: { 
           </div>
 
           {result && (
-            <div className={`flex items-start gap-2.5 rounded p-3 border text-xs font-mono
+            <div className={`rounded p-3 border text-xs font-mono space-y-1.5
               ${result.total_uploaded > 0 ? "bg-green-500/10 border-green-500/30 text-green-400" : "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"}`}>
-              {result.total_uploaded > 0 ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
-              <div>
-                <p className="font-semibold">{result.total_uploaded} lead{result.total_uploaded !== 1 ? "s" : ""} imported</p>
-                {result.total_skipped > 0 && (
-                  <p className="text-[10px] opacity-80 mt-0.5">{result.total_skipped} skipped (invalid or duplicate)</p>
-                )}
+              <div className="flex items-center gap-2">
+                {result.total_uploaded > 0 ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+                <p className="font-semibold">{result.total_uploaded} lead{result.total_uploaded !== 1 ? "s" : ""} imported successfully</p>
               </div>
+              {(result.total_skipped > 0) && (
+                <div className="pl-6 space-y-0.5 text-[10px] opacity-80">
+                  {result.invalid_numbers > 0 && <p>· {result.invalid_numbers} invalid / non-E.164 phone number{result.invalid_numbers !== 1 ? "s" : ""}</p>}
+                  {result.duplicates > 0 && <p>· {result.duplicates} duplicate{result.duplicates !== 1 ? "s" : ""} already in campaign</p>}
+                  {result.dnc_skipped > 0 && <p>· {result.dnc_skipped} on Do Not Call list — skipped</p>}
+                </div>
+              )}
             </div>
           )}
 
