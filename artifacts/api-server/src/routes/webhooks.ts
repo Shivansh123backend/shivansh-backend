@@ -211,6 +211,9 @@ OBJECTION HANDLING — handle these specifically, do not hang up on first pushba
 - "Who are you / where are you calling from?" → Answer directly: "${agentName} from ${campaignName}" and give a one-line reason for calling.
 - ${transferLine}
 
+SCRIPT PROGRESS — mandatory on every turn:
+Before you speak, silently scan the conversation history above. Identify every topic already discussed and every question already answered. You MUST NOT re-ask anything already covered. You MUST advance to the next uncovered step in the script. Circling back or repeating a question you already asked is your single biggest failure mode — avoid it completely.
+
 FINISHING:
 ${completionLine}`;
 }
@@ -488,7 +491,7 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
   callTurnCount.set(callControlId, turnCount);
   logger.debug({ callControlId, turnCount }, "Turn count updated");
 
-  // After MAX_TURNS force the AI to wrap up — prevents infinite looping
+  // After MAX_TURNS force the AI to wrap up — inject override BEFORE building messagesForLLM
   if (turnCount >= MAX_TURNS_BEFORE_CLOSE && bridge.transferNumber && !bridge.pendingTransfer) {
     history.push({
       role: "system",
@@ -497,14 +500,24 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
     logger.info({ callControlId, turnCount }, "MAX_TURNS reached — injecting forced transfer instruction");
   }
 
-  // GPT completion — tight token budget to enforce 1 sentence max
+  // Always pin the system message at index 0 so it never falls off the slice window.
+  // Without this, after ~7 turns history.slice(-14) drops the system prompt and the
+  // AI loses all its instructions — causing repetition and off-script behaviour.
+  const systemMsg   = history[0]!;
+  const turns       = history.slice(1);                // everything after system message
+  const recentTurns = turns.slice(-13);                // keep last 13 user/assistant turns
+  const messagesForLLM = [systemMsg, ...recentTurns];  // system always first
+
+  // GPT completion — system message is always pinned, repetition penalties applied
   let aiText: string;
   try {
     const completion = await openai.chat.completions.create({
       model: AI_MODEL,
-      max_tokens: 130,
+      max_tokens: 160,
       temperature: 0.75,
-      messages: history.slice(-14) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
+      frequency_penalty: 0.7,   // strongly discourages repeating the same phrases
+      presence_penalty: 0.5,    // discourages re-introducing topics already discussed
+      messages: messagesForLLM as Parameters<typeof openai.chat.completions.create>[0]["messages"],
     });
     aiText = stripMarkdownForTTS((completion.choices[0]?.message?.content ?? "").trim());
     logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "OpenAI response received");
