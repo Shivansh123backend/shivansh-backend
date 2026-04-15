@@ -1112,6 +1112,61 @@ router.get("/campaigns/:id", authenticate, async (req, res): Promise<void> => {
   res.json(campaign);
 });
 
+// ── POST /campaigns/:id/numbers — assign phone numbers to a campaign ──────────
+// Replaces all current number assignments for this campaign.
+// Numbers from other campaigns cannot be reassigned here (they remain bound).
+// Maximum 5 numbers per campaign.
+router.post("/campaigns/:id/numbers", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
+
+  const campaign = await getCampaignOrFail(id, res);
+  if (!campaign) return;
+
+  const { numberIds } = req.body as { numberIds?: unknown };
+  if (!Array.isArray(numberIds) || numberIds.some(n => typeof n !== "number")) {
+    res.status(400).json({ error: "numberIds must be an array of number IDs" });
+    return;
+  }
+  if (numberIds.length > 5) {
+    res.status(400).json({ error: "Maximum 5 numbers may be assigned per campaign" });
+    return;
+  }
+
+  // Clear numbers that were previously assigned to THIS campaign (free them up)
+  await db
+    .update(phoneNumbersTable)
+    .set({ campaignId: null })
+    .where(eq(phoneNumbersTable.campaignId, id));
+
+  if (numberIds.length > 0) {
+    // Assign the newly selected numbers (only if they are currently unassigned or already ours)
+    await db
+      .update(phoneNumbersTable)
+      .set({ campaignId: id })
+      .where(
+        and(
+          inArray(phoneNumbersTable.id, numberIds as number[]),
+          sql`(${phoneNumbersTable.campaignId} IS NULL OR ${phoneNumbersTable.campaignId} = ${id})`
+        )
+      );
+
+    // Sync fromNumber on the campaign to the phone string of the first selected number
+    const [firstNum] = await db
+      .select({ phoneNumber: phoneNumbersTable.phoneNumber })
+      .from(phoneNumbersTable)
+      .where(eq(phoneNumbersTable.id, (numberIds as number[])[0]));
+    if (firstNum) {
+      await db
+        .update(campaignsTable)
+        .set({ fromNumber: firstNum.phoneNumber })
+        .where(eq(campaignsTable.id, id));
+    }
+  }
+
+  res.json({ ok: true, campaignId: id, assigned: numberIds.length });
+});
+
 // ── DELETE /campaigns/:id — delete a campaign and all its leads ───────────────
 router.delete("/campaigns/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
@@ -1124,6 +1179,12 @@ router.delete("/campaigns/:id", authenticate, requireRole("admin"), async (req, 
     res.status(400).json({ error: "Stop the campaign before deleting it" });
     return;
   }
+
+  // Release any phone numbers assigned to this campaign before deleting
+  await db
+    .update(phoneNumbersTable)
+    .set({ campaignId: null })
+    .where(eq(phoneNumbersTable.campaignId, id));
 
   // Delete child records first to respect foreign key constraints
   await db.delete(leadsTable).where(eq(leadsTable.campaignId, id));

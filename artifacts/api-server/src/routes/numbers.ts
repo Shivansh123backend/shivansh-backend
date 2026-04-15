@@ -40,7 +40,30 @@ router.post("/numbers/add", authenticate, requireRole("admin"), async (req, res)
 });
 
 router.get("/numbers", authenticate, async (req, res): Promise<void> => {
-  const numbers = await db.select().from(phoneNumbersTable);
+  const numbers = await db
+    .select({
+      id: phoneNumbersTable.id,
+      phoneNumber: phoneNumbersTable.phoneNumber,
+      label: phoneNumbersTable.label,
+      provider: phoneNumbersTable.provider,
+      campaignId: phoneNumbersTable.campaignId,
+      campaignName: campaignsTable.name,
+      direction: phoneNumbersTable.direction,
+      forwardNumber: phoneNumbersTable.forwardNumber,
+      queueId: phoneNumbersTable.queueId,
+      humanAgentId: phoneNumbersTable.humanAgentId,
+      status: phoneNumbersTable.status,
+      priority: phoneNumbersTable.priority,
+      usageCount: phoneNumbersTable.usageCount,
+      spamScore: phoneNumbersTable.spamScore,
+      lastUsedAt: phoneNumbersTable.lastUsedAt,
+      isBusy: phoneNumbersTable.isBusy,
+      isBlocked: phoneNumbersTable.isBlocked,
+      createdAt: phoneNumbersTable.createdAt,
+      updatedAt: phoneNumbersTable.updatedAt,
+    })
+    .from(phoneNumbersTable)
+    .leftJoin(campaignsTable, eq(phoneNumbersTable.campaignId, campaignsTable.id));
   res.json(numbers);
 });
 
