@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Activity, Phone, Bot, Megaphone, Zap, Wifi, WifiOff,
   CheckCircle2, XCircle, PhoneIncoming, PhoneMissed, ArrowRightLeft,
-  Clock, Users, TrendingUp, MessageSquare, Volume2, VolumeX,
+  Clock, Users, TrendingUp, MessageSquare, Volume2, VolumeX, Headphones,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -158,6 +158,79 @@ async function playTypingSound() {
   playKeyClick(ctx, 0.06);
 }
 
+// ── Live listen — µ-law decode + Web Audio streaming ─────────────────────────
+// Each call being listened to gets its own AudioContext with a running clock so
+// we can schedule buffers without gaps.
+
+interface CallAudioPlayer {
+  ctx: AudioContext;
+  nextTime: number;     // scheduled end of last queued buffer (ctx.currentTime scale)
+  gainCaller: GainNode; // volume for caller side
+  gainAgent: GainNode;  // volume for agent side
+}
+
+const _callPlayers = new Map<string, CallAudioPlayer>();
+
+/** G.711 µ-law → normalised float32 samples (8 kHz mono) */
+function decodeMulaw(b64: string): Float32Array {
+  const raw = atob(b64);
+  const samples = new Float32Array(raw.length);
+  for (let i = 0; i < raw.length; i++) {
+    const u = ~raw.charCodeAt(i) & 0xff;
+    const sign  = u & 0x80;
+    const exp   = (u >> 4) & 0x07;
+    const mant  = u & 0x0f;
+    let   val   = ((mant << 3) + 132) << exp;
+    if (!sign) val = -val;
+    samples[i] = Math.max(-1, Math.min(1, val / 32768));
+  }
+  return samples;
+}
+
+function getOrCreatePlayer(callControlId: string): CallAudioPlayer | null {
+  if (_callPlayers.has(callControlId)) return _callPlayers.get(callControlId)!;
+  try {
+    const ctx = new AudioContext({ sampleRate: 8000 });
+    const gainCaller = ctx.createGain(); gainCaller.gain.value = 1.0;
+    const gainAgent  = ctx.createGain(); gainAgent.gain.value  = 0.9;
+    gainCaller.connect(ctx.destination);
+    gainAgent.connect(ctx.destination);
+    const player: CallAudioPlayer = { ctx, nextTime: 0, gainCaller, gainAgent };
+    _callPlayers.set(callControlId, player);
+    return player;
+  } catch { return null; }
+}
+
+function destroyPlayer(callControlId: string): void {
+  const p = _callPlayers.get(callControlId);
+  if (!p) return;
+  try { p.ctx.close(); } catch { /* ignore */ }
+  _callPlayers.delete(callControlId);
+}
+
+function enqueueAudioChunk(callControlId: string, b64: string, side: "caller" | "agent"): void {
+  const player = getOrCreatePlayer(callControlId);
+  if (!player) return;
+  const { ctx } = player;
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+
+  const samples = decodeMulaw(b64);
+  if (samples.length === 0) return;
+
+  const buf = ctx.createBuffer(1, samples.length, 8000);
+  buf.copyToChannel(samples, 0);
+
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(side === "caller" ? player.gainCaller : player.gainAgent);
+
+  const now = ctx.currentTime;
+  // Prime a small buffer gap at start to avoid stutter; drain slowly thereafter
+  if (player.nextTime < now + 0.02) player.nextTime = now + 0.08;
+  src.start(player.nextTime);
+  player.nextTime += buf.duration;
+}
+
 const EVENT_ICONS: Record<string, React.ElementType> = {
   "call:queued": Clock,
   "call:started": Phone,
@@ -210,10 +283,14 @@ function LiveCallCard({
   call,
   campaignMap,
   transcriptLines,
+  isListening,
+  onToggleListen,
 }: {
   call: LiveCall;
   campaignMap: Record<number, string>;
   transcriptLines: TranscriptLine[];
+  isListening: boolean;
+  onToggleListen: () => void;
 }) {
   useLiveClock();
   const elapsed = formatElapsed(call._localStart);
@@ -226,8 +303,12 @@ function LiveCallCard({
   }, [transcriptLines.length]);
 
   return (
-    <div className="border border-green-500/20 rounded bg-[hsl(224,71%,3%)] p-4 space-y-3 relative overflow-hidden hover:border-green-500/40 transition-colors">
-      <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-green-400/0 via-green-400/70 to-green-400/0 animate-pulse" />
+    <div className={`border rounded bg-[hsl(224,71%,3%)] p-4 space-y-3 relative overflow-hidden transition-colors ${
+      isListening
+        ? "border-cyan-500/60 shadow-[0_0_12px_rgba(6,182,212,0.15)]"
+        : "border-green-500/20 hover:border-green-500/40"
+    }`}>
+      <div className={`absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-transparent via-green-400/70 to-transparent animate-pulse ${isListening ? "via-cyan-400/80" : "via-green-400/70"}`} />
 
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
@@ -239,13 +320,43 @@ function LiveCallCard({
             <p className="text-[10px] font-mono text-muted-foreground">Call #{call.id}</p>
           </div>
         </div>
-        <div className="text-right">
-          <Badge variant="outline" className="text-[9px] font-mono border-green-500/30 text-green-400 bg-green-500/5 uppercase mb-1">
-            Live
-          </Badge>
-          <p className="text-[11px] font-mono font-bold text-green-400 tabular-nums">{elapsed}</p>
+        <div className="flex items-center gap-2">
+          {/* Live listen button */}
+          {call.callControlId && (
+            <button
+              onClick={onToggleListen}
+              title={isListening ? "Stop listening" : "Listen to this call live"}
+              className={`flex items-center gap-1 text-[9px] font-mono px-2 py-1 rounded border transition-all ${
+                isListening
+                  ? "border-cyan-400/60 text-cyan-400 bg-cyan-400/10 hover:bg-cyan-400/20 shadow-[0_0_6px_rgba(6,182,212,0.3)]"
+                  : "border-border/50 text-muted-foreground hover:text-cyan-400 hover:border-cyan-400/40"
+              }`}
+            >
+              <Headphones className="w-2.5 h-2.5" />
+              {isListening ? "Listening" : "Listen"}
+            </button>
+          )}
+          <div className="text-right">
+            <Badge variant="outline" className="text-[9px] font-mono border-green-500/30 text-green-400 bg-green-500/5 uppercase mb-1">
+              Live
+            </Badge>
+            <p className="text-[11px] font-mono font-bold text-green-400 tabular-nums">{elapsed}</p>
+          </div>
         </div>
       </div>
+
+      {/* Listening indicator bar */}
+      {isListening && (
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-cyan-500/8 border border-cyan-500/20">
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+          <span className="text-[9px] font-mono text-cyan-400 uppercase tracking-wider">Live audio streaming</span>
+          <div className="flex items-end gap-px ml-auto h-3">
+            {[1,2,3,4,3,2].map((h, i) => (
+              <div key={i} className="w-0.5 bg-cyan-400/60 rounded-sm animate-pulse" style={{ height: `${h * 2}px`, animationDelay: `${i * 100}ms` }} />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
         <div className="flex items-center gap-1.5 text-muted-foreground">
@@ -278,19 +389,19 @@ function LiveCallCard({
         <div
           ref={transcriptRef}
           className="overflow-y-auto px-2 py-1.5 space-y-1"
-          style={{ maxHeight: 110 }}
+          style={{ maxHeight: 130 }}
         >
           {transcriptLines.length === 0 ? (
             <p className="text-[9px] font-mono text-muted-foreground/40 italic text-center py-2">
               Waiting for speech…
             </p>
           ) : (
-            transcriptLines.slice(-6).map((line, i) => (
+            transcriptLines.slice(-8).map((line, i) => (
               <div key={i} className="flex gap-1.5 items-start">
-                <span className={`text-[8px] font-mono font-bold flex-shrink-0 pt-0.5 ${
+                <span className={`text-[8px] font-mono font-bold flex-shrink-0 pt-0.5 w-5 ${
                   line.speaker === "agent" ? "text-primary" : "text-cyan-400"
                 }`}>
-                  {line.speaker === "agent" ? "AI" : "C"}
+                  {line.speaker === "agent" ? "AI" : "You"}
                 </span>
                 <p className="text-[9px] font-mono text-foreground/80 leading-relaxed break-words min-w-0">
                   {line.text}
@@ -399,11 +510,14 @@ export default function LiveMonitorPage() {
   const [totalToday, setTotalToday] = useState<number>(0);
   const [completedToday, setCompletedToday] = useState<number>(0);
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const [listeningCallControlId, setListeningCallControlId] = useState<string | null>(null);
   const soundEnabledRef = useRef(false); // live ref for socket handlers (avoids stale closure)
+  const listeningRef = useRef<string | null>(null); // live ref for audio handler
   const socketRef = useRef<Socket | null>(null);
 
-  // Keep ref in sync with state
+  // Keep refs in sync with state
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
+  useEffect(() => { listeningRef.current = listeningCallControlId; }, [listeningCallControlId]);
 
   // Start/stop ambient sound when toggled
   useEffect(() => {
@@ -492,12 +606,22 @@ export default function LiveMonitorPage() {
     socket.on("call:ended", (data: { id?: number; callId?: number; callControlId?: string; disposition?: string; duration?: number }) => {
       const id = data.id ?? data.callId ?? 0;
       setActiveCalls(prev => { const m = new Map(prev); m.delete(id); return m; });
-      // Clear transcripts for this call
+      // Clear transcripts + stop listening + destroy audio player for this call
       if (data.callControlId) {
         setLiveTranscripts(prev => { const m = new Map(prev); m.delete(data.callControlId!); return m; });
+        if (listeningRef.current === data.callControlId) {
+          setListeningCallControlId(null);
+        }
+        destroyPlayer(data.callControlId);
       }
       setCompletedToday(n => n + 1);
       addEvent(makeEvent("call:ended", `Call #${id} ended`, data.disposition ? `· ${data.disposition.replace(/_/g, " ")}` : data.duration ? `· ${data.duration}s` : undefined));
+    });
+
+    // ── Live audio streaming ──────────────────────────────────────────────
+    socket.on("call:audio", (data: { callControlId: string; payload: string; side: "caller" | "agent" }) => {
+      if (listeningRef.current !== data.callControlId) return; // not listening to this call
+      enqueueAudioChunk(data.callControlId, data.payload, data.side);
     });
 
     socket.on("call:transcription", (data: { callId?: number; callControlId?: string; speaker?: "caller" | "agent"; text?: string; ts?: number }) => {
@@ -553,6 +677,27 @@ export default function LiveMonitorPage() {
 
   const activeCallsArr = Array.from(activeCalls.values());
   const successRate = totalToday > 0 ? Math.round((completedToday / totalToday) * 100) : 0;
+
+  const toggleListen = useCallback((callControlId: string) => {
+    const socket = socketRef.current;
+    if (!socket) return;
+
+    if (listeningCallControlId === callControlId) {
+      // Stop listening to this call
+      socket.emit("listen:leave", callControlId);
+      destroyPlayer(callControlId);
+      setListeningCallControlId(null);
+    } else {
+      // Stop previous listen if any
+      if (listeningCallControlId) {
+        socket.emit("listen:leave", listeningCallControlId);
+        destroyPlayer(listeningCallControlId);
+      }
+      // Start listening — AudioContext must be created from a user gesture
+      socket.emit("listen:join", callControlId);
+      setListeningCallControlId(callControlId);
+    }
+  }, [listeningCallControlId]);
 
   return (
     <Layout>
@@ -642,6 +787,8 @@ export default function LiveMonitorPage() {
                   call={c}
                   campaignMap={campaignMap}
                   transcriptLines={c.callControlId ? (liveTranscripts.get(c.callControlId) ?? []) : []}
+                  isListening={!!c.callControlId && listeningCallControlId === c.callControlId}
+                  onToggleListen={() => c.callControlId && toggleListen(c.callControlId)}
                 />
               ))}
             </div>

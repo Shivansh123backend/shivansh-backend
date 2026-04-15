@@ -14,6 +14,8 @@
 import WebSocket from "ws";
 import OpenAI from "openai";
 import { logger } from "../lib/logger.js";
+import { emitToSupervisors, getIO } from "../websocket/index.js";
+import { getCallListeners } from "../websocket/callListeners.js";
 
 const DEEPGRAM_API_KEY  = process.env.DEEPGRAM_API_KEY ?? "";
 const CARTESIA_API_KEY  = process.env.CARTESIA_API_KEY ?? "";
@@ -97,13 +99,24 @@ function stripMarkdown(text: string): string {
 
 // ── Audio helpers ─────────────────────────────────────────────────────────────
 
-/** Send base64-encoded µ-law audio back to Telnyx media fork */
+/** Send base64-encoded µ-law audio back to Telnyx media fork.
+ *  Also pipes the same bytes to any supervisors listening live. */
 function injectAudio(state: BridgeState, ulawB64: string): void {
   if (state.isClosed || state.telnyxWs.readyState !== WebSocket.OPEN) return;
   state.telnyxWs.send(JSON.stringify({
     event: "media",
     media: { payload: ulawB64 },
   }));
+
+  // Stream AI (agent) audio to live listeners
+  const listeners = getCallListeners(state.callControlId);
+  if (listeners.length > 0) {
+    try {
+      const ioInst = getIO();
+      const payload = { callControlId: state.callControlId, payload: ulawB64, side: "agent" };
+      for (const sid of listeners) ioInst.to(sid).emit("call:audio", payload);
+    } catch { /* not initialized yet */ }
+  }
 }
 
 // ── Cartesia TTS ─────────────────────────────────────────────────────────────
@@ -258,6 +271,14 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
 
     if (fullResponse.trim()) {
       state.messages.push({ role: "assistant", content: fullResponse.trim() });
+
+      // Emit agent transcript to live monitor
+      emitToSupervisors("call:transcription", {
+        callControlId: state.callControlId,
+        speaker: "agent",
+        text: fullResponse.trim(),
+        ts: Date.now(),
+      });
     }
 
     // ── Transfer detection ────────────────────────────────────────────────────
@@ -379,6 +400,14 @@ function connectDeepgram(state: BridgeState): void {
 
         state.transcriptCallback?.(transcript);
 
+        // Emit caller transcript to live monitor
+        emitToSupervisors("call:transcription", {
+          callControlId: state.callControlId,
+          speaker: "caller",
+          text: transcript,
+          ts: Date.now(),
+        });
+
         // Belt-and-suspenders: if AI is still speaking (e.g. very fast speech_final), stop it
         if (state.isAiSpeaking) triggerBargeIn(state);
 
@@ -440,12 +469,22 @@ export function connectCustomBridge(
   logger.info({ callControlId }, "Custom bridge started (Deepgram + GPT-4o + Cartesia)");
 }
 
-/** Forward Telnyx µ-law audio to Deepgram */
+/** Forward Telnyx µ-law audio to Deepgram. Also pipes to live listeners. */
 export function sendAudioToCustomBridge(callControlId: string, ulawB64: string): void {
   const state = bridges.get(callControlId);
   if (!state || state.isClosed || !state.deepgramWs) return;
   if (state.deepgramWs.readyState !== WebSocket.OPEN) return;
   state.deepgramWs.send(Buffer.from(ulawB64, "base64"));
+
+  // Stream caller audio to live listeners (supervisor listen-in)
+  const listeners = getCallListeners(callControlId);
+  if (listeners.length > 0) {
+    try {
+      const ioInst = getIO();
+      const payload = { callControlId, payload: ulawB64, side: "caller" };
+      for (const sid of listeners) ioInst.to(sid).emit("call:audio", payload);
+    } catch { /* not initialized yet */ }
+  }
 }
 
 export function closeCustomBridge(callControlId: string): void {

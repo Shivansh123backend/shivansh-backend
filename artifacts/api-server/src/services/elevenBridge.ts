@@ -16,6 +16,7 @@
 import WebSocket from "ws";
 import { type IncomingMessage } from "http";
 import { logger } from "../lib/logger.js";
+import { emitToSupervisors } from "../websocket/index.js";
 import {
   isCustomBridgeAvailable,
   connectCustomBridge,
@@ -492,6 +493,13 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
           telnyxWs: ws,
           transcriptCallback: (text) => {
             bridge.transcript.push(`Caller: ${text}`);
+            // Emit to live monitor — custom bridge caller transcript
+            emitToSupervisors("call:transcription", {
+              callControlId,
+              speaker: "caller",
+              text,
+              ts: Date.now(),
+            });
           },
           onTransferRequested: bridge.transferNumber
             ? () => {

@@ -2,6 +2,7 @@ import { type Server as HttpServer } from "http";
 import { Server as SocketIOServer, type Socket } from "socket.io";
 import { verifyToken } from "../lib/jwt.js";
 import { logger } from "../lib/logger.js";
+import { addCallListener, removeCallListener, removeSocketFromAll } from "./callListeners.js";
 
 let io: SocketIOServer | null = null;
 
@@ -35,6 +36,8 @@ export function initWebSocket(httpServer: HttpServer): SocketIOServer {
 
     socket.on("disconnect", () => {
       logger.info({ userId: user?.userId }, "WebSocket client disconnected");
+      // Clean up any live-listen subscriptions this socket had
+      removeSocketFromAll(socket.id);
     });
 
     // Supervisors and admins join supervisor room for live monitoring
@@ -45,6 +48,22 @@ export function initWebSocket(httpServer: HttpServer): SocketIOServer {
     // Agents join their own room for incoming call events
     if (user?.role === "agent") {
       socket.join(`agent:${user.userId}`);
+    }
+
+    // ── Live listen: subscribe / unsubscribe to a call's audio stream ──────
+    // Only supervisors/admins can listen in
+    if (user?.role === "admin" || user?.role === "supervisor") {
+      socket.on("listen:join", (callControlId: string) => {
+        if (typeof callControlId !== "string" || !callControlId) return;
+        addCallListener(callControlId, socket.id);
+        logger.info({ userId: user?.userId, callControlId }, "Supervisor joined live listen");
+      });
+
+      socket.on("listen:leave", (callControlId: string) => {
+        if (typeof callControlId !== "string" || !callControlId) return;
+        removeCallListener(callControlId, socket.id);
+        logger.info({ userId: user?.userId, callControlId }, "Supervisor left live listen");
+      });
     }
   });
 
