@@ -630,12 +630,29 @@ async function executeTransfer(
   const musicUrl = holdMusicUrl ?? DEFAULT_HOLD_MUSIC_URL;
   logger.info({ callControlId, to: toNumber, from: fromNumber, holdMusicUrl: musicUrl }, "Executing Telnyx transfer");
 
+  // Step 1 — Play hold music directly to the caller's leg (callControlId) BEFORE
+  // issuing the transfer.  Telnyx's transfer `audio_url` field plays to the NEW
+  // outbound leg (the human agent being rung), NOT to the waiting caller, so we
+  // must use playback_start on the original leg explicitly.
+  try {
+    await telnyxAction(callControlId, "playback_start", {
+      audio_url: musicUrl,
+      loop: true,
+      target_legs: "self",
+    });
+    logger.info({ callControlId, musicUrl }, "Hold music started on caller leg");
+  } catch (err) {
+    // Non-fatal — caller may still hear silence during transfer, but don't abort
+    logger.warn({ callControlId, err: String(err) }, "playback_start for hold music failed — proceeding with transfer anyway");
+  }
+
+  // Step 2 — Issue the transfer. No audio_url here so the human agent hears
+  // normal ringing, not hold music.
   await axios.post(
     `${TELNYX_API_BASE}/calls/${callControlId}/actions/transfer`,
     {
       to: toNumber,
       from: fromNumber,
-      audio_url: musicUrl,       // hold music plays to caller while ringing human
       timeout_secs: 30,          // ring for max 30s before giving up
       webhook_url: `${BACKEND_WEBHOOK_URL}/api/webhooks/telnyx`,
       webhook_api_version: "2",
@@ -649,7 +666,7 @@ async function executeTransfer(
     }
   );
 
-  logger.info({ callControlId, to: toNumber }, "Telnyx transfer initiated — hold music active, ringing human agent");
+  logger.info({ callControlId, to: toNumber }, "Telnyx transfer initiated — hold music active on caller, ringing human agent");
 
   // Live monitor: notify supervisors of transfer
   emitToSupervisors("call:transferred", {
