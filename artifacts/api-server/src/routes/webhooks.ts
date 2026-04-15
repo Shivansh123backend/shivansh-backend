@@ -187,10 +187,16 @@ THE MOST IMPORTANT THING — DO NOT SOUND LIKE A ROBOT:
 You are NOT an IVR, NOT a bot, NOT reading a script. You are a sharp, experienced phone rep who actually listens and responds to what people say. Every response must directly address what the person just said before you advance any agenda. If you ignore what they said and jump to your next scripted line, you have failed.
 
 HOW TO SPEAK:
-Say one thought, then stop. Maximum 2 sentences. Then wait — do not speak again until they respond. Use contractions. Use natural openers like "Yeah", "Right", "Honestly", "Here's the thing", "So basically". Avoid "Great!", "Absolutely!", "Certainly!", "Of course!" — these sound robotic. Do NOT use asterisks, bullets, dashes, or any formatting — this is spoken audio.
+Say one thought, then stop. ONE sentence maximum — two only if absolutely necessary. Then wait — do not speak again until they respond. Use contractions. Use natural openers like "Yeah", "Right", "Honestly", "Here's the thing", "So basically". Avoid "Great!", "Absolutely!", "Certainly!", "Of course!" — these sound robotic. Do NOT use asterisks, bullets, dashes, or any formatting — this is spoken audio.
 
 TURN DISCIPLINE:
 One turn = one thought from you. Full stop. Wait. This is the only rule that matters.
+
+PATIENCE — this is critical:
+- If the caller's response is very short (one or two words) or seems incomplete, gently prompt: "Yeah, go on?" or "Sorry — I didn't quite catch that?" — never assume they're done and barrel forward.
+- If they said something like "uh" or "hmm" or "well...", they are still thinking. Say "Take your time" and nothing else.
+- NEVER ask your next question until the current topic is fully resolved. One topic at a time, one question at a time.
+- If they give a long answer, pick out ONE thing they said and respond to that — don't try to address everything at once.
 
 OBJECTION HANDLING — handle these specifically, do not hang up on first pushback:
 - "Not interested" → "Yeah, fair enough — can I ask real quick, is it the timing or just not something you're looking for right now?" (if they say remove me: "Absolutely, sorry to bother you, have a great one.")
@@ -257,6 +263,8 @@ const lastProcessedText         = new Map<string, { text: string; ts: number }>(
 const pendingTransferAfterPlay  = new Set<string>();                  // callControlId → execute transfer after next playback.ended
 const pendingVmDropHangup       = new Set<string>();                  // callControlId → hang up after VM drop message finishes playing
 const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
+const awaitingFirstResponse     = new Set<string>();                  // callControlId → outbound call waiting for first caller word (silence guard)
+const initialSilenceTimer       = new Map<string, ReturnType<typeof setTimeout>>(); // callControlId → 30s start-silence timeout
 const AI_SPEAK_COOLDOWN_MS      = 1000;                               // ignore transcriptions this many ms after AI speaks
 
 /** Stable numeric ID from a callControlId string (for live monitor without DB row) */
@@ -355,6 +363,37 @@ async function startTranscriptionAndGreet(callControlId: string): Promise<void> 
       logger.error({ err: String(speakErr), callControlId }, "Speak fallback also failed");
     }
   }
+
+  // ── Initial silence guard (outbound only) ─────────────────────────────────
+  // If the prospect never speaks in the first 30 s after the greeting, politely
+  // say goodbye and hang up.  The timer is cleared in _handleCallerTurnInner
+  // the instant any caller transcription arrives.
+  if (bridge.direction === "outbound") {
+    awaitingFirstResponse.add(callControlId);
+    const silenceTimer = setTimeout(async () => {
+      if (!awaitingFirstResponse.has(callControlId)) return; // already responded
+      awaitingFirstResponse.delete(callControlId);
+      initialSilenceTimer.delete(callControlId);
+
+      const b = getBridgeInfo(callControlId);
+      if (!b) return;
+
+      logger.info({ callControlId }, "Initial 30-s silence — no response — disconnecting politely");
+      const goodbye = "Hello? It seems there's no one there — I'll let you go. Have a great day, goodbye!";
+      try {
+        const url = await generateTTSWithFallback(goodbye, b.voiceId, (b.voiceProvider ?? "elevenlabs") as VoiceProvider);
+        await playWithFallback(callControlId, url, goodbye);
+        // Give the audio ~5 s to finish, then hang up
+        setTimeout(() => {
+          telnyxAction(callControlId, "hangup", {}).catch(() => {});
+        }, 5_000);
+      } catch {
+        telnyxAction(callControlId, "hangup", {}).catch(() => {});
+      }
+    }, 30_000);
+    initialSilenceTimer.set(callControlId, silenceTimer);
+    logger.info({ callControlId }, "Initial silence timer set (30 s)");
+  }
 }
 
 /** Process a final transcription from the caller and speak the AI's response */
@@ -378,6 +417,14 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
 }
 
 async function _handleCallerTurnInner(callControlId: string, callerText: string): Promise<void> {
+  // ── Cancel the initial silence timer the moment caller speaks ────────────
+  if (awaitingFirstResponse.has(callControlId)) {
+    awaitingFirstResponse.delete(callControlId);
+    const t = initialSilenceTimer.get(callControlId);
+    if (t) { clearTimeout(t); initialSilenceTimer.delete(callControlId); }
+    logger.info({ callControlId }, "Initial silence timer cleared — caller responded");
+  }
+
   const bridge = getBridgeInfo(callControlId);
   if (!bridge) {
     logger.warn({ callControlId, callerText }, "handleCallerTurn: no bridge — skipping");
@@ -437,13 +484,13 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
     logger.info({ callControlId, turnCount }, "MAX_TURNS reached — injecting forced transfer instruction");
   }
 
-  // GPT completion — short tokens to enforce 1-2 sentence rule
+  // GPT completion — tight token budget to enforce 1 sentence max
   let aiText: string;
   try {
     const completion = await openai.chat.completions.create({
       model: AI_MODEL,
-      max_tokens: 220,
-      temperature: 0.88,
+      max_tokens: 130,
+      temperature: 0.75,
       messages: history.slice(-14) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
     });
     aiText = stripMarkdownForTTS((completion.choices[0]?.message?.content ?? "").trim());
@@ -1304,6 +1351,11 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       // Clean up background sound tracking
       backgroundSoundActive.delete(callControlId);
+
+      // Cancel any pending initial-silence timer (call ended before 30 s)
+      awaitingFirstResponse.delete(callControlId);
+      const _sTimer = initialSilenceTimer.get(callControlId);
+      if (_sTimer) { clearTimeout(_sTimer); initialSilenceTimer.delete(callControlId); }
 
       const durationSecs = Math.round(
         (Date.now() - bridge.startedAt.getTime()) / 1000
