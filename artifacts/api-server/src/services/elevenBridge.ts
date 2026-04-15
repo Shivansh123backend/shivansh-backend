@@ -493,6 +493,14 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
           transcriptCallback: (text) => {
             bridge.transcript.push(`Caller: ${text}`);
           },
+          onTransferRequested: bridge.transferNumber
+            ? () => {
+                bridge.pendingTransfer = true;
+                // Use the bridge's onTransferRequested so webhooks.ts executes the transfer
+                // with the correct from/to numbers and hold music, then calls fork_stop
+                bridge.onTransferRequested?.(bridge.transferNumber!);
+              }
+            : undefined,
         });
       } else {
         // ElevenLabs ConvAI (fallback)

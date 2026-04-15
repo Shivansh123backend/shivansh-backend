@@ -91,6 +91,23 @@ const BACKGROUND_CONTEXT_MAP: Record<string, string> = {
 // Track calls where background audio has been injected (so we can ignore its playback.ended event)
 const backgroundSoundActive = new Set<string>(); // callControlId
 
+// ── Markdown stripper (TTS safety) ────────────────────────────────────────────
+// GPT-4o sometimes outputs markdown even when told not to. Strip it before TTS
+// so callers never hear "asterisk asterisk" or "hyphen hyphen".
+function stripMarkdownForTTS(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")    // **bold**
+    .replace(/\*(.+?)\*/g, "$1")         // *italic*
+    .replace(/^#{1,6}\s+/gm, "")         // ## headers
+    .replace(/^\s*[-*+]\s+/gm, "")       // bullet points
+    .replace(/`(.+?)`/g, "$1")           // `code`
+    .replace(/\[(.+?)\]\(.+?\)/g, "$1")  // [links](url)
+    .replace(/_{1,2}(.+?)_{1,2}/g, "$1") // __underline__
+    .replace(/\n{2,}/g, ". ")            // paragraph breaks → short pause
+    .replace(/\n/g, " ")
+    .trim();
+}
+
 // ── Template variable substitution ────────────────────────────────────────────
 function substituteVars(
   template: string,
@@ -149,7 +166,7 @@ function buildSystemPrompt(
   // Detect whether the user wrote a detailed script or a short prompt
   const isShortPrompt = coreScript.length < 280 && !coreScript.includes("\n");
   const shortPromptHint = isShortPrompt
-    ? `\n\nThe objective above is intentionally brief — use it as your north star and fill in the conversation naturally. Ask the right qualifying questions, handle objections smoothly, and guide the call to a good outcome. You decide what to ask and how to say it.`
+    ? `\n\nThe objective above is intentionally brief — use it as your north star and fill in the conversation naturally. Draw on your real-world knowledge about this industry: actual companies, genuine statistics, real discount rates, common objections people in this industry face, and accurate product details. Never say "[company name]" or "[rate]" — replace every placeholder with a specific, accurate real-world example. Ask the right qualifying questions, handle objections smoothly, and guide the call to a good outcome.`
     : "";
 
   const transferLine = transferNumber
@@ -173,6 +190,7 @@ PHONE CALL STYLE — non-negotiable:
 - Use natural fillers and pauses: "So basically...", "Here's the thing...", "Honestly...", "Yeah..."
 - Never monologue. Never stack questions. Never rush.
 - Always say less than you think you should. Pause more than feels comfortable.
+- CRITICAL — NO MARKDOWN EVER: Do not use asterisks, bold, italic, bullets, hyphens, or any formatting characters. Your output is spoken aloud — plain text only. Never write **word** or *word* or - bullet.
 
 TURN-TAKING — the most important rule:
 You speak once. Then the human speaks. Then you speak again. That is the only pattern. NEVER generate a second turn before they respond.
@@ -426,7 +444,7 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
       temperature: 0.7,
       messages: history.slice(-14) as Parameters<typeof openai.chat.completions.create>[0]["messages"],
     });
-    aiText = (completion.choices[0]?.message?.content ?? "").trim();
+    aiText = stripMarkdownForTTS((completion.choices[0]?.message?.content ?? "").trim());
     logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "OpenAI response received");
   } catch (err) {
     const detail = axios.isAxiosError(err) && err.response

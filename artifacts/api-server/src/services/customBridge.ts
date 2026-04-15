@@ -2,14 +2,13 @@
  * Custom AI Calling Bridge — Deepgram STT + GPT-4o LLM + Cartesia TTS
  *
  * Architecture (identical to Vapi's internal stack):
- *   Telnyx µ-law 8kHz → Deepgram Nova-2 (STT) → GPT-4o (LLM) → Cartesia Sonic (TTS) → Telnyx
+ *   Telnyx µ-law 8kHz → Deepgram Nova-2 (STT) → GPT-4o (LLM) → Cartesia Sonic-2 (TTS) → Telnyx
  *
- * Features:
- *   - Deepgram Nova-2 phonecall model: best accuracy on phone audio
- *   - GPT-4o streaming: fastest + smartest LLM for conversation
- *   - Cartesia Sonic-2: sub-100ms TTS latency, extremely natural voice
- *   - Barge-in: caller can interrupt mid-sentence, AI stops immediately
- *   - Sentence-level streaming: AI starts speaking within ~200ms of finishing a sentence
+ * Fixes in this version:
+ *   - Barge-in on INTERIM results (caller speaks → AI stops immediately, not after 400ms silence)
+ *   - AbortController cancels in-flight Cartesia fetch on barge-in
+ *   - Transfer phrase detection → calls onTransferRequested + stops bridge before music plays
+ *   - Markdown stripped before sending to Cartesia (no more "asterisk asterisk")
  */
 
 import WebSocket from "ws";
@@ -34,6 +33,22 @@ const openai = new OpenAI({
     "placeholder",
 });
 
+// Transfer trigger phrases — any of these in the AI response triggers a transfer
+const TRANSFER_TRIGGERS = [
+  "connect you with",
+  "transfer you",
+  "one moment please",
+  "one moment!",
+  "let me connect",
+  "putting you through",
+  "connect you now",
+  "one of our agents",
+  "one of our team",
+  "get one of our",
+  "team member on the line",
+  "expert who can help",
+];
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 interface Message {
@@ -50,16 +65,39 @@ interface BridgeState {
   deepgramWs: WebSocket | null;
   messages: Message[];
   isAiSpeaking: boolean;
-  currentTurnId: number;           // increments on each new turn — barge-in detection
+  currentTurnId: number;            // increments on each turn — barge-in detection
+  currentAbortCtrl: AbortController | null;   // aborts in-flight Cartesia fetch
   isClosed: boolean;
+  pendingTransfer: boolean;
   transcriptCallback?: (text: string) => void;
+  onTransferRequested?: () => void;  // called when AI says transfer phrase
 }
 
 const bridges = new Map<string, BridgeState>();
 
-// ── Audio helpers ────────────────────────────────────────────────────────────
+// ── Text helpers ─────────────────────────────────────────────────────────────
 
-/** Send base64-encoded µ-law audio back to Telnyx */
+/**
+ * Strip markdown formatting so Cartesia reads clean text, not "asterisk asterisk".
+ * Removes bold, italic, headers, bullets, code, links.
+ */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")   // **bold**
+    .replace(/\*(.+?)\*/g, "$1")        // *italic*
+    .replace(/^#{1,6}\s+/gm, "")        // ## headers
+    .replace(/^\s*[-*+]\s+/gm, "")      // bullet points
+    .replace(/`(.+?)`/g, "$1")          // `code`
+    .replace(/\[(.+?)\]\(.+?\)/g, "$1") // [links](url)
+    .replace(/_{1,2}(.+?)_{1,2}/g, "$1")// __underline__
+    .replace(/\n{2,}/g, ". ")           // paragraph breaks → short pause
+    .replace(/\n/g, " ")
+    .trim();
+}
+
+// ── Audio helpers ─────────────────────────────────────────────────────────────
+
+/** Send base64-encoded µ-law audio back to Telnyx media fork */
 function injectAudio(state: BridgeState, ulawB64: string): void {
   if (state.isClosed || state.telnyxWs.readyState !== WebSocket.OPEN) return;
   state.telnyxWs.send(JSON.stringify({
@@ -71,31 +109,21 @@ function injectAudio(state: BridgeState, ulawB64: string): void {
 // ── Cartesia TTS ─────────────────────────────────────────────────────────────
 
 /**
- * Speak a text string via Cartesia and pipe audio to Telnyx.
- * Returns once the audio is fully played (or on barge-in).
+ * Speak a text string via Cartesia SSE and pipe µ-law audio to Telnyx.
+ * Respects turnId for barge-in and uses AbortController to cancel mid-stream.
  */
 async function speakText(
   state: BridgeState,
   text: string,
   turnId: number,
-  continueContext: boolean
 ): Promise<void> {
-  if (state.isClosed || state.currentTurnId !== turnId || !text.trim()) return;
+  const clean = stripMarkdown(text);
+  if (!clean.trim() || state.isClosed || state.currentTurnId !== turnId) return;
+
+  const ctrl = new AbortController();
+  state.currentAbortCtrl = ctrl;
 
   try {
-    const body = JSON.stringify({
-      model_id: CARTESIA_MODEL,
-      transcript: text,
-      voice: { mode: "id", id: state.cartesiaVoiceId },
-      output_format: {
-        container: "raw",
-        encoding: "pcm_mulaw",   // Telnyx-native format — zero conversion needed
-        sample_rate: 8000,
-      },
-      context_id: `turn-${turnId}`,
-      continue: continueContext,  // tells Cartesia more text is coming in this turn
-    });
-
     const res = await fetch("https://api.cartesia.ai/tts/sse", {
       method: "POST",
       headers: {
@@ -103,13 +131,22 @@ async function speakText(
         "Cartesia-Version": CARTESIA_VERSION,
         "Content-Type": "application/json",
       },
-      body,
-      signal: AbortSignal.timeout(10000),
+      body: JSON.stringify({
+        model_id: CARTESIA_MODEL,
+        transcript: clean,
+        voice: { mode: "id", id: state.cartesiaVoiceId },
+        output_format: {
+          container: "raw",
+          encoding: "pcm_mulaw",  // Telnyx-native, zero conversion needed
+          sample_rate: 8000,
+        },
+        context_id: `turn-${turnId}`,
+      }),
+      signal: ctrl.signal,
     });
 
     if (!res.ok || !res.body) {
-      const errText = await res.text().catch(() => "");
-      logger.warn({ status: res.status, errText }, "Cartesia TTS error");
+      logger.warn({ status: res.status }, "Cartesia TTS error");
       return;
     }
 
@@ -118,7 +155,7 @@ async function speakText(
     let sseBuffer = "";
 
     while (true) {
-      // Check for barge-in on every chunk
+      // Barge-in check before every read
       if (state.isClosed || state.currentTurnId !== turnId) {
         reader.cancel().catch(() => {});
         return;
@@ -137,12 +174,7 @@ async function speakText(
         if (!jsonStr || jsonStr === "[DONE]") continue;
 
         try {
-          const event = JSON.parse(jsonStr) as {
-            type?: string;
-            data?: string;
-            done?: boolean;
-          };
-
+          const event = JSON.parse(jsonStr) as { type?: string; data?: string };
           if (event.type === "chunk" && event.data) {
             injectAudio(state, event.data);
           }
@@ -155,20 +187,30 @@ async function speakText(
     if ((err as Error).name !== "AbortError") {
       logger.error({ err: String(err) }, "Cartesia stream error");
     }
+  } finally {
+    if (state.currentAbortCtrl === ctrl) {
+      state.currentAbortCtrl = null;
+    }
   }
+}
+
+// ── Barge-in helper ─────────────────────────────────────────────────────────
+
+function triggerBargeIn(state: BridgeState): void {
+  if (!state.isAiSpeaking) return;
+  logger.info({ callControlId: state.callControlId }, "Barge-in — stopping AI speech");
+  state.currentTurnId++;              // invalidates all in-flight speakText calls
+  state.currentAbortCtrl?.abort();    // cancel the in-flight Cartesia fetch
+  state.currentAbortCtrl = null;
+  state.isAiSpeaking = false;
 }
 
 // ── GPT-4o LLM ───────────────────────────────────────────────────────────────
 
-/** Regex to detect sentence boundaries for streaming TTS */
 const SENTENCE_END = /([.!?]["']?\s)|([.!?]["']?$)/;
 
-/**
- * Generate GPT-4o response and stream it sentence-by-sentence to Cartesia.
- * Uses turn IDs for barge-in: if turnId changes mid-stream, we abort.
- */
 async function generateAndSpeak(state: BridgeState, userText: string): Promise<void> {
-  if (state.isClosed) return;
+  if (state.isClosed || state.pendingTransfer) return;
 
   state.messages.push({ role: "user", content: userText });
   state.isAiSpeaking = true;
@@ -200,25 +242,46 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
       fullResponse += delta;
       textBuffer += delta;
 
-      // Flush text to Cartesia at sentence boundaries for low latency
+      // Flush at sentence boundaries for lowest TTS latency
       const match = textBuffer.search(SENTENCE_END);
       if (match !== -1) {
         const sentence = textBuffer.slice(0, match + 1).trim();
         textBuffer = textBuffer.slice(match + 1).trim();
-        if (sentence) {
-          // continueContext=true means more text is coming (better prosody across sentences)
-          await speakText(state, sentence, turnId, true);
-        }
+        if (sentence) await speakText(state, sentence, turnId);
       }
     }
 
-    // Flush remaining text
+    // Flush any remaining text
     if (textBuffer.trim() && !state.isClosed && state.currentTurnId === turnId) {
-      await speakText(state, textBuffer.trim(), turnId, false);
+      await speakText(state, textBuffer.trim(), turnId);
     }
 
     if (fullResponse.trim()) {
       state.messages.push({ role: "assistant", content: fullResponse.trim() });
+    }
+
+    // ── Transfer detection ────────────────────────────────────────────────────
+    const lower = fullResponse.toLowerCase();
+    const wantsTransfer =
+      state.onTransferRequested &&
+      !state.pendingTransfer &&
+      TRANSFER_TRIGGERS.some((t) => lower.includes(t));
+
+    if (wantsTransfer) {
+      state.pendingTransfer = true;
+      logger.info({ callControlId: state.callControlId }, "Transfer phrase detected in custom bridge");
+
+      // Brief pause so Cartesia finishes the last sentence, then fire transfer
+      await new Promise<void>((r) => setTimeout(r, 600));
+
+      // Close bridge BEFORE executing transfer so no more audio is injected
+      // (Telnyx will play hold music via the audio_url in the transfer action)
+      state.isClosed = true;
+      state.currentTurnId++;
+      state.currentAbortCtrl?.abort();
+      state.deepgramWs?.close();
+
+      state.onTransferRequested!();
     }
   } catch (err) {
     logger.error({ err: String(err), callControlId: state.callControlId }, "GPT-4o error");
@@ -237,11 +300,11 @@ function connectDeepgram(state: BridgeState): void {
     encoding: "mulaw",
     sample_rate: "8000",
     channels: "1",
-    endpointing: "400",          // 400ms silence = end of utterance
-    interim_results: "true",
+    endpointing: "300",          // 300ms silence = utterance complete
+    interim_results: "true",     // used for barge-in detection
     smart_format: "true",
     punctuate: "true",
-    no_delay: "true",            // reduce transcript latency
+    no_delay: "true",
   });
 
   const dgWs = new WebSocket(
@@ -254,12 +317,12 @@ function connectDeepgram(state: BridgeState): void {
   dgWs.on("open", () => {
     logger.info({ callControlId: state.callControlId }, "Deepgram connected");
 
-    // Speak first message immediately as AI's opening line
+    // Speak the opening line immediately
     if (state.firstMessage.trim()) {
       state.messages.push({ role: "assistant", content: state.firstMessage });
       state.isAiSpeaking = true;
       const turnId = ++state.currentTurnId;
-      speakText(state, state.firstMessage, turnId, false)
+      speakText(state, state.firstMessage, turnId)
         .then(() => { if (state.currentTurnId === turnId) state.isAiSpeaking = false; })
         .catch(() => { state.isAiSpeaking = false; });
     }
@@ -280,10 +343,21 @@ function connectDeepgram(state: BridgeState): void {
       const transcript = (alt?.transcript ?? "").trim();
       const confidence = alt?.confidence ?? 0;
 
-      if (!transcript || confidence < 0.25) return;
+      if (!transcript || confidence < 0.2) return;
 
-      // speech_final = Deepgram is confident the utterance is complete
-      if (msg.speech_final) {
+      const isSpeechFinal = msg.speech_final === true;
+      const isInterim = !msg.is_final && !isSpeechFinal;
+
+      // ── Barge-in on interim results ─────────────────────────────────────
+      // If the caller starts speaking while AI is talking, stop immediately.
+      // Don't wait for speech_final — stop the moment Deepgram hears any speech.
+      if (isInterim && state.isAiSpeaking) {
+        triggerBargeIn(state);
+        return;  // Wait for speech_final to generate the response
+      }
+
+      // ── Full response on final transcript ────────────────────────────────
+      if (isSpeechFinal) {
         logger.info(
           { callControlId: state.callControlId, transcript, confidence },
           "Deepgram speech_final"
@@ -291,12 +365,8 @@ function connectDeepgram(state: BridgeState): void {
 
         state.transcriptCallback?.(transcript);
 
-        // Barge-in: cancel current AI speech by advancing turnId
-        if (state.isAiSpeaking) {
-          state.currentTurnId++;           // invalidates in-flight speakText calls
-          state.isAiSpeaking = false;
-          logger.info({ callControlId: state.callControlId }, "Barge-in — AI interrupted");
-        }
+        // Ensure barge-in happened (in case interim missed it)
+        if (state.isAiSpeaking) triggerBargeIn(state);
 
         generateAndSpeak(state, transcript).catch((err) => {
           logger.error({ err: String(err) }, "generateAndSpeak failed");
@@ -330,6 +400,7 @@ export function connectCustomBridge(
     cartesiaVoiceId?: string;
     telnyxWs: WebSocket;
     transcriptCallback?: (text: string) => void;
+    onTransferRequested?: () => void;
   }
 ): void {
   const state: BridgeState = {
@@ -342,8 +413,11 @@ export function connectCustomBridge(
     messages: [{ role: "system", content: opts.systemPrompt }],
     isAiSpeaking: false,
     currentTurnId: 0,
+    currentAbortCtrl: null,
     isClosed: false,
+    pendingTransfer: false,
     transcriptCallback: opts.transcriptCallback,
+    onTransferRequested: opts.onTransferRequested,
   };
 
   bridges.set(callControlId, state);
@@ -357,16 +431,15 @@ export function sendAudioToCustomBridge(callControlId: string, ulawB64: string):
   const state = bridges.get(callControlId);
   if (!state || state.isClosed || !state.deepgramWs) return;
   if (state.deepgramWs.readyState !== WebSocket.OPEN) return;
-
-  const buf = Buffer.from(ulawB64, "base64");
-  state.deepgramWs.send(buf);   // Deepgram accepts raw binary µ-law
+  state.deepgramWs.send(Buffer.from(ulawB64, "base64"));
 }
 
 export function closeCustomBridge(callControlId: string): void {
   const state = bridges.get(callControlId);
   if (!state) return;
   state.isClosed = true;
-  state.currentTurnId++;        // abort any in-flight Cartesia streams
+  state.currentTurnId++;
+  state.currentAbortCtrl?.abort();
   state.deepgramWs?.close();
   bridges.delete(callControlId);
   logger.info({ callControlId }, "Custom bridge closed");
