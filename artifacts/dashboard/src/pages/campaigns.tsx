@@ -601,6 +601,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 
   // Step 3 — Voice & Number
   const [selectedVoice, setSelectedVoice] = useState("default");
+  const [selectedNumber, setSelectedNumber] = useState("");
   const [selectedNumberIds, setSelectedNumberIds] = useState<number[]>([]);
   const [backgroundSound, setBackgroundSound] = useState("none");
   const [holdMusic, setHoldMusic] = useState("none");
@@ -632,6 +633,9 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
 
   const handleSubmit = () => {
+    const resolvedVoiceProvider = selectedVoice !== "default"
+      ? ((dbVoices?.find(v => v.voiceId === selectedVoice) as { provider?: string } | undefined)?.provider ?? (elVoices.some(v => v.voice_id === selectedVoice) ? "elevenlabs" : undefined))
+      : undefined;
     createCampaign.mutate(
       {
         data: {
@@ -643,6 +647,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           knowledgeBase: knowledgeBase || undefined,
           recordingNotes: recordingNotes || undefined,
           voice: selectedVoice !== "default" ? selectedVoice : undefined,
+          voiceProvider: resolvedVoiceProvider as "elevenlabs" | "deepgram" | "cartesia" | undefined,
           fromNumber: selectedNumber || undefined,
           backgroundSound: backgroundSound as "none" | "office" | "typing" | "cafe",
           holdMusic: holdMusic as "none" | "jazz" | "corporate" | "smooth" | "classical",
@@ -1024,6 +1029,9 @@ function LaunchModal({
   const canLaunch = effectivePending > 0;
 
   const handleLaunch = async () => {
+    const resolvedVoiceProvider = selectedVoice !== "default"
+      ? ((dbVoices?.find(v => v.voiceId === selectedVoice) as { provider?: string } | undefined)?.provider ?? (elVoices.some(v => v.voice_id === selectedVoice) ? "elevenlabs" : undefined))
+      : undefined;
     setIsLaunching(true);
     try {
       await customFetch(`/api/campaigns/${campaign.id}`, {
@@ -1031,6 +1039,7 @@ function LaunchModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           voice: selectedVoice !== "default" ? selectedVoice : undefined,
+          voiceProvider: resolvedVoiceProvider,
           fromNumber: selectedNumber || undefined,
           agentPrompt: prompt || undefined,
           backgroundSound,

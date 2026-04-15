@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { io, type Socket } from "socket.io-client";
 import { useListCampaigns, useGetAvailableAgents, customFetch } from "@workspace/api-client-react";
 import { Layout, PageHeader } from "@/components/layout";
@@ -499,9 +500,26 @@ function makeEvent(type: EventEntry["type"], message: string, detail?: string): 
   return { id: `ev-${++_eventCounter}`, type, message, detail, ts: Date.now() };
 }
 
+interface AgentStat {
+  id: number;
+  name: string;
+  phone_number: string;
+  status: string;
+  current_call: string | null;
+  stats: { callsToday: number; avgDuration: number; dispositions: Record<string, number> };
+}
+
 export default function LiveMonitorPage() {
   const { data: campaigns, isLoading: campLoading } = useListCampaigns();
   const { data: availableAgents, isLoading: agentLoading } = useGetAvailableAgents();
+  const qc = useQueryClient();
+
+  const AGENT_STATS_KEY = ["agent-stats"] as const;
+  const { data: agentStats, isLoading: agentStatsLoading } = useQuery<AgentStat[]>({
+    queryKey: AGENT_STATS_KEY,
+    queryFn: () => customFetch<AgentStat[]>("/api/agents/stats"),
+    staleTime: 30_000,
+  });
 
   const [connected, setConnected] = useState(false);
   const [activeCalls, setActiveCalls] = useState<Map<number, LiveCall>>(new Map());
@@ -669,11 +687,15 @@ export default function LiveMonitorPage() {
       addEvent(makeEvent("agent_status", `Agent #${data.agentId ?? "?"} → ${data.status ?? "updated"}`));
     });
 
+    socket.on("agent:stats:refresh", () => {
+      qc.invalidateQueries({ queryKey: ["agent-stats"] });
+    });
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [addEvent]);
+  }, [addEvent, qc]);
 
   const activeCallsArr = Array.from(activeCalls.values());
   const successRate = totalToday > 0 ? Math.round((completedToday / totalToday) * 100) : 0;
@@ -853,6 +875,78 @@ export default function LiveMonitorPage() {
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">Completed Today</p>
             <p className="text-xl font-bold font-mono text-blue-400">{completedToday}</p>
           </div>
+        </div>
+
+        {/* Human Agent Performance */}
+        <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+          <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
+            <Users className="w-3.5 h-3.5 text-blue-400" />
+            <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Human Agent Performance · Today</p>
+          </div>
+          {agentStatsLoading ? (
+            <div className="divide-y divide-border/30">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="px-4 py-3 flex items-center gap-4">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-4 w-16" />
+                  <Skeleton className="h-4 w-16" />
+                  <Skeleton className="h-4 w-32" />
+                </div>
+              ))}
+            </div>
+          ) : !agentStats || agentStats.length === 0 ? (
+            <p className="text-[10px] font-mono text-muted-foreground/50 px-4 py-6 text-center">
+              No human agents configured · add agents in the Agents page
+            </p>
+          ) : (
+            <table className="w-full text-xs font-mono">
+              <thead>
+                <tr className="border-b border-border/50">
+                  <th className="text-left px-4 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Agent</th>
+                  <th className="text-left px-4 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
+                  <th className="text-right px-4 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Calls</th>
+                  <th className="text-right px-4 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Avg Dur</th>
+                  <th className="text-left px-4 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Top Disposition</th>
+                  <th className="text-left px-4 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Current Call</th>
+                </tr>
+              </thead>
+              <tbody>
+                {agentStats.map(a => {
+                  const topDisp = Object.entries(a.stats.dispositions).sort((x, y) => y[1] - x[1])[0];
+                  const mins = Math.floor(a.stats.avgDuration / 60);
+                  const secs = a.stats.avgDuration % 60;
+                  return (
+                    <tr key={a.id} className="border-b border-border/20 hover:bg-white/[0.02]">
+                      <td className="px-4 py-2.5">
+                        <p className="text-foreground font-medium">{a.name}</p>
+                        <p className="text-[10px] text-muted-foreground">{a.phone_number}</p>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={`inline-flex items-center gap-1 text-[9px] font-mono uppercase px-1.5 py-0.5 rounded border ${
+                          a.status === "available"
+                            ? "border-green-500/30 text-green-400 bg-green-500/5"
+                            : "border-yellow-500/30 text-yellow-400 bg-yellow-500/5"
+                        }`}>
+                          <span className={`w-1 h-1 rounded-full ${a.status === "available" ? "bg-green-400" : "bg-yellow-400"} animate-pulse`} />
+                          {a.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-foreground tabular-nums">{a.stats.callsToday}</td>
+                      <td className="px-4 py-2.5 text-right text-muted-foreground tabular-nums">
+                        {a.stats.avgDuration > 0 ? `${mins}:${String(secs).padStart(2, "0")}` : "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground capitalize">
+                        {topDisp ? `${topDisp[0].replace(/_/g, " ")} (${topDisp[1]})` : "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground/70 text-[10px]">
+                        {a.current_call ?? "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </Layout>

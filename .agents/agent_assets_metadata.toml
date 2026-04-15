@@ -30,3 +30,9 @@ id = "32Gq1CZpoYD0nrjdFLZ-0"
 uri = "file://LOVABLE_SOFTPHONE_PROMPT.md"
 type = "text"
 title = "Lovable Prompt — Agent Softphone + Callbacks UI"
+
+[[outputs]]
+id = "TzemsqcHy687CyMYgpsbQ"
+uri = "file://.local/lovable-agent-softphone-prompt.md"
+type = "text"
+title = "SHIVANSH Agent Softphone — Lovable Prompt (T007)"

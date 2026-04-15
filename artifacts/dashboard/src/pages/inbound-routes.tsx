@@ -49,8 +49,10 @@ export default function InboundRoutesPage() {
 
   // ── Socket.IO live connection ────────────────────────────────────────────────
   useEffect(() => {
+    const token = localStorage.getItem("auth_token");
     const socket = io(window.location.origin, {
-      path: "/socket.io",
+      path: "/api/ws",
+      auth: token ? { token } : {},
       transports: ["websocket", "polling"],
     });
     socketRef.current = socket;
