@@ -236,8 +236,19 @@ async function telnyxAction(
   );
 }
 
-async function answerCall(callControlId: string): Promise<void> {
-  await telnyxAction(callControlId, "answer", {});
+async function answerCall(callControlId: string): Promise<boolean> {
+  try {
+    await telnyxAction(callControlId, "answer", {});
+    return true;
+  } catch (err) {
+    // 422 = call already ended/cancelled before we could answer — not a real error
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 422) {
+      logger.info({ callControlId }, "answerCall: call already ended before answer (422) — ignoring");
+      return false;
+    }
+    throw err;
+  }
 }
 
 async function startRecording(callControlId: string): Promise<void> {
@@ -1096,11 +1107,13 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       const result = await getCampaignByNumber(toNumber);
 
       if (!result) {
-        await answerCall(callControlId);
-        await speak(
-          callControlId,
-          "Thank you for calling. We are unable to connect your call at this time. Goodbye."
-        );
+        const answered = await answerCall(callControlId);
+        if (answered) {
+          await speak(
+            callControlId,
+            "Thank you for calling. We are unable to connect your call at this time. Goodbye."
+          );
+        }
         return;
       }
 
@@ -1147,7 +1160,12 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         },
       });
 
-      await answerCall(callControlId);
+      const answered = await answerCall(callControlId);
+      if (!answered) {
+        // Call already ended before we could answer — clean up bridge and bail
+        logger.info({ callControlId }, "Inbound call ended before answer — aborting bridge setup");
+        return;
+      }
 
       // Store our campaign phone number (needed if transfer is requested)
       callOwnNumber.set(callControlId, toNumber);

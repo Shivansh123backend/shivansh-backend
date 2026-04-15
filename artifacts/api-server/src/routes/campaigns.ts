@@ -860,6 +860,11 @@ TONE: Be a real person having a real conversation. Stay warm, listen actively, a
     }
   }
 
+  // Safety guard: if no specific voice is set, we'll use the ElevenLabs default — reset provider
+  if (!voiceName || voiceName === "default") {
+    voiceProvider = "elevenlabs";
+  }
+
   // Supplement fromNumber from campaign's assigned phone number if not set directly
   if (!campaign.fromNumber) {
     const [phoneRow] = await db
