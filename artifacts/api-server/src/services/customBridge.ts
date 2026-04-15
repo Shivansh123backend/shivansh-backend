@@ -228,8 +228,8 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
     const stream = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: state.messages,
-      max_completion_tokens: 180,
-      temperature: 0.82,
+      max_completion_tokens: 250,   // enough for natural objection handling without monologuing
+      temperature: 0.88,
       stream: true,
     });
 
@@ -271,16 +271,29 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
       state.pendingTransfer = true;
       logger.info({ callControlId: state.callControlId }, "Transfer phrase detected in custom bridge");
 
-      // Brief pause so Cartesia finishes the last sentence, then fire transfer
-      await new Promise<void>((r) => setTimeout(r, 600));
+      // Let Cartesia finish speaking the transfer line (short natural pause)
+      await new Promise<void>((r) => setTimeout(r, 800));
 
-      // Close bridge BEFORE executing transfer so no more audio is injected
-      // (Telnyx will play hold music via the audio_url in the transfer action)
+      // ── Hard-stop the bridge before executing the transfer ───────────────
+      // Order matters:
+      //   1. Mark closed so no new audio is enqueued
+      //   2. Abort any in-flight Cartesia fetch (stops new bytes)
+      //   3. Close Deepgram (no more STT)
+      //   4. Close the Telnyx media fork WebSocket — THIS is the key step:
+      //      while the fork WebSocket stays open, Telnyx routes audio through
+      //      it and CANNOT play the hold music to the caller. Closing it tells
+      //      Telnyx "the fork is done" so it can play audio_url to the caller
+      //      while the agent's phone is ringing, then bridge cleanly.
       state.isClosed = true;
       state.currentTurnId++;
       state.currentAbortCtrl?.abort();
+      state.currentAbortCtrl = null;
       state.deepgramWs?.close();
 
+      // Close the media fork WebSocket — allows Telnyx to play hold music
+      try { state.telnyxWs.close(1000, "transfer"); } catch { /* already closed */ }
+
+      // Fire the transfer (executeTransfer + fork_stop are called in the callback)
       state.onTransferRequested!();
     }
   } catch (err) {
@@ -346,17 +359,18 @@ function connectDeepgram(state: BridgeState): void {
       if (!transcript || confidence < 0.2) return;
 
       const isSpeechFinal = msg.speech_final === true;
-      const isInterim = !msg.is_final && !isSpeechFinal;
 
-      // ── Barge-in on interim results ─────────────────────────────────────
-      // If the caller starts speaking while AI is talking, stop immediately.
-      // Don't wait for speech_final — stop the moment Deepgram hears any speech.
-      if (isInterim && state.isAiSpeaking) {
+      // ── Barge-in on ANY non-final result ────────────────────────────────
+      // Deepgram sends two types of pre-final messages:
+      //   is_final=false  → interim (classic)
+      //   is_final=true, speech_final=false → partial final (utterance chunk done but speech continuing)
+      // Both should interrupt the AI immediately — we were previously only catching is_final=false.
+      if (!isSpeechFinal && state.isAiSpeaking) {
         triggerBargeIn(state);
-        return;  // Wait for speech_final to generate the response
+        return;  // Wait for speech_final to build the full response
       }
 
-      // ── Full response on final transcript ────────────────────────────────
+      // ── Full response on speech_final ────────────────────────────────────
       if (isSpeechFinal) {
         logger.info(
           { callControlId: state.callControlId, transcript, confidence },
@@ -365,7 +379,7 @@ function connectDeepgram(state: BridgeState): void {
 
         state.transcriptCallback?.(transcript);
 
-        // Ensure barge-in happened (in case interim missed it)
+        // Belt-and-suspenders: if AI is still speaking (e.g. very fast speech_final), stop it
         if (state.isAiSpeaking) triggerBargeIn(state);
 
         generateAndSpeak(state, transcript).catch((err) => {
