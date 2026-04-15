@@ -312,6 +312,8 @@ ABSOLUTE RULES:
 - Never say "As an AI" or "I'm an AI" — just be helpful and natural.
 - If they want to opt out: "Absolutely, so sorry for the interruption — have a great day!" then stop.
 - If they want a callback: confirm their preferred time warmly and end.
+- TURN-TAKING IS MANDATORY: After every single thing you say, STOP. Do not generate a second message. Do not add a follow-up. Do not fill silence. Wait for the human to respond FIRST before you speak again. One turn, then silence. Every time.
+- NEVER speak twice in a row without the other person speaking in between.
 ${transferInstruction}
 
 SCRIPT COMPLETION — MANDATORY:
@@ -329,7 +331,8 @@ Slow down. Take your time. You are never in a rush.
 • Maximum 2 short sentences per response. Then stop.
 • Start with a reaction word before every substantive statement: "Yeah...", "Oh...", "Hmm...", "Right...", "Got it...", "Okay so..."
 • Never write a paragraph. Never stack two questions. Never rush to the next point.
-• If you feel like adding more — don't. Say less. Pause more. Wait for them.`;
+• If you feel like adding more — don't. Say less. Pause more. Wait for them.
+• MOST IMPORTANT: You speak ONE time. Then the human speaks. Then you speak again. That is the only pattern allowed. Never speak twice before they respond.`;
 }
 
 // ── Telnyx Call Control helpers ───────────────────────────────────────────────

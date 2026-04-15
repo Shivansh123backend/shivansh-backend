@@ -189,8 +189,10 @@ async function getBaseAgentId(): Promise<string> {
             keywords: [],
           },
           turn: {
-            turn_timeout: 7,
+            turn_timeout: 15,
             silence_end_call_timeout: 20,
+            mode: "silence",
+            endpointing_ms: 800,
           },
         },
       }),
@@ -265,8 +267,10 @@ async function connectToElevenLabs(
           keywords: [],
         },
         turn: {
-          turn_timeout: 12,
+          turn_timeout: 15,           // seconds of total silence before AI speaks again (gave more room)
           silence_end_call_timeout: 35,
+          mode: "silence",            // explicit silence-based VAD (more predictable than default)
+          endpointing_ms: 800,        // wait 800ms of speech-pause before deciding user is done talking
         },
       },
     }));
