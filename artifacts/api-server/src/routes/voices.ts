@@ -50,43 +50,24 @@ router.post("/voices", authenticate, requireRole("admin"), async (req, res): Pro
 });
 
 // ── GET /voices?provider=elevenlabs|deepgram|cartesia ─────────────────────────
-// Returns catalog voices (static) merged with DB-stored voices for each provider.
-// If `provider` is omitted, returns all providers grouped.
+// Returns all DB-stored voices as a flat array.
+// If `provider` is supplied, filters to that provider only.
+// The generated API client (useListVoices) expects Voice[] — never a grouped object.
 router.get("/voices", authenticate, async (req, res): Promise<void> => {
   const providerParam = req.query.provider as string | undefined;
 
-  // Validate provider param if present
-  if (providerParam && !SUPPORTED_PROVIDERS.includes(providerParam as VoiceProvider)) {
-    // fall through to DB-only for unsupported providers like "playht" / "azure"
-    const voices = await db.select().from(voicesTable).where(
-      eq(voicesTable.provider, providerParam as "elevenlabs" | "playht" | "azure")
-    );
+  if (providerParam) {
+    const voices = await db
+      .select()
+      .from(voicesTable)
+      .where(eq(voicesTable.provider, providerParam as "elevenlabs" | "playht" | "azure"));
     res.json(voices);
     return;
   }
 
-  if (providerParam) {
-    const provider = providerParam as VoiceProvider;
-    const catalogVoices = VOICE_CATALOG[provider].map((v) => ({
-      voice_id:    v.voice_id,
-      name:        v.name,
-      gender:      v.gender,
-      accent:      v.accent,
-      language:    "en",
-      description: v.description ?? null,
-      provider,
-      source:      "catalog",
-    }));
-    res.json(catalogVoices);
-    return;
-  }
-
-  // No provider — return all three supported providers grouped
-  const grouped: Record<string, typeof VOICE_CATALOG[VoiceProvider]> = {};
-  for (const p of SUPPORTED_PROVIDERS) {
-    grouped[p] = VOICE_CATALOG[p].map((v) => ({ ...v, provider: p, source: "catalog" })) as typeof VOICE_CATALOG[VoiceProvider];
-  }
-  res.json(grouped);
+  // No provider filter — return every voice in the DB as a flat array
+  const voices = await db.select().from(voicesTable);
+  res.json(voices);
 });
 
 // ── POST /voices/preview — generate TTS preview for any provider ───────────────
