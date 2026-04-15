@@ -697,7 +697,31 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
   const workers = Array.from({ length: effectiveConcurrency }, () => worker());
   await Promise.allSettled(workers);
 
-  logger.info({ campaignId, totalCalls, abandonedCalls }, `Campaign finished dispatching all calls`);
+  logger.info({ campaignId, totalCalls, abandonedCalls }, `Campaign finished dispatching all leads in current batch`);
+
+  // Check if there are still pending leads in the DB that weren't in our initial snapshot
+  // (e.g. retry leads that got reset after the batch was taken)
+  const [remaining] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(leadsTable)
+    .where(and(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.status, ["pending"])));
+
+  const remainingCount = remaining?.count ?? 0;
+
+  if (remainingCount > 0) {
+    // Re-check that campaign is still supposed to be active
+    const [latestCampaign] = await db
+      .select({ status: campaignsTable.status })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, campaignId));
+
+    if (latestCampaign?.status === "active") {
+      logger.info({ campaignId, remainingCount }, "Pending retry leads found — re-running campaign batch");
+      // Brief pause to avoid tight loop, then restart the worker for retry leads
+      await delay(30_000);
+      return _runCampaignCalls(campaignId, campaign);
+    }
+  }
 
   await db
     .update(campaignsTable)
