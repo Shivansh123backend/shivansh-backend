@@ -238,11 +238,18 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
   let textBuffer = "";
 
   try {
+    // Always pin system message at [0]; keep last 13 turns to avoid context overflow
+    const sysMsg = state.messages[0]!;
+    const recentMsgs = state.messages.slice(1).slice(-13);
+    const msgsForLLM = [sysMsg, ...recentMsgs];
+
     const stream = await openai.chat.completions.create({
       model: "gpt-4o",
-      messages: state.messages,
-      max_completion_tokens: 250,   // enough for natural objection handling without monologuing
-      temperature: 0.88,
+      messages: msgsForLLM,
+      max_completion_tokens: 160,
+      temperature: 0.75,
+      frequency_penalty: 0.7,  // discourages repeating exact phrases
+      presence_penalty: 0.5,   // discourages re-raising already-covered topics
       stream: true,
     });
 

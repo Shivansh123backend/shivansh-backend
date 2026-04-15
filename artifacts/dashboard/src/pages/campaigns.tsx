@@ -229,6 +229,7 @@ interface DialingEngineProps {
   workingHoursEnd: string; setWorkingHoursEnd: (v: string) => void;
   workingHoursTimezone: string; setWorkingHoursTimezone: (v: string) => void;
   amdEnabled: boolean; setAmdEnabled: (v: boolean) => void;
+  vmDropMessage: string; setVmDropMessage: (v: string) => void;
   tcpaEnabled: boolean; setTcpaEnabled: (v: boolean) => void;
 }
 
@@ -261,6 +262,7 @@ function DialingEngineFields({
   workingHoursEnd, setWorkingHoursEnd,
   workingHoursTimezone, setWorkingHoursTimezone,
   amdEnabled, setAmdEnabled,
+  vmDropMessage, setVmDropMessage,
   tcpaEnabled, setTcpaEnabled,
 }: DialingEngineProps) {
   const isPredictive = dialingMode === "predictive";
@@ -401,6 +403,21 @@ function DialingEngineFields({
           <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${amdEnabled ? "translate-x-4" : "translate-x-0"}`} />
         </button>
       </div>
+
+      {/* VM Drop Message — only shown when AMD is on */}
+      {amdEnabled && (
+        <div className="space-y-1.5 rounded border border-border/60 bg-muted/20 px-3 py-3">
+          <Label className="text-[10px] font-mono uppercase text-muted-foreground">Voicemail Drop Message</Label>
+          <p className="text-[10px] font-mono text-muted-foreground/70 leading-relaxed">When an answering machine beep is detected, the AI will speak this message and hang up. Leave blank to hang up silently.</p>
+          <textarea
+            value={vmDropMessage}
+            onChange={e => setVmDropMessage(e.target.value)}
+            rows={3}
+            placeholder="Hi, this is a message for {{FirstName}} from {{CampaignName}}. Please call us back at your earliest convenience. Thank you!"
+            className="w-full bg-background border border-border rounded px-3 py-2 text-xs font-mono text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+      )}
 
       {/* TCPA toggle */}
       <div className="flex items-center justify-between rounded border border-border px-3 py-2.5">
@@ -620,6 +637,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const [workingHoursEnd, setWorkingHoursEnd] = useState("");
   const [workingHoursTimezone, setWorkingHoursTimezone] = useState("UTC");
   const [amdEnabled, setAmdEnabled] = useState(false);
+  const [vmDropMessage, setVmDropMessage] = useState("");
   const [tcpaEnabled, setTcpaEnabled] = useState(false);
 
   const { data: dbVoices } = useListVoices() as { data: Array<{ id: number; name: string; voiceId: string; provider: string; gender: string; accent: string; previewUrl?: string; description?: string }> | undefined };
@@ -665,6 +683,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           workingHoursEnd: workingHoursEnd || undefined,
           workingHoursTimezone,
           amdEnabled,
+          vmDropMessage: vmDropMessage || undefined,
           tcpaEnabled,
         } as Parameters<typeof createCampaign.mutate>[0]["data"],
       },
@@ -936,6 +955,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
               workingHoursEnd={workingHoursEnd} setWorkingHoursEnd={setWorkingHoursEnd}
               workingHoursTimezone={workingHoursTimezone} setWorkingHoursTimezone={setWorkingHoursTimezone}
               amdEnabled={amdEnabled} setAmdEnabled={setAmdEnabled}
+              vmDropMessage={vmDropMessage} setVmDropMessage={setVmDropMessage}
               tcpaEnabled={tcpaEnabled} setTcpaEnabled={setTcpaEnabled}
             />
           )}
@@ -1022,6 +1042,7 @@ function LaunchModal({
   const [workingHoursEnd, setWorkingHoursEnd] = useState((campaign as Record<string, unknown>).workingHoursEnd as string ?? "");
   const [workingHoursTimezone, setWorkingHoursTimezone] = useState((campaign as Record<string, unknown>).workingHoursTimezone as string ?? "UTC");
   const [amdEnabled, setAmdEnabled] = useState(Boolean((campaign as Record<string, unknown>).amdEnabled));
+  const [vmDropMessage, setVmDropMessage] = useState(String((campaign as Record<string, unknown>).vmDropMessage ?? ""));
   const [tcpaEnabled, setTcpaEnabled] = useState(Boolean((campaign as Record<string, unknown>).tcpaEnabled));
 
   const pendingLeads = (leads ?? []).filter((l: { status: string }) => l.status === "pending");
@@ -1058,6 +1079,7 @@ function LaunchModal({
           workingHoursEnd: workingHoursEnd || undefined,
           workingHoursTimezone,
           amdEnabled,
+          vmDropMessage: vmDropMessage || undefined,
           tcpaEnabled,
         }),
       });
@@ -1247,6 +1269,7 @@ function LaunchModal({
                   workingHoursEnd={workingHoursEnd} setWorkingHoursEnd={setWorkingHoursEnd}
                   workingHoursTimezone={workingHoursTimezone} setWorkingHoursTimezone={setWorkingHoursTimezone}
                   amdEnabled={amdEnabled} setAmdEnabled={setAmdEnabled}
+                  vmDropMessage={vmDropMessage} setVmDropMessage={setVmDropMessage}
                   tcpaEnabled={tcpaEnabled} setTcpaEnabled={setTcpaEnabled}
                 />
               </div>
