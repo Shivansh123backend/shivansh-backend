@@ -448,14 +448,16 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
     return;
   }
 
-  // Don't process while AI is speaking — but save for replay after speak.ended
+  // Caller interrupted AI — stop playback immediately (barge-in) and queue for replay
   if (aiSpeaking.has(callControlId)) {
-    logger.info({ callControlId, callerText }, "Transcription during AI speech — buffered for replay");
-    // Keep the latest, longest utterance spoken during AI turn
     const prev = missedTranscription.get(callControlId) ?? "";
     if (clean.length > prev.trim().length) {
       missedTranscription.set(callControlId, clean);
     }
+    // Send playback_stop so Telnyx fires call.playback.ended, which will
+    // clear aiSpeaking and replay this buffered caller speech immediately.
+    telnyxAction(callControlId, "playback_stop", {}).catch(() => {});
+    logger.info({ callControlId, callerText }, "Caller barge-in — AI audio stopped, queued for replay");
     return;
   }
 
