@@ -16,7 +16,8 @@
 import WebSocket from "ws";
 import { type IncomingMessage } from "http";
 import { logger } from "../lib/logger.js";
-import { emitToSupervisors } from "../websocket/index.js";
+import { emitToSupervisors, getIO } from "../websocket/index.js";
+import { getCallListeners } from "../websocket/callListeners.js";
 import {
   isCustomBridgeAvailable,
   connectCustomBridge,
@@ -313,12 +314,23 @@ async function connectToElevenLabs(
         // ElevenLabs output is PCM 16kHz → convert to µ-law 8kHz for Telnyx
         const pcmBuf = Buffer.from(b64, "base64");
         const ulawBuf = pcm16ToUlaw(pcmBuf);
+        const ulawB64 = ulawBuf.toString("base64");
 
         if (telnyxWs.readyState === WebSocket.OPEN) {
           telnyxWs.send(JSON.stringify({
             event: "media",
-            media: { payload: ulawBuf.toString("base64") },
+            media: { payload: ulawB64 },
           }));
+        }
+
+        // Relay AI (agent) µ-law audio to any live-listening supervisors
+        const listeners = getCallListeners(callControlId);
+        if (listeners.length > 0) {
+          try {
+            const ioInst = getIO();
+            const audioPayload = { callControlId, payload: ulawB64, side: "agent" as const };
+            for (const sid of listeners) ioInst.to(sid).emit("call:audio", audioPayload);
+          } catch { /* IO not yet initialised */ }
         }
         return;
       }
@@ -533,6 +545,7 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
 
       if (bridge.useCustomBridge) {
         // Custom bridge: send raw µ-law base64 directly to Deepgram
+        // (customBridge.ts handles listener relay internally)
         sendAudioToCustomBridge(callControlId, payload);
       } else {
         // ElevenLabs: convert µ-law 8kHz → PCM 16kHz
@@ -542,6 +555,16 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
         bridge.elevenWs.send(JSON.stringify({
           user_audio_chunk: pcmBuf.toString("base64"),
         }));
+
+        // Relay raw µ-law caller audio to any live-listening supervisors
+        const listeners = getCallListeners(callControlId);
+        if (listeners.length > 0) {
+          try {
+            const ioInst = getIO();
+            const audioPayload = { callControlId, payload, side: "caller" as const };
+            for (const sid of listeners) ioInst.to(sid).emit("call:audio", audioPayload);
+          } catch { /* IO not yet initialised — safe to ignore */ }
+        }
       }
       return;
     }
