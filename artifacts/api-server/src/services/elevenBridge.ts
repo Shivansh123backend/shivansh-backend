@@ -236,16 +236,21 @@ async function connectToElevenLabs(
     logger.info({ callControlId }, "ElevenLabs WebSocket open — sending config override");
 
     // Override voice + prompt + first message per call
+    const backendUrl =
+      process.env.BACKEND_URL?.replace(/\/$/, "") ??
+      "https://shivanshbackend.replit.app";
     elevenWs.send(JSON.stringify({
       type: "conversation_initiation_client_data",
-      custom_llm_extra_body: {
-        temperature: 0.92,            // more varied, natural word choices — less predictable/robotic
-      },
       conversation_config_override: {
         agent: {
           prompt: { prompt: bridge.systemPrompt },
           first_message: bridge.firstMessage,
           language: "en",
+          // Route LLM calls through GPT-4o for Vapi-level conversation quality
+          llm: {
+            model_id: "custom",
+            custom_llm_url: `${backendUrl}/api/llm`,
+          },
         },
         tts: {
           voice_id: bridge.voiceId,
@@ -558,6 +563,46 @@ export function getAllActiveBridges(): BridgeInfo[] {
   return Array.from(activeBridges.values());
 }
 
+/**
+ * Patch the ElevenLabs agent to use our backend as a custom LLM.
+ * This routes all conversation LLM calls through GPT-4o instead of ElevenLabs' built-in model.
+ */
+async function patchAgentCustomLlm(agentId: string): Promise<void> {
+  const backendUrl =
+    process.env.BACKEND_URL?.replace(/\/$/, "") ??
+    "https://shivanshbackend.replit.app";
+  const customLlmUrl = `${backendUrl}/api/llm`;
+
+  const patchRes = await fetch(
+    `https://api.elevenlabs.io/v1/convai/agents/${agentId}`,
+    {
+      method: "PATCH",
+      headers: { "xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversation_config: {
+          agent: {
+            llm: {
+              model_id: "custom",
+              custom_llm_url: customLlmUrl,
+              temperature: 0.85,
+            },
+          },
+        },
+      }),
+    }
+  );
+
+  if (patchRes.ok) {
+    logger.info({ agentId, customLlmUrl }, "ElevenLabs agent patched with custom GPT-4o LLM");
+  } else {
+    const txt = await patchRes.text();
+    logger.warn(
+      { agentId, status: patchRes.status, body: txt },
+      "Could not patch ElevenLabs agent LLM — falling back to built-in model"
+    );
+  }
+}
+
 /** Pre-warm: ensure the base ElevenLabs agent exists on server start */
 export async function warmupElevenAgent(): Promise<void> {
   if (!ELEVENLABS_API_KEY) {
@@ -567,6 +612,8 @@ export async function warmupElevenAgent(): Promise<void> {
   try {
     const id = await getBaseAgentId();
     logger.info({ agentId: id }, "ElevenLabs base agent ready");
+    // Patch the agent to use GPT-4o as its LLM (Vapi-style quality)
+    await patchAgentCustomLlm(id);
   } catch (err) {
     logger.error({ err: String(err) }, "ElevenLabs warmup failed");
   }
