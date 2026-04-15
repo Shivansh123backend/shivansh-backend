@@ -852,7 +852,10 @@ TONE: Be a real person having a real conversation. Stay warm, listen actively, a
           .where(eq(voicesTable.id, agent.defaultVoiceId))
           .limit(1);
 
-        if (voice) voiceName = voice.voiceId;
+        if (voice) {
+          voiceName = voice.voiceId;
+          voiceProvider = voice.provider;
+        }
       }
     }
   }

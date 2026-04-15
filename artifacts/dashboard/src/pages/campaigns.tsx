@@ -91,20 +91,22 @@ function VoicePicker({
 }: {
   value: string;
   onChange: (v: string) => void;
-  dbVoices: Array<{ id: number; name: string; voiceId: string; gender: string; accent: string; previewUrl?: string; description?: string }>;
+  dbVoices: Array<{ id: number; name: string; voiceId: string; provider: string; gender: string; accent: string; previewUrl?: string; description?: string }>;
   elVoices: ElevenLabsVoice[];
   elLoading: boolean;
 }) {
   const { playing, play } = useAudioPlayer();
-  const allVoices = elVoices.length > 0 ? elVoices.map(v => ({
-    id: v.voice_id,
-    voiceId: v.voice_id,
-    name: v.name,
-    previewUrl: v.preview_url,
-    gender: v.labels?.gender ?? "female",
-    accent: v.labels?.accent ?? "us",
-    description: [v.labels?.description, v.labels?.use_case, v.labels?.age].filter(Boolean).join(", "),
-  })) : dbVoices.map(v => ({ ...v, id: String(v.id) }));
+  const allVoices = dbVoices.length > 0
+    ? dbVoices.map(v => ({ ...v, id: String(v.id) }))
+    : elVoices.map(v => ({
+        id: v.voice_id,
+        voiceId: v.voice_id,
+        name: v.name,
+        previewUrl: v.preview_url,
+        gender: v.labels?.gender ?? "female",
+        accent: v.labels?.accent ?? "us",
+        description: [v.labels?.description, v.labels?.use_case, v.labels?.age].filter(Boolean).join(", "),
+      }));
 
   return (
     <div className="space-y-2">
@@ -620,7 +622,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const [amdEnabled, setAmdEnabled] = useState(false);
   const [tcpaEnabled, setTcpaEnabled] = useState(false);
 
-  const { data: dbVoices } = useListVoices() as { data: Array<{ id: number; name: string; voiceId: string; gender: string; accent: string; previewUrl?: string; description?: string }> | undefined };
+  const { data: dbVoices } = useListVoices() as { data: Array<{ id: number; name: string; voiceId: string; provider: string; gender: string; accent: string; previewUrl?: string; description?: string }> | undefined };
   const { data: numbers } = useListNumbers() as { data: Array<NumberOption> | undefined };
   const { data: elVoices = [], isLoading: elLoading } = useQuery<ElevenLabsVoice[]>({
     queryKey: ["elevenlabs-voices"],
@@ -634,7 +636,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 
   const handleSubmit = () => {
     const resolvedVoiceProvider = selectedVoice !== "default"
-      ? ((dbVoices?.find(v => v.voiceId === selectedVoice) as { provider?: string } | undefined)?.provider ?? (elVoices.some(v => v.voice_id === selectedVoice) ? "elevenlabs" : undefined))
+      ? (dbVoices?.find(v => v.voiceId === selectedVoice)?.provider ?? (elVoices.some(v => v.voice_id === selectedVoice) ? "elevenlabs" : undefined))
       : undefined;
     createCampaign.mutate(
       {
@@ -986,7 +988,7 @@ function LaunchModal({
   onClose: () => void;
   onLaunched: () => void;
 }) {
-  const { data: dbVoices } = useListVoices() as { data: Array<{ id: number; name: string; voiceId: string; gender: string; accent: string; previewUrl?: string; description?: string }> | undefined };
+  const { data: dbVoices } = useListVoices() as { data: Array<{ id: number; name: string; voiceId: string; provider: string; gender: string; accent: string; previewUrl?: string; description?: string }> | undefined };
   const { data: numbers } = useListNumbers() as { data: Array<NumberOption> | undefined };
   const { data: leads } = useListLeads({ campaignId: campaign.id });
   const { data: elVoices = [], isLoading: elLoading } = useQuery<ElevenLabsVoice[]>({
@@ -1030,7 +1032,7 @@ function LaunchModal({
 
   const handleLaunch = async () => {
     const resolvedVoiceProvider = selectedVoice !== "default"
-      ? ((dbVoices?.find(v => v.voiceId === selectedVoice) as { provider?: string } | undefined)?.provider ?? (elVoices.some(v => v.voice_id === selectedVoice) ? "elevenlabs" : undefined))
+      ? (dbVoices?.find(v => v.voiceId === selectedVoice)?.provider ?? (elVoices.some(v => v.voice_id === selectedVoice) ? "elevenlabs" : undefined))
       : undefined;
     setIsLaunching(true);
     try {

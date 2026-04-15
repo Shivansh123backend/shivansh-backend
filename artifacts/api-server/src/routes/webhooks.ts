@@ -379,7 +379,7 @@ async function startTranscriptionAndGreet(callControlId: string): Promise<void> 
       if (!b) return;
 
       logger.info({ callControlId }, "Initial 30-s silence — no response — disconnecting politely");
-      const goodbye = "Hello? It seems there's no one there — I'll let you go. Have a great day, goodbye!";
+      const goodbye = "As there is no response, we are disconnecting the call. Goodbye.";
       try {
         const url = await generateTTSWithFallback(goodbye, b.voiceId, (b.voiceProvider ?? "elevenlabs") as VoiceProvider);
         await playWithFallback(callControlId, url, goodbye);
@@ -671,6 +671,7 @@ async function getCampaignByNumber(toNumber: string) {
   let agentName = "AI Assistant";
   let agentPrompt: string = campaign.agentPrompt ?? "";
   let resolvedVoiceId: string = DEFAULT_ELEVEN_VOICE;
+  let resolvedVoiceProvider: string = campaign.voiceProvider ?? "elevenlabs";
   let humanLikeMode = campaign.humanLike !== "false";
 
   if (campaign.agentId) {
@@ -690,8 +691,9 @@ async function getCampaignByNumber(toNumber: string) {
           .from(voicesTable)
           .where(eq(voicesTable.id, agent.defaultVoiceId))
           .limit(1);
-        if (voice?.provider === "elevenlabs" && voice.voiceId) {
+        if (voice?.voiceId) {
           resolvedVoiceId = voice.voiceId;
+          resolvedVoiceProvider = voice.provider;
         }
       }
     }
@@ -699,6 +701,7 @@ async function getCampaignByNumber(toNumber: string) {
 
   if (campaign.voice && campaign.voice !== "default") {
     resolvedVoiceId = campaign.voice;
+    resolvedVoiceProvider = campaign.voiceProvider ?? resolvedVoiceProvider;
   }
 
   const systemPrompt = buildSystemPrompt(
@@ -774,7 +777,7 @@ async function getCampaignByNumber(toNumber: string) {
     effectiveTransferNumber = campaign.transferNumber ?? null;
   }
 
-  return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId, holdMusicUrl, effectiveTransferNumber };
+  return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId, voiceProvider: resolvedVoiceProvider, holdMusicUrl, effectiveTransferNumber };
 }
 
 // ── Post-call summary & disposition (OpenAI on ElevenLabs transcript) ─────────
@@ -1019,8 +1022,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       // First message — warm, natural, with pause markers for human-like delivery
       const firstMessage = firstName
-        ? `Hey... is that ${firstName}?`
-        : `Hey there... is this a good time for a quick call? I'm ${agentName} from ${outboundCtx.campaignName}.`;
+        ? `Hello, am I speaking with ${firstName}?`
+        : `Hello, is this a good time? I'm ${agentName} calling from ${outboundCtx.campaignName}.`;
 
       logger.info(
         { callControlId, campaignId, phone: outboundCtx.phone, leadName, agentName, voiceId: callVoiceId, backgroundSound: outboundCtx.backgroundSound },
@@ -1101,7 +1104,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         return;
       }
 
-      const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId, holdMusicUrl: inboundHoldMusicUrl, effectiveTransferNumber } = result;
+      const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId, voiceProvider: inboundVoiceProvider, holdMusicUrl: inboundHoldMusicUrl, effectiveTransferNumber } = result;
       const firstMessage = `Hey... thanks for calling ${campaign.name}. I'm ${agentName} — how can I help you today?`;
 
       logger.info(
@@ -1119,7 +1122,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         startedAt: new Date(),
         transferNumber: effectiveTransferNumber ?? undefined,  // per-number override > campaign default
         holdMusicUrl: inboundHoldMusicUrl,
-        voiceProvider: campaign.voiceProvider ?? "elevenlabs",
+        voiceProvider: inboundVoiceProvider ?? campaign.voiceProvider ?? "elevenlabs",
         voiceId: inboundVoiceId,
         systemPrompt,
         firstMessage,

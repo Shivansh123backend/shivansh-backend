@@ -6,7 +6,7 @@ import { initWebSocket } from "./websocket/index.js";
 import { getCallQueue } from "./queue/callQueue.js";
 import { closeRedis } from "./lib/redis.js";
 import { closeQueue } from "./queue/callQueue.js";
-import { ensureAdminUser, ensurePhoneNumbers, ensureElevenLabsVoices } from "./lib/startup.js";
+import { ensureAdminUser, ensurePhoneNumbers, ensureElevenLabsVoices, ensureCatalogVoices } from "./lib/startup.js";
 import { handleTelnyxMediaSocket, warmupElevenAgent } from "./services/elevenBridge.js";
 import { handleListenForkSocket } from "./websocket/listenFork.js";
 import { startCallbackScheduler } from "./routes/callbacks.js";
@@ -80,6 +80,10 @@ ensurePhoneNumbers().catch((err) => {
 
 ensureElevenLabsVoices().catch((err) => {
   logger.warn({ err }, "ensureElevenLabsVoices failed — continuing anyway");
+});
+
+ensureCatalogVoices().catch((err) => {
+  logger.warn({ err }, "ensureCatalogVoices failed — continuing anyway");
 });
 
 warmupElevenAgent().catch((err) => {

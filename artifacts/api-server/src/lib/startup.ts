@@ -4,6 +4,7 @@ import { eq, count } from "drizzle-orm";
 import bcrypt from "bcrypt";
 import axios from "axios";
 import { logger } from "./logger.js";
+import { VOICE_CATALOG } from "../services/voiceRegistry.js";
 
 export async function ensureAdminUser(): Promise<void> {
   const adminEmail = process.env.ADMIN_EMAIL ?? "admin@example.com";
@@ -110,6 +111,38 @@ export async function ensureElevenLabsVoices(): Promise<void> {
   } catch (err) {
     logger.warn({ err }, "ElevenLabs voice sync failed on startup — continuing");
   }
+}
+
+export async function ensureCatalogVoices(): Promise<void> {
+  const providers: Array<"deepgram" | "cartesia"> = ["deepgram", "cartesia"];
+  let seeded = 0;
+  for (const provider of providers) {
+    const voices = VOICE_CATALOG[provider];
+    for (const v of voices) {
+      try {
+        const existing = await db
+          .select({ id: voicesTable.id })
+          .from(voicesTable)
+          .where(eq(voicesTable.voiceId, v.voice_id))
+          .limit(1);
+        if (existing.length === 0) {
+          await db.insert(voicesTable).values({
+            name: v.name,
+            provider,
+            voiceId: v.voice_id,
+            gender: v.gender as "male" | "female",
+            accent: (v.accent ?? "us") as "us" | "uk" | "indian" | "australian" | "canadian" | "other",
+            language: "en",
+            description: (v as { description?: string }).description ?? null,
+          });
+          seeded++;
+        }
+      } catch (err) {
+        logger.warn({ err, provider, voiceId: v.voice_id }, "Failed to seed catalog voice — skipping");
+      }
+    }
+  }
+  logger.info({ seeded }, "Catalog voices (Deepgram + Cartesia) ensured in DB");
 }
 
 async function ensureDefaultUsers(): Promise<void> {
