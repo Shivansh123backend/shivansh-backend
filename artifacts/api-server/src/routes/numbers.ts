@@ -4,6 +4,10 @@ import { phoneNumbersTable, campaignsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { z } from "zod";
+import axios from "axios";
+import { logger } from "../lib/logger.js";
+
+const TELNYX_API_BASE = "https://api.telnyx.com/v2";
 
 const router: IRouter = Router();
 
@@ -126,6 +130,80 @@ router.delete("/numbers/:id", authenticate, requireRole("admin"), async (req, re
   }
   await db.delete(phoneNumbersTable).where(eq(phoneNumbersTable.id, id));
   res.json({ ok: true });
+});
+
+// ── POST /numbers/sync-from-telnyx ───────────────────────────────────────────
+// Fetches all phone numbers from the Telnyx account via API and upserts them
+// into the local DB so they can be used as verified origination numbers.
+router.post("/numbers/sync-from-telnyx", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) {
+    res.status(500).json({ error: "TELNYX_API_KEY not configured" });
+    return;
+  }
+
+  try {
+    // Paginate through all numbers (Telnyx returns up to 250 per page)
+    let pageToken: string | null = null;
+    const telnyxNumbers: string[] = [];
+
+    do {
+      const url = pageToken
+        ? `${TELNYX_API_BASE}/phone_numbers?page[size]=250&page[after]=${pageToken}`
+        : `${TELNYX_API_BASE}/phone_numbers?page[size]=250`;
+
+      const resp = await axios.get(url, {
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        timeout: 15_000,
+      });
+
+      const data = resp.data?.data ?? [];
+      for (const n of data) {
+        if (n.phone_number) telnyxNumbers.push(n.phone_number as string);
+      }
+      pageToken = resp.data?.meta?.next_page_token ?? null;
+    } while (pageToken);
+
+    if (telnyxNumbers.length === 0) {
+      res.json({ synced: 0, message: "No phone numbers found in your Telnyx account. Purchase numbers at portal.telnyx.com." });
+      return;
+    }
+
+    // Upsert: insert if not exists, skip if already present
+    let synced = 0;
+    for (const phoneNumber of telnyxNumbers) {
+      const [existing] = await db
+        .select({ id: phoneNumbersTable.id })
+        .from(phoneNumbersTable)
+        .where(eq(phoneNumbersTable.phoneNumber, phoneNumber))
+        .limit(1);
+
+      if (!existing) {
+        await db.insert(phoneNumbersTable).values({
+          phoneNumber,
+          provider: "telnyx",
+          status: "active",
+          direction: "both",
+          priority: 1,
+        });
+        synced++;
+      }
+    }
+
+    logger.info({ total: telnyxNumbers.length, synced }, "Telnyx number sync complete");
+    res.json({
+      synced,
+      total: telnyxNumbers.length,
+      message: synced > 0
+        ? `Synced ${synced} new number${synced !== 1 ? "s" : ""} from Telnyx (${telnyxNumbers.length} total in account)`
+        : `All ${telnyxNumbers.length} Telnyx numbers are already in your database`,
+    });
+  } catch (err) {
+    const status = (err as { response?: { status?: number } }).response?.status;
+    const detail = (err as { response?: { data?: unknown } }).response?.data;
+    logger.error({ err: String(err), status, detail }, "Telnyx number sync failed");
+    res.status(502).json({ error: `Telnyx API error (${status ?? "unknown"}): ${String(err)}` });
+  }
 });
 
 export default router;

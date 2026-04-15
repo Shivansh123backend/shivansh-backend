@@ -173,8 +173,24 @@ export default function NumbersPage() {
   const { data: numbers, isLoading } = useListNumbers();
   const { data: campaigns } = useListCampaigns();
   const [showCreate, setShowCreate] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const qc = useQueryClient();
+  const { toast } = useToast();
 
   const campaignMap = Object.fromEntries((campaigns ?? []).map((c: { id: number; name: string }) => [c.id, c.name]));
+
+  const handleSyncFromTelnyx = async () => {
+    setSyncing(true);
+    try {
+      const result = await customFetch<{ synced: number; total: number; message: string }>("/api/numbers/sync-from-telnyx", { method: "POST" });
+      await qc.invalidateQueries({ queryKey: getListNumbersQueryKey() });
+      toast({ title: result.message ?? `Synced ${result.synced} numbers from Telnyx` });
+    } catch {
+      toast({ title: "Sync failed — check that TELNYX_API_KEY is configured correctly", variant: "destructive" });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   return (
     <Layout>
@@ -183,9 +199,21 @@ export default function NumbersPage() {
         title="Phone Numbers"
         subtitle={`${(numbers ?? []).length} configured`}
         action={
-          <Button size="sm" className="font-mono text-xs uppercase tracking-wider h-7 px-3" onClick={() => setShowCreate(true)}>
-            <Plus className="w-3 h-3 mr-1.5" /> Add Number
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="font-mono text-xs uppercase tracking-wider h-7 px-3 border-primary/40 text-primary hover:bg-primary/10"
+              onClick={handleSyncFromTelnyx}
+              disabled={syncing}
+            >
+              <RefreshCw className={`w-3 h-3 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
+              {syncing ? "Syncing…" : "Sync from Telnyx"}
+            </Button>
+            <Button size="sm" className="font-mono text-xs uppercase tracking-wider h-7 px-3" onClick={() => setShowCreate(true)}>
+              <Plus className="w-3 h-3 mr-1.5" /> Add Number
+            </Button>
+          </div>
         }
       />
       <div className="p-6">

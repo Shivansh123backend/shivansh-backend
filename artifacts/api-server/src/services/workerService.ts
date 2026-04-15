@@ -54,6 +54,16 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
     return { success: false, error: "TELNYX_CONNECTION_ID environment variable not set. Get it from portal.telnyx.com → Call Control Applications." };
   }
 
+  // Guard against placeholder / clearly invalid from numbers before wasting a Telnyx API call.
+  // A valid E.164 number starts with '+' followed by 7–15 digits.
+  const fromTrimmed = (payload.from_number ?? "").trim();
+  if (!fromTrimmed || fromTrimmed === "+10000000000" || !/^\+\d{7,15}$/.test(fromTrimmed)) {
+    return {
+      success: false,
+      error: `Invalid origination number "${fromTrimmed}". Go to Phone Numbers → Sync from Telnyx to import your verified Telnyx numbers, then assign one to this campaign.`,
+    };
+  }
+
   // Encode campaign context in client_state so webhook knows which campaign this call is for
   const clientStateData = {
     type: "outbound",
@@ -117,11 +127,23 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
     return { success: true, data: response.data, callControlId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const resp = (err as Record<string, unknown> & { response?: { status?: number; data?: { errors?: Array<{ detail?: string; title?: string }> } } })?.response;
+    const resp = (err as Record<string, unknown> & { response?: { status?: number; data?: { errors?: Array<{ detail?: string; title?: string; code?: string }> } } })?.response;
     const status = resp?.status;
     const detail = resp?.data;
-    const telnyxReason = detail?.errors?.[0]?.detail ?? detail?.errors?.[0]?.title ?? msg;
-    logger.error({ phone: payload.phone, err: msg, status, detail }, "Telnyx direct call failed");
+    const firstErr = detail?.errors?.[0];
+    const telnyxReason = firstErr?.detail ?? firstErr?.title ?? msg;
+    const telnyxCode = firstErr?.code ?? "";
+
+    logger.error({ phone: payload.phone, err: msg, status, detail, telnyxCode }, "Telnyx direct call failed");
+
+    // D51 = unverified origination number — give a clear actionable error
+    if (status === 403 || telnyxCode === "D51" || telnyxReason.includes("non-Telnyx") || telnyxReason.includes("Unverified origination")) {
+      return {
+        success: false,
+        error: `Telnyx 403 D51: The origination number "${payload.from_number}" is not verified in your Telnyx account. Fix: Go to Phone Numbers page → click "Sync from Telnyx" to import your real verified numbers, then assign one to this campaign.`,
+      };
+    }
+
     return { success: false, error: `Telnyx ${status ?? "error"}: ${telnyxReason}` };
   }
 }
