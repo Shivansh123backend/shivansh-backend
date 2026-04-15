@@ -8,6 +8,7 @@ import { closeRedis } from "./lib/redis.js";
 import { closeQueue } from "./queue/callQueue.js";
 import { ensureAdminUser, ensurePhoneNumbers, ensureElevenLabsVoices } from "./lib/startup.js";
 import { handleTelnyxMediaSocket, warmupElevenAgent } from "./services/elevenBridge.js";
+import { handleListenForkSocket } from "./websocket/listenFork.js";
 import { startCallbackScheduler } from "./routes/callbacks.js";
 
 const rawPort = process.env["PORT"];
@@ -39,7 +40,13 @@ httpServer.prependListener("upgrade", (req, socket, head) => {
     rawWss.handleUpgrade(req, socket as import("net").Socket, head, (ws) => {
       handleTelnyxMediaSocket(ws, req);
     });
-    // Stop here — don't let Socket.IO see this upgrade
+    return;
+  }
+  if (url.startsWith("/ws/listen/")) {
+    logger.info({ url }, "Telnyx listen fork upgrade — handling");
+    rawWss.handleUpgrade(req, socket as import("net").Socket, head, (ws) => {
+      handleListenForkSocket(ws, req);
+    });
     return;
   }
   // All other paths fall through to Socket.IO's upgrade handler
