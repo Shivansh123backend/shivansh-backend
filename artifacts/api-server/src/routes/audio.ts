@@ -34,24 +34,29 @@ const AMBIENT_SOURCES: Record<string, string[]> = {
 
 const HOLD_MUSIC_SOURCES: Record<string, string[]> = {
   default: [
-    "https://freesound.org/data/previews/414/414709_7037-lq.mp3",
     "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    "https://freesound.org/data/previews/414/414709_7037-lq.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
   ],
   jazz: [
-    "https://freesound.org/data/previews/541/541196_3755359-lq.mp3",
     "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
+    "https://freesound.org/data/previews/541/541196_3755359-lq.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
   ],
   corporate: [
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
     "https://freesound.org/data/previews/559/559539_9497060-lq.mp3",
-    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
   ],
   smooth: [
-    "https://freesound.org/data/previews/519/519439_9379544-lq.mp3",
     "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+    "https://freesound.org/data/previews/519/519439_9379544-lq.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
   ],
   classical: [
-    "https://freesound.org/data/previews/612/612095_12517891-lq.mp3",
     "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+    "https://freesound.org/data/previews/612/612095_12517891-lq.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-11.mp3",
   ],
 };
 
