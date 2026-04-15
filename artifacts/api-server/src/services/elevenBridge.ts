@@ -16,6 +16,12 @@
 import WebSocket from "ws";
 import { type IncomingMessage } from "http";
 import { logger } from "../lib/logger.js";
+import {
+  isCustomBridgeAvailable,
+  connectCustomBridge,
+  sendAudioToCustomBridge,
+  closeCustomBridge,
+} from "./customBridge.js";
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY ?? "";
 const ELEVEN_WS_BASE = "wss://api.elevenlabs.io/v1/convai/conversation";
@@ -106,7 +112,11 @@ export interface BridgeInfo {
   onCallEnded?: () => void;
 }
 
-type BridgeEntry = BridgeInfo & { elevenWs: WebSocket | null; sessionToken: string };
+type BridgeEntry = BridgeInfo & {
+  elevenWs: WebSocket | null;
+  sessionToken: string;
+  useCustomBridge: boolean;   // true = Deepgram+GPT-4o+Cartesia, false = ElevenLabs ConvAI
+};
 
 const activeBridges = new Map<string, BridgeEntry>();               // callControlId → bridge
 const sessionIndex = new Map<string, string>();                      // sessionToken → callControlId
@@ -465,7 +475,7 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
       return;
     }
 
-    // ── start: stream metadata → connect to ElevenLabs ────────────────────────
+    // ── start: stream metadata → connect to voice provider ───────────────────
     if (event === "start") {
       const bridge = activeBridges.get(callControlId);
       if (!bridge) {
@@ -473,31 +483,50 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
         ws.close();
         return;
       }
-      try {
-        await connectToElevenLabs(callControlId, ws);
-      } catch (err) {
-        logger.error({ err: String(err), callControlId }, "Failed to connect to ElevenLabs");
-        ws.close();
+
+      if (bridge.useCustomBridge) {
+        // Deepgram + GPT-4o + Cartesia (Vapi-level quality)
+        connectCustomBridge(callControlId, {
+          systemPrompt: bridge.systemPrompt,
+          firstMessage: bridge.firstMessage,
+          telnyxWs: ws,
+          transcriptCallback: (text) => {
+            bridge.transcript.push(`Caller: ${text}`);
+          },
+        });
+      } else {
+        // ElevenLabs ConvAI (fallback)
+        try {
+          await connectToElevenLabs(callControlId, ws);
+        } catch (err) {
+          logger.error({ err: String(err), callControlId }, "Failed to connect to ElevenLabs");
+          ws.close();
+        }
       }
       return;
     }
 
-    // ── media: caller audio → forward to ElevenLabs ───────────────────────────
+    // ── media: caller audio → forward to active voice provider ───────────────
     if (event === "media") {
       const bridge = activeBridges.get(callControlId);
-      if (!bridge?.elevenWs || bridge.elevenWs.readyState !== WebSocket.OPEN) return;
+      if (!bridge) return;
 
       const mediaPayload = (msg["media"] as Record<string, unknown> | undefined);
       const payload = mediaPayload?.["payload"] as string | undefined;
       if (!payload) return;
 
-      // Telnyx sends µ-law 8kHz → convert to PCM 16kHz for ElevenLabs
-      const ulawBuf = Buffer.from(payload, "base64");
-      const pcmBuf  = ulawToPcm16(ulawBuf);
-
-      bridge.elevenWs.send(JSON.stringify({
-        user_audio_chunk: pcmBuf.toString("base64"),
-      }));
+      if (bridge.useCustomBridge) {
+        // Custom bridge: send raw µ-law base64 directly to Deepgram
+        sendAudioToCustomBridge(callControlId, payload);
+      } else {
+        // ElevenLabs: convert µ-law 8kHz → PCM 16kHz
+        if (!bridge.elevenWs || bridge.elevenWs.readyState !== WebSocket.OPEN) return;
+        const ulawBuf = Buffer.from(payload, "base64");
+        const pcmBuf  = ulawToPcm16(ulawBuf);
+        bridge.elevenWs.send(JSON.stringify({
+          user_audio_chunk: pcmBuf.toString("base64"),
+        }));
+      }
       return;
     }
 
@@ -526,16 +555,23 @@ export function initBridge(
   info: Omit<BridgeInfo, "transcript" | "pendingTransfer" | "callControlId">
 ): void {
   const sessionToken = makeSessionToken();
+  const useCustomBridge = isCustomBridgeAvailable();
   activeBridges.set(callControlId, {
     ...info,
-    callControlId,        // always populate so getAllActiveBridges() can return it
+    callControlId,
     transcript: [],
     pendingTransfer: false,
     elevenWs: null,
     sessionToken,
+    useCustomBridge,
   });
   sessionIndex.set(sessionToken, callControlId);
-  logger.info({ callControlId, sessionToken, direction: info.direction, voiceId: info.voiceId }, "Bridge registered");
+  logger.info(
+    { callControlId, sessionToken, direction: info.direction, voiceId: info.voiceId, useCustomBridge },
+    useCustomBridge
+      ? "Bridge registered → Deepgram + GPT-4o + Cartesia"
+      : "Bridge registered → ElevenLabs ConvAI"
+  );
 }
 
 export function getBridgeInfo(callControlId: string): BridgeInfo | undefined {
@@ -550,7 +586,9 @@ export function setRecordingUrl(callControlId: string, url: string): void {
 export function closeBridge(callControlId: string): void {
   const bridge = activeBridges.get(callControlId);
   if (!bridge) return;
-  if (bridge.elevenWs && bridge.elevenWs.readyState === WebSocket.OPEN) {
+  if (bridge.useCustomBridge) {
+    closeCustomBridge(callControlId);
+  } else if (bridge.elevenWs && bridge.elevenWs.readyState === WebSocket.OPEN) {
     bridge.elevenWs.close();
   }
   sessionIndex.delete(bridge.sessionToken);
