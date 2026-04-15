@@ -999,9 +999,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         onTransferRequested: async (transferTo) => {
           try {
             const bridge = getBridgeInfo(callControlId);
+            // Stop STT and ALL active playback before transferring so no audio bleeds through
+            await Promise.allSettled([
+              telnyxAction(callControlId, "transcription_stop", {}),
+              telnyxAction(callControlId, "playback_stop", {}),
+            ]);
+            backgroundSoundActive.delete(callControlId);
             await executeTransfer(callControlId, transferTo, fromNumber, bridge?.holdMusicUrl);
-            logger.info({ callControlId, transferTo }, "Outbound transfer executed — hold music active, stopping media fork");
-            await telnyxAction(callControlId, "fork_stop", {}).catch(() => {});
+            logger.info({ callControlId, transferTo }, "Outbound transfer executed — hold music active for caller");
           } catch (err) {
             logger.error({ err: String(err), callControlId }, "Outbound transfer failed in bridge callback");
           }
@@ -1074,9 +1079,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         onTransferRequested: async (transferTo) => {
           try {
             const bridge = getBridgeInfo(callControlId);
+            // Stop STT and ALL active playback before transferring so no audio bleeds through
+            await Promise.allSettled([
+              telnyxAction(callControlId, "transcription_stop", {}),
+              telnyxAction(callControlId, "playback_stop", {}),
+            ]);
+            backgroundSoundActive.delete(callControlId);
             await executeTransfer(callControlId, transferTo, toNumber, bridge?.holdMusicUrl);
-            logger.info({ callControlId, transferTo }, "Inbound transfer executed — hold music active, stopping media fork");
-            await telnyxAction(callControlId, "fork_stop", {}).catch(() => {});
+            logger.info({ callControlId, transferTo }, "Inbound transfer executed — hold music active for caller");
           } catch (err) {
             logger.error({ err: String(err), callControlId }, "Inbound transfer failed in bridge callback");
           }
@@ -1119,7 +1129,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
     // ── 2. Transfer bridged ───────────────────────────────────────────────────
     if (eventType === "call.bridged") {
-      logger.info({ callControlId, to: toNumber, from: fromNumber }, "Call bridged — transfer successful");
+      logger.info({ callControlId, to: toNumber, from: fromNumber }, "Call bridged — stopping any residual audio then handing off");
+      // Stop any audio still playing on the original leg (hold music from transfer action,
+      // background overlays, etc.) so neither party hears looping audio through the bridge.
+      telnyxAction(callControlId, "playback_stop", {}).catch(() => {});
       return;
     }
 
@@ -1225,9 +1238,16 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         const bridge = getBridgeInfo(callControlId);
         const ownNum = callOwnNumber.get(callControlId) ?? "";
         if (bridge?.transferNumber) {
-          logger.info({ callControlId, to: bridge.transferNumber }, "TTS done — executing pending transfer");
+          logger.info({ callControlId, to: bridge.transferNumber }, "TTS done — stopping STT + overlays then executing transfer");
+          // 1. Stop transcription and ALL active playback (background sound, overlays)
+          //    BEFORE the transfer so no audio bleeds into the bridged call.
+          await Promise.allSettled([
+            telnyxAction(callControlId, "transcription_stop", {}),
+            telnyxAction(callControlId, "playback_stop", {}),
+          ]);
+          backgroundSoundActive.delete(callControlId);
+          // 2. Execute Telnyx transfer (plays hold music to caller while ringing agent)
           executeTransfer(callControlId, bridge.transferNumber, ownNum, bridge.holdMusicUrl)
-            .then(() => telnyxAction(callControlId, "transcription_stop", {}).catch(() => {}))
             .catch((err) => logger.error({ err: String(err), callControlId }, "Transfer after playback.ended failed"));
         }
         return; // never replay missed speech after a transfer
