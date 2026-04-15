@@ -227,6 +227,7 @@ interface DialingEngineProps {
   workingHoursEnd: string; setWorkingHoursEnd: (v: string) => void;
   workingHoursTimezone: string; setWorkingHoursTimezone: (v: string) => void;
   amdEnabled: boolean; setAmdEnabled: (v: boolean) => void;
+  tcpaEnabled: boolean; setTcpaEnabled: (v: boolean) => void;
 }
 
 const TIMEZONES = [
@@ -258,6 +259,7 @@ function DialingEngineFields({
   workingHoursEnd, setWorkingHoursEnd,
   workingHoursTimezone, setWorkingHoursTimezone,
   amdEnabled, setAmdEnabled,
+  tcpaEnabled, setTcpaEnabled,
 }: DialingEngineProps) {
   const isPredictive = dialingMode === "predictive";
 
@@ -397,6 +399,21 @@ function DialingEngineFields({
           <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${amdEnabled ? "translate-x-4" : "translate-x-0"}`} />
         </button>
       </div>
+
+      {/* TCPA toggle */}
+      <div className="flex items-center justify-between rounded border border-border px-3 py-2.5">
+        <div>
+          <p className="text-xs font-mono font-medium text-foreground">TCPA Calling Hours (8 AM – 9 PM local)</p>
+          <p className="text-[10px] font-mono text-muted-foreground mt-0.5">Skip leads outside 8 AM–9 PM in their local timezone. Disable for testing or non-US campaigns.</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setTcpaEnabled(!tcpaEnabled)}
+          className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors ${tcpaEnabled ? "bg-primary" : "bg-muted"}`}
+        >
+          <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${tcpaEnabled ? "translate-x-4" : "translate-x-0"}`} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -436,6 +453,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const [workingHoursEnd, setWorkingHoursEnd] = useState("");
   const [workingHoursTimezone, setWorkingHoursTimezone] = useState("UTC");
   const [amdEnabled, setAmdEnabled] = useState(false);
+  const [tcpaEnabled, setTcpaEnabled] = useState(false);
 
   const { data: dbVoices } = useListVoices() as { data: Array<{ id: number; name: string; voiceId: string; gender: string; accent: string; previewUrl?: string; description?: string }> | undefined };
   const { data: numbers } = useListNumbers() as { data: Array<{ id: number; phoneNumber: string; provider: string; status: string }> | undefined };
@@ -476,6 +494,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           workingHoursEnd: workingHoursEnd || undefined,
           workingHoursTimezone,
           amdEnabled,
+          tcpaEnabled,
         } as Parameters<typeof createCampaign.mutate>[0]["data"],
       },
       {
@@ -746,6 +765,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
               workingHoursEnd={workingHoursEnd} setWorkingHoursEnd={setWorkingHoursEnd}
               workingHoursTimezone={workingHoursTimezone} setWorkingHoursTimezone={setWorkingHoursTimezone}
               amdEnabled={amdEnabled} setAmdEnabled={setAmdEnabled}
+              tcpaEnabled={tcpaEnabled} setTcpaEnabled={setTcpaEnabled}
             />
           )}
         </div>
@@ -831,6 +851,7 @@ function LaunchModal({
   const [workingHoursEnd, setWorkingHoursEnd] = useState((campaign as Record<string, unknown>).workingHoursEnd as string ?? "");
   const [workingHoursTimezone, setWorkingHoursTimezone] = useState((campaign as Record<string, unknown>).workingHoursTimezone as string ?? "UTC");
   const [amdEnabled, setAmdEnabled] = useState(Boolean((campaign as Record<string, unknown>).amdEnabled));
+  const [tcpaEnabled, setTcpaEnabled] = useState(Boolean((campaign as Record<string, unknown>).tcpaEnabled));
 
   const pendingLeads = (leads ?? []).filter((l: { status: string }) => l.status === "pending");
   const calledLeads = (leads ?? []).filter((l: { status: string }) => ["called", "callback", "completed"].includes(l.status));
@@ -862,6 +883,7 @@ function LaunchModal({
           workingHoursEnd: workingHoursEnd || undefined,
           workingHoursTimezone,
           amdEnabled,
+          tcpaEnabled,
         }),
       });
       if (resetLeads && calledLeads.length > 0) {
@@ -1050,6 +1072,7 @@ function LaunchModal({
                   workingHoursEnd={workingHoursEnd} setWorkingHoursEnd={setWorkingHoursEnd}
                   workingHoursTimezone={workingHoursTimezone} setWorkingHoursTimezone={setWorkingHoursTimezone}
                   amdEnabled={amdEnabled} setAmdEnabled={setAmdEnabled}
+                  tcpaEnabled={tcpaEnabled} setTcpaEnabled={setTcpaEnabled}
                 />
               </div>
             )}

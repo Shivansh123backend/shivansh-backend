@@ -52,6 +52,7 @@ const createCampaignSchema = z.object({
   workingHoursEnd: z.string().nullish(),
   workingHoursTimezone: z.string().default("UTC"),
   amdEnabled: z.boolean().default(false),
+  tcpaEnabled: z.boolean().default(false),
   voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).default("elevenlabs").nullish(),
   vmDropMessage: z.string().nullish(),
 });
@@ -145,6 +146,7 @@ const updateCampaignSchema = z.object({
   workingHoursEnd: z.string().nullish(),
   workingHoursTimezone: z.string().optional(),
   amdEnabled: z.boolean().optional(),
+  tcpaEnabled: z.boolean().optional(),
   voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).optional(),
   vmDropMessage: z.string().nullish(),
 });
@@ -560,8 +562,8 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       return;
     }
 
-    // TCPA per-lead timezone check (8am–9pm in lead's local time)
-    if (!isTcpaCallable(normPhone)) {
+    // TCPA per-lead timezone check (8am–9pm in lead's local time) — only if campaign has it enabled
+    if (campaign.tcpaEnabled && !isTcpaCallable(normPhone)) {
       logger.info({ leadId: lead.id, phone: lead.phone }, "Lead skipped — outside TCPA calling hours for lead's timezone");
       return; // Don't update status — retry later when it's within hours
     }
