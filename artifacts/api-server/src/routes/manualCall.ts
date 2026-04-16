@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { campaignsTable, aiAgentsTable, voicesTable, phoneNumbersTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, asc, desc } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { triggerCall } from "../services/workerService.js";
 import { z } from "zod";
@@ -57,7 +57,7 @@ async function handleManualCall(req: import("express").Request, res: import("exp
 
 6. UNAVAILABLE: If the contact is unavailable or requests a callback, note their preferred time and close politely.`;
   let voiceName = campaign.voice ?? "default";
-  let fromNumber = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
+  let fromNumber: string | null = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? null;
   const transferNumber = campaign.transferNumber ?? campaign.transferRules ?? undefined;
 
   // If no direct prompt on campaign, try linked AI agent
@@ -83,20 +83,30 @@ async function handleManualCall(req: import("express").Request, res: import("exp
     }
   }
 
-  // If no fromNumber on campaign, try campaign's assigned phone number
-  if (!campaign.fromNumber) {
-    const [phoneRow] = await db
+  // Resolve fromNumber: campaign field → campaign-assigned pool → any active DB number → placeholder
+  if (!fromNumber) {
+    const [campaignRow] = await db
       .select()
       .from(phoneNumbersTable)
       .where(and(eq(phoneNumbersTable.campaignId, campaign_id), eq(phoneNumbersTable.status, "active")))
       .limit(1);
 
-    if (phoneRow) fromNumber = phoneRow.phoneNumber;
+    if (campaignRow) {
+      fromNumber = campaignRow.phoneNumber;
+    } else {
+      const [anyRow] = await db
+        .select()
+        .from(phoneNumbersTable)
+        .where(eq(phoneNumbersTable.status, "active"))
+        .orderBy(asc(phoneNumbersTable.priority), desc(phoneNumbersTable.id))
+        .limit(1);
+      if (anyRow) fromNumber = anyRow.phoneNumber;
+    }
   }
 
   const result = await triggerCall({
     to: phone,
-    from: fromNumber,
+    from: fromNumber ?? "+10000000000",
     script,
     voice: voiceName,
     transfer_number: transferNumber,

@@ -11,7 +11,7 @@ import {
   phoneNumbersTable,
   dncListTable,
 } from "@workspace/db";
-import { eq, and, inArray, sql, asc } from "drizzle-orm";
+import { eq, and, inArray, sql, asc, desc } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { emitToSupervisors } from "../websocket/index.js";
@@ -824,7 +824,7 @@ TONE: Be a real person having a real conversation. Stay warm, listen actively, a
   let script = parts.join("\n\n");
   let voiceName = campaign.voice ?? "default";
   let voiceProvider = (campaign.voiceProvider ?? "elevenlabs") as string;
-  let fromNumber = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? "+10000000000";
+  let fromNumber: string | null = campaign.fromNumber ?? process.env.DEFAULT_FROM_NUMBER ?? null;
   const transferNumber = campaign.transferNumber ?? campaign.transferRules ?? undefined;
 
   // Background sound to pass to worker
@@ -865,18 +865,34 @@ TONE: Be a real person having a real conversation. Stay warm, listen actively, a
     voiceProvider = "elevenlabs";
   }
 
-  // Supplement fromNumber from campaign's assigned phone number if not set directly
-  if (!campaign.fromNumber) {
-    const [phoneRow] = await db
+  // Resolve fromNumber: campaign field → campaign-assigned pool → any active DB number → placeholder
+  if (!fromNumber) {
+    // Try number assigned specifically to this campaign
+    const [campaignRow] = await db
       .select()
       .from(phoneNumbersTable)
       .where(and(eq(phoneNumbersTable.campaignId, campaignId), eq(phoneNumbersTable.status, "active")))
       .limit(1);
 
-    if (phoneRow) fromNumber = phoneRow.phoneNumber;
+    if (campaignRow) {
+      fromNumber = campaignRow.phoneNumber;
+    } else {
+      // Final fallback: pick the best available active number from the whole pool
+      // (ordered by priority asc, id desc so synced/newer numbers come first)
+      const [anyRow] = await db
+        .select()
+        .from(phoneNumbersTable)
+        .where(eq(phoneNumbersTable.status, "active"))
+        .orderBy(asc(phoneNumbersTable.priority), desc(phoneNumbersTable.id))
+        .limit(1);
+      if (anyRow) fromNumber = anyRow.phoneNumber;
+    }
   }
 
-  return { script, voiceName, voiceProvider, fromNumber, transferNumber, backgroundSound, holdMusicUrl };
+  // Last-resort sentinel — will be caught by workerService guard with a clear error
+  const resolvedFromNumber = fromNumber ?? "+10000000000";
+
+  return { script, voiceName, voiceProvider, fromNumber: resolvedFromNumber, transferNumber, backgroundSound, holdMusicUrl };
 }
 
 // Shared logger (pino-style simple wrapper)

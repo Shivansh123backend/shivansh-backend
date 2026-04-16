@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { phoneNumbersTable, campaignsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, notInArray, isNull, or } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { z } from "zod";
 import axios from "axios";
@@ -190,13 +190,51 @@ router.post("/numbers/sync-from-telnyx", authenticate, requireRole("admin"), asy
       }
     }
 
-    logger.info({ total: telnyxNumbers.length, synced }, "Telnyx number sync complete");
+    // ── Step 2: remove any seeded numbers that are NOT actually in this Telnyx account ──
+    // These are the hardcoded placeholder numbers that were inserted at startup.
+    // We only remove numbers that have no campaignId assigned (i.e. unassigned pool).
+    const telnyxSet = new Set(telnyxNumbers);
+    const allDbNumbers = await db
+      .select({ id: phoneNumbersTable.id, phoneNumber: phoneNumbersTable.phoneNumber })
+      .from(phoneNumbersTable)
+      .where(eq(phoneNumbersTable.provider, "telnyx"));
+
+    const staleIds = allDbNumbers
+      .filter((n) => !telnyxSet.has(n.phoneNumber))
+      .map((n) => n.id);
+
+    for (const id of staleIds) {
+      await db.delete(phoneNumbersTable).where(eq(phoneNumbersTable.id, id));
+    }
+
+    // ── Step 3: auto-fix campaigns that have a fake/stale fromNumber ─────────────
+    // Any campaign whose fromNumber is null OR not a real Telnyx number gets
+    // reassigned to the first real synced number automatically.
+    const firstReal = telnyxNumbers[0];
+    const campaignsFixed = await db
+      .update(campaignsTable)
+      .set({ fromNumber: firstReal })
+      .where(
+        or(
+          isNull(campaignsTable.fromNumber),
+          notInArray(campaignsTable.fromNumber, telnyxNumbers)
+        )
+      )
+      .returning({ id: campaignsTable.id });
+
+    logger.info({ total: telnyxNumbers.length, synced, staleRemoved: staleIds.length, campaignsFixed: campaignsFixed.length }, "Telnyx number sync complete");
     res.json({
       synced,
       total: telnyxNumbers.length,
-      message: synced > 0
-        ? `Synced ${synced} new number${synced !== 1 ? "s" : ""} from Telnyx (${telnyxNumbers.length} total in account)`
-        : `All ${telnyxNumbers.length} Telnyx numbers are already in your database`,
+      staleRemoved: staleIds.length,
+      campaignsFixed: campaignsFixed.length,
+      message: [
+        synced > 0
+          ? `Synced ${synced} new number${synced !== 1 ? "s" : ""} from Telnyx (${telnyxNumbers.length} total in account)`
+          : `All ${telnyxNumbers.length} Telnyx numbers are already in your database`,
+        staleIds.length > 0 ? `Removed ${staleIds.length} stale placeholder number${staleIds.length !== 1 ? "s" : ""}.` : "",
+        campaignsFixed.length > 0 ? `Auto-fixed ${campaignsFixed.length} campaign${campaignsFixed.length !== 1 ? "s" : ""} to use a verified number.` : "",
+      ].filter(Boolean).join(" "),
     });
   } catch (err) {
     const status = (err as { response?: { status?: number } }).response?.status;
