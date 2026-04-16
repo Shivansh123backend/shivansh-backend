@@ -43,6 +43,13 @@ type Campaign = {
   holdMusic?: string;
   humanLike?: string;
   transferNumber?: string;
+  agentId?: number | null;
+};
+
+type AiAgent = {
+  id: number;
+  name: string;
+  description?: string;
 };
 
 type ElevenLabsVoice = {
@@ -1016,9 +1023,15 @@ function LaunchModal({
     queryFn: () => customFetch("/api/voices/elevenlabs") as Promise<ElevenLabsVoice[]>,
     retry: false,
   });
+  const { data: aiAgents = [] } = useQuery<AiAgent[]>({
+    queryKey: ["ai-agents"],
+    queryFn: () => customFetch("/api/ai-agents") as Promise<AiAgent[]>,
+    retry: false,
+  });
   const startCampaign = useStartCampaign();
   const { toast } = useToast();
 
+  const [selectedAgent, setSelectedAgent] = useState(campaign.agentId ? String(campaign.agentId) : "none");
   const [selectedNumber, setSelectedNumber] = useState(campaign.fromNumber ?? "");
   const [selectedVoice, setSelectedVoice] = useState(campaign.voice ?? "default");
   const [prompt, setPrompt] = useState(campaign.agentPrompt ?? "");
@@ -1065,6 +1078,7 @@ function LaunchModal({
           voiceProvider: resolvedVoiceProvider,
           fromNumber: selectedNumber || undefined,
           agentPrompt: prompt || undefined,
+          agentId: selectedAgent !== "none" ? parseInt(selectedAgent) : null,
           backgroundSound,
           holdMusic,
           transferNumber: transferNumber || undefined,
@@ -1143,6 +1157,30 @@ function LaunchModal({
               No leads yet. Add leads from the Leads page first.
             </div>
           )}
+
+          {/* AI Agent selector */}
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
+              <Brain className="w-3 h-3" /> AI Agent
+              <span className="text-[9px] normal-case tracking-normal text-muted-foreground">(overrides prompt if set)</span>
+            </Label>
+            <Select value={selectedAgent} onValueChange={setSelectedAgent}>
+              <SelectTrigger className="font-mono text-sm">
+                <SelectValue placeholder="No agent — use campaign prompt" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No agent — use campaign prompt</SelectItem>
+                {aiAgents.map((a) => (
+                  <SelectItem key={a.id} value={String(a.id)}>
+                    {a.name}
+                    {a.description && (
+                      <span className="ml-2 text-muted-foreground text-[10px]">{a.description}</span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Number selector */}
           <div className="space-y-1.5">
