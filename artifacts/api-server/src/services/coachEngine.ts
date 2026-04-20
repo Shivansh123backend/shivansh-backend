@@ -15,11 +15,13 @@
  */
 
 import type { InterventionPlan } from "./interventionEngine.js";
+import { neutralizePressureLanguage, type Emotion } from "./emotionEngine.js";
 
 export interface CoachInput {
   reply: string;
   recentAssistantReplies: string[];     // last few assistant turns for repetition detection
   intervention?: InterventionPlan | null;
+  emotion?: Emotion;                    // current caller emotion (optional)
 }
 
 export interface CoachOutput {
@@ -94,7 +96,18 @@ export function coachResponse(input: CoachInput): CoachOutput {
       }
     }
 
-    // 4. Intervention prefix (one-shot, only if we don't already have a similar opener)
+    // 4. Emotion-aware tone scrubbing — strip high-pressure phrases when the
+    //    caller is in a negative emotional state so we never escalate.
+    if (input.emotion === "frustrated" || input.emotion === "angry" || input.emotion === "hesitant") {
+      const before = reply;
+      reply = neutralizePressureLanguage(reply);
+      if (reply !== before) {
+        reasons.push(`pressure-neutralized:${input.emotion}`);
+        rewritten = true;
+      }
+    }
+
+    // 5. Intervention prefix (one-shot, only if we don't already have a similar opener)
     const prefix = input.intervention?.prefix;
     if (prefix && !reply.toLowerCase().startsWith(prefix.toLowerCase().slice(0, 8))) {
       reply = prefix + lowerFirst(reply);

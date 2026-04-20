@@ -317,6 +317,7 @@ function coachSafe(state: BridgeState, fragment: string): string {
       reply: fragment,
       recentAssistantReplies: state.supervisorMemory.lastAssistantTexts,
       intervention: state.pendingIntervention,
+      emotion: state.supervisorMemory.emotion.current,
     });
     return out.reply;
   } catch {
@@ -694,6 +695,20 @@ function startSilenceWatchdog(state: BridgeState): void {
     try { observeSilence(state.supervisorMemory); } catch { /* ignore */ }
     speakInstant(state, "[silence]", line);
   }, 1000);
+}
+
+/**
+ * Read a snapshot of the supervisor/emotion state for a live or just-ended
+ * call. Used by the call-end webhook to persist the dominant emotion. Returns
+ * null if the bridge has already been torn down.
+ */
+export function getSupervisorSnapshot(callControlId: string): {
+  health: number;
+  emotion: SupervisorMemory["emotion"];
+} | null {
+  const state = bridges.get(callControlId);
+  if (!state) return null;
+  return { health: state.supervisorMemory.health, emotion: state.supervisorMemory.emotion };
 }
 
 /** Forward Telnyx µ-law audio to Deepgram. Also pipes to live listeners. */

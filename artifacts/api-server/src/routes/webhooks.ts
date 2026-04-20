@@ -1444,6 +1444,20 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         logger.warn({ err: String(err), callControlId }, "Call scoring failed — continuing without score");
       }
 
+      // ── Dominant emotion capture (additive — never breaks the flow) ──────
+      let callEmotion: string | null = null;
+      try {
+        const { getSupervisorSnapshot } = await import("../services/customBridge.js");
+        const { dominantEmotion } = await import("../services/emotionEngine.js");
+        const snap = getSupervisorSnapshot(callControlId);
+        if (snap) {
+          callEmotion = dominantEmotion(snap.emotion);
+          logger.info({ callControlId, emotion: callEmotion, health: snap.health }, "Call emotion captured");
+        }
+      } catch (err) {
+        logger.warn({ err: String(err), callControlId }, "Emotion capture failed — continuing without emotion");
+      }
+
       // Resolve the from-number used for this call
       const numberUsed = callOwnNumber.get(callControlId) ?? null;
 
@@ -1468,6 +1482,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             answerType,
             score: callScore,
             objections: callObjections,
+            emotion: callEmotion,
           })
           .where(eq(callLogsTable.callControlId, callControlId))
           .returning()
@@ -1490,6 +1505,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             answerType,
             score: callScore,
             objections: callObjections,
+            emotion: callEmotion,
           }).catch((err) =>
             logger.error({ err: String(err), callControlId }, "Failed to insert outbound call log fallback")
           );
@@ -1531,6 +1547,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           answerType,
           score: callScore,
           objections: callObjections,
+            emotion: callEmotion,
         }).catch((err) =>
           logger.error({ err: String(err), callControlId }, "Failed to insert inbound call log")
         );

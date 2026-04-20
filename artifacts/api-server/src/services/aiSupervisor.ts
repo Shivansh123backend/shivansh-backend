@@ -8,6 +8,13 @@
  * No extra LLM call — keeps the hot path fast.
  */
 
+import {
+  createEmotionState,
+  observeEmotion,
+  type Emotion,
+  type EmotionState,
+} from "./emotionEngine.js";
+
 export type Sentiment = "positive" | "neutral" | "negative";
 
 export interface SupervisorMemory {
@@ -22,6 +29,8 @@ export interface SupervisorMemory {
   health: number;
   // Last assistant texts for repetition detection
   lastAssistantTexts: string[];
+  // Per-call emotion tracking
+  emotion: EmotionState;
 }
 
 export function createSupervisorMemory(): SupervisorMemory {
@@ -33,6 +42,7 @@ export function createSupervisorMemory(): SupervisorMemory {
     repeatCount: 0,
     health: 100,
     lastAssistantTexts: [],
+    emotion: createEmotionState(),
   };
 }
 
@@ -77,6 +87,9 @@ export function observeUserTurn(mem: SupervisorMemory, text: string): Supervisor
   // Confusion / frustration
   if (CONFUSION.some((r) => r.test(t))) mem.confusionCount += 1;
   if (FRUSTRATION.some((r) => r.test(t))) mem.frustrationCount += 1;
+
+  // Emotion (additive — never throws)
+  observeEmotion(mem.emotion, { text });
 
   // Update health: each negative / confusion / frustration drops it,
   // each positive nudges it back up. Bounded 0–100.
@@ -125,16 +138,23 @@ export type HealthSignal =
   | "ok"
   | "confused"
   | "frustrated"
+  | "angry"
+  | "hesitant"
   | "disengaged"
   | "degrading";
 
 export function deriveSignal(mem: SupervisorMemory): HealthSignal {
-  if (mem.frustrationCount >= 1) return "frustrated";
-  if (mem.confusionCount >= 2) return "confused";
+  // Emotion takes priority — anger is the strongest signal
+  if (mem.emotion.current === "angry") return "angry";
+  if (mem.frustrationCount >= 1 || mem.emotion.current === "frustrated") return "frustrated";
+  if (mem.confusionCount >= 2 || mem.emotion.current === "confused") return "confused";
   if (mem.silenceCount >= 2) return "disengaged";
   // Sentiment trend: 3 of last 4 negatives = degrading
   const recent = mem.sentimentHistory.slice(-4);
   const negs = recent.filter((s) => s === "negative").length;
-  if (negs >= 3 || mem.health < 40) return "degrading";
+  if (negs >= 3 || mem.health < 40 || mem.emotion.trend === "worsening") return "degrading";
+  if (mem.emotion.current === "hesitant") return "hesitant";
   return "ok";
 }
+
+export type { Emotion };

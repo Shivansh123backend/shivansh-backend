@@ -18,6 +18,7 @@ export const callLogsTable = pgTable("call_logs", {
   answerType: text("answer_type"),
   score: integer("score"),                // 0–100 quality score (callScorer)
   objections: text("objections"),         // JSON array of detected objection types
+  emotion: text("emotion"),               // dominant caller emotion (emotionEngine)
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
 });
 

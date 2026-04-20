@@ -35,6 +35,22 @@ export function planIntervention(signal: HealthSignal): InterventionPlan {
         forceSoftExit: false,
       };
 
+    case "angry":
+      return {
+        promptAddition:
+          "USER IS ANGRY. Stop persuading immediately. One short, calm, respectful sentence. Acknowledge, apologise once if appropriate, and offer a clean exit (callback or removal from list). Do not defend or explain.",
+        prefix: "I hear you — ",
+        forceSoftExit: true,
+      };
+
+    case "hesitant":
+      return {
+        promptAddition:
+          "USER IS HESITANT. Build comfort. Use a soft, no-pressure question. Avoid commitment language. Reassure that there's no obligation.",
+        prefix: null,
+        forceSoftExit: false,
+      };
+
     case "disengaged":
       return {
         promptAddition:
