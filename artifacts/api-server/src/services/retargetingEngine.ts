@@ -5,7 +5,7 @@
  */
 import { db } from "@workspace/db";
 import { leadsTable, callLogsTable, followUpsTable } from "@workspace/db";
-import { and, eq, isNull, lte, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { sequenceFor, type Disposition } from "./followUpSequence.js";
 import { detectIndustryFromText } from "./persuasionEngine.js";
@@ -21,8 +21,9 @@ const RETARGETABLE_DISPOSITIONS: Disposition[] = ["no_answer", "busy", "vm", "dr
 
 async function findRetargetCandidates(): Promise<Array<{ leadId: number; campaignId: number; lastDisposition: string }>> {
   // Leads whose last call was >24h ago, ended in retargetable disposition,
-  // not DNC, not converted, fewer than RETARGET_MAX_ATTEMPTS retarget rows.
+  // not DNC, not converted/dead/retargeted.
   const cutoff = new Date(Date.now() - RETARGET_COOLOFF_HOURS * 3600_000);
+  // Parameterized array binding for dispositions (safe + correct).
   const rows = await db.execute(sql`
     SELECT DISTINCT ON (l.id)
       l.id AS lead_id,
@@ -32,23 +33,24 @@ async function findRetargetCandidates(): Promise<Array<{ leadId: number; campaig
     JOIN call_logs cl ON cl.phone_number = l.phone AND cl.campaign_id = l.campaign_id
     WHERE l.dnc_flag = false
       AND COALESCE(l.lifecycle_stage, '') NOT IN ('converted', 'dead', 'retargeted')
-      AND cl.created_at <= ${cutoff}
-      AND cl.disposition = ANY(${sql.raw(`ARRAY[${RETARGETABLE_DISPOSITIONS.map((d) => `'${d}'`).join(",")}]`)})
-    ORDER BY l.id, cl.created_at DESC
+      AND cl.timestamp <= ${cutoff}
+      AND cl.disposition = ANY(${RETARGETABLE_DISPOSITIONS as unknown as string[]})
+    ORDER BY l.id, cl.timestamp DESC
     LIMIT 50
   `);
-  // Drizzle returns rows in result.rows
   const list = ((rows as unknown as { rows?: Array<Record<string, unknown>> }).rows ?? []) as Array<{ lead_id: number; campaign_id: number; last_disposition: string }>;
   return list.map((r) => ({ leadId: Number(r.lead_id), campaignId: Number(r.campaign_id), lastDisposition: String(r.last_disposition) }));
 }
 
 async function alreadyRetargetedRecently(leadId: number): Promise<boolean> {
+  // True if the lead has reached RETARGET_MAX_ATTEMPTS retarget follow-ups, OR
+  // if there is any retarget follow-up created within the cool-off window.
   const cutoff = new Date(Date.now() - RETARGET_COOLOFF_HOURS * 3600_000);
-  const recent = await db.select({ id: followUpsTable.id })
+  const rows = await db.select({ id: followUpsTable.id, createdAt: followUpsTable.createdAt })
     .from(followUpsTable)
-    .where(and(eq(followUpsTable.leadId, leadId), eq(followUpsTable.intent, "value_add")));
-  return recent.length >= RETARGET_MAX_ATTEMPTS || recent.some((r) => r.id && false); // placeholder for cutoff comparison via DB scan
-  // The DB query already filtered to all value_add follow-ups; we rely on max attempts cap.
+    .where(and(eq(followUpsTable.leadId, leadId), eq(followUpsTable.retarget, true)));
+  if (rows.length >= RETARGET_MAX_ATTEMPTS) return true;
+  return rows.some((r) => r.createdAt && new Date(r.createdAt).getTime() >= cutoff.getTime());
 }
 
 async function scheduleRetarget(leadId: number, campaignId: number, lastDisposition: string): Promise<void> {

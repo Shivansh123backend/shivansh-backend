@@ -98,6 +98,24 @@ try {
   logger.warn({ err: String(err) }, "Script optimizer failed to start");
 }
 
+try {
+  // Auto follow-up scheduler (polls every 60s for due SMS/email follow-ups)
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { startFollowUpScheduler } = require("./services/followUpScheduler.js");
+  startFollowUpScheduler();
+} catch (err) {
+  logger.warn({ err: String(err) }, "Follow-up scheduler failed to start");
+}
+
+try {
+  // Retargeting engine (polls hourly for dead leads to re-engage)
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { startRetargetingEngine } = require("./services/retargetingEngine.js");
+  startRetargetingEngine();
+} catch (err) {
+  logger.warn({ err: String(err) }, "Retargeting engine failed to start");
+}
+
 httpServer.listen(port, () => {
   logger.info({ port }, "AI Calling SaaS backend listening");
 });

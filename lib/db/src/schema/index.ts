@@ -11,3 +11,4 @@ export * from "./sms_logs";
 export * from "./dnc_list";
 export * from "./queues";
 export * from "./script_variations";
+export * from "./followUps";

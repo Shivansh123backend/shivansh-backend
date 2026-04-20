@@ -1554,6 +1554,20 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           { callControlId, campaignId: bridge.campaignId, disposition, durationSecs },
           "Outbound call finalized"
         );
+
+        // ── Schedule auto follow-up sequence (additive — failsafe) ───────
+        try {
+          const { scheduleAfterCall } = await import("../services/followUpEngine.js");
+          await scheduleAfterCall({
+            leadId: bridge.leadId ?? null,
+            campaignId: bridge.campaignId,
+            disposition,
+            callSummary: summary,
+            predictedLabel: null,
+          });
+        } catch (err) {
+          logger.warn({ err: String(err), callControlId }, "Follow-up scheduling failed — continuing");
+        }
       } else {
         await db.insert(callLogsTable).values({
           phoneNumber: bridge.callerNumber,
