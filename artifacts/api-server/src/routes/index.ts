@@ -42,10 +42,18 @@ router.use(agentStatusRouter);
 router.use(manualCallRouter);
 router.use(callLogsRouter);
 router.use(dashboardRouter);
+// Frontend uses /human-agents/* — rewrite to /agents/* BEFORE router
+// matching so the same humanAgentsRouter serves both prefixes.
+//   /human-agents          -> /agents
+//   /human-agents/stats    -> /agents/stats
+//   /human-agents/create   -> /agents/create
+router.use((req, _res, next) => {
+  if (req.url === "/human-agents" || req.url.startsWith("/human-agents/") || req.url.startsWith("/human-agents?")) {
+    req.url = "/agents" + req.url.slice("/human-agents".length);
+  }
+  next();
+});
 router.use(humanAgentsRouter);
-// Frontend uses /human-agents/* — alias the same router under that prefix
-// so both /agents/* and /human-agents/* work without duplicating handlers.
-router.use("/human-agents", humanAgentsRouter);
 router.use(smsRouter);
 router.use(webhooksRouter);
 router.use(exportRouter);

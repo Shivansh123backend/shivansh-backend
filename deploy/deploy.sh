@@ -27,10 +27,26 @@ GIT_BRANCH="${GIT_BRANCH:-main}"
 APP_DIR="/opt/shivansh"
 
 # 1. Write the SSH key to a temp file with locked-down perms.
+#    Replit secret storage sometimes strips newlines from multi-line values,
+#    so we reconstruct a valid OpenSSH PEM if needed.
 KEY_FILE="$(mktemp)"
 trap 'rm -f "$KEY_FILE"' EXIT
-printf "%s\n" "$VPS_SSH_KEY" > "$KEY_FILE"
+node -e '
+const raw = process.env.VPS_SSH_KEY || "";
+let body = raw
+  .replace(/-----BEGIN[^-]+-----/g, "")
+  .replace(/-----END[^-]+-----/g, "")
+  .replace(/\s+/g, "");
+const wrapped = body.match(/.{1,70}/g).join("\n");
+const pem = "-----BEGIN OPENSSH PRIVATE KEY-----\n" + wrapped + "\n-----END OPENSSH PRIVATE KEY-----\n";
+require("fs").writeFileSync(process.argv[1], pem, {mode:0o600});
+' "$KEY_FILE"
 chmod 600 "$KEY_FILE"
+
+if ! ssh-keygen -y -f "$KEY_FILE" >/dev/null 2>&1; then
+  echo "FATAL: VPS_SSH_KEY did not produce a valid OpenSSH key after reconstruction." >&2
+  exit 1
+fi
 
 SSH_OPTS=(-i "$KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15)
 
