@@ -1,134 +1,136 @@
-# Lovable Prompt — SHIVANSH Agent Softphone
+# LOVABLE PROMPT — Browser-Based Agent Softphone
 
-Paste the block below verbatim into Lovable as a new project prompt.
+Add a **WebRTC softphone** to the SHIVANSH agent dashboard. Agents log in, register to Telnyx WebRTC, and handle inbound + outbound calls fully in the browser. **Do NOT modify any existing UI or design tokens — match the current theme.**
 
----
-
-## PROMPT
-
-Build a **production-grade browser softphone** for human call-centre agents named **SHIVANSH Agent**.
-
-### Tech stack
-- React 18 + TypeScript + Vite
-- Tailwind CSS — dark navy background only (`#0a0f1e`), accent `hsl(183 100% 50%)` (cyan)
-- All text in `font-mono`
-- Shadcn/ui for UI primitives (use dark theme)
-- Socket.IO client v4 for real-time events
-- Telnyx WebRTC SDK (`@telnyx/webrtc`) for browser audio
-
-### Backend
-- Base URL: `https://shivanshbackend.replit.app`
-- Auth header: `Authorization: Bearer <token>` where token is read from `localStorage.getItem("auth_token")`
-- WebSocket: connect to `https://shivanshbackend.replit.app` with path `/api/ws` and `auth: { token }`
-
-### Auth flow (login page)
-- POST `https://shivanshbackend.replit.app/api/auth/login` with `{ email, password }`
-- Response: `{ token, user: { id, name, email, role } }`
-- Store token in `localStorage` under key `auth_token`, user under `auth_user`
-- Default agent credentials: `agent@shivansh.com` / `Agent@123`
-- Redirect to softphone dashboard on success
-
-### Pages / layout
-Single-page app with a top nav showing: agent name, status badge (green = Available, red = Busy), and a logout button.
+Backend: `https://shivanshbackend.replit.app`
+Auth header: `Authorization: Bearer ${localStorage.getItem("auth_token")}`
 
 ---
 
-### Main softphone panel (centre of screen)
+## ROUTE
+`/agent/softphone` (agent role only — admins can also access)
 
-#### 1. Agent status toggle
-- Toggle between **Available** and **Busy**
-- On change: `POST /api/agents/status` with `{ id: agentId, status }`
-- Update badge in nav immediately
-
-#### 2. Incoming call banner (appears when `call:inbound` WebSocket event fires)
-Fields in the event: `{ callId, callControlId, callerNumber, campaignName }`
-- Full-width yellow banner slides in from top
-- Shows caller number and campaign name
-- Two buttons: **Answer** (green) — calls `POST /api/calls/inbound` with `{ callControlId, action: "answer" }` — and **Reject** (red) — calls `POST /api/calls/inbound` with `{ callControlId, action: "reject" }`
-- Banner auto-dismisses after 30 s if not acted on
-
-#### 3. Active call card (visible while a call is live)
-Shown when the agent has an active call. Data from `call:started` or `call:inbound` WebSocket events.
-- Caller number, campaign name
-- Live call timer (counting up from 00:00)
-- Four action buttons:
-  - **Mute / Unmute** — toggles microphone via Telnyx WebRTC SDK
-  - **Hold** — `POST /api/calls/transfer` with `{ callControlId, action: "hold" }` (or use SDK hold)
-  - **Transfer** — opens a small popover with a phone number input; on confirm calls `POST /api/calls/transfer` with `{ callControlId, to: number }`
-  - **Conference** — opens a popover with a phone number input; on confirm calls `POST /api/calls/:callControlId/conference` with `{ to: number }`
-- **Hang up** button (red, full-width at bottom of card)
-
-#### 4. Dial pad
-Visible below the active call card (or always visible when no call is active).
-- Standard 12-key pad (0-9, *, #) plus a display input showing the typed number
-- **Call** button: `POST /api/calls/initiate` with `{ to: dialedNumber, from: agentPhoneNumber }`
-- **Clear** button resets the input
-
-#### 5. Live transcription feed
-Scrollable log that shows `call:transcription` WebSocket events in real time.
-- Each line: `[Caller | AI]  <text>`
-- Auto-scrolls to bottom
-- Clears when call ends (`call:ended` event)
+Add a sidebar entry "Softphone" with a phone icon under "Agent Workspace".
 
 ---
 
-### Right sidebar — Queue & Recent Calls
-
-#### Queue panel
-- Lists callbacks due soon: `GET /api/callbacks?campaignId=<current>`
-- Each row: lead name, phone, scheduled time, **Dial** button
-- Refreshes every 30 s
-
-#### Recent calls
-- `GET /api/calls/cdr?limit=20`
-- Each row: caller number, duration, disposition, timestamp
-- Disposition chip colour: `connected` = green, `no_answer` = yellow, `failed` = red, `transferred` = cyan
+## DEPENDENCIES TO INSTALL
+- `@telnyx/webrtc` (official Telnyx browser SDK)
 
 ---
 
-### WebSocket events to handle
-
-| Event | Action |
-|---|---|
-| `call:started` | Show active call card, start timer |
-| `call:inbound` | Show incoming call banner |
-| `call:transcription` | Append to transcription feed |
-| `call:ended` | Hide active call card, stop timer, clear transcript, refresh recent calls |
-| `call:transferred` | Update active call card to show "Transferred" badge |
-| `agent:stats:refresh` | Refetch `/api/agents/stats` and update agent's own stats row |
-
----
-
-### Per-agent stats strip (bottom of left panel)
-Fetched from `GET /api/agents/stats`, filtered to the logged-in agent's id.
-Display in a strip of 3 tiles:
-- **Calls Today** — `stats.callsToday`
-- **Avg Duration** — `stats.avgDuration` seconds formatted as `Mm Ss`
-- **Top Disposition** — the disposition key with the highest count from `stats.dispositions`
+## BACKEND ENDPOINTS YOU CAN USE
+- `GET /api/calls/webrtc-token` — returns `{ token: string }` (a Telnyx JWT for WebRTC login)
+- `GET /api/agents/stats` — returns `{ agentId, name, stats: { callsToday, avgDuration, dispositions } }[]`
+- `POST /api/calls/:callControlId/conference { to }` — adds a third party to active call (3-way)
+- `POST /api/calls/transfer { callId, campaignId }` — transfers to another agent
+- `POST /api/callbacks/schedule { leadId, callbackAt, notes? }` — schedule a callback
+- `PATCH /api/calls/:id { disposition, notes }` — set disposition after the call
+- `GET /api/leads?phone=...` — lookup lead by phone
+- WebSocket: `wss://shivanshbackend.replit.app/ws` — listens for `agent:incoming_call` events
 
 ---
 
-### Telnyx WebRTC integration
-1. On login, fetch a WebRTC token: `GET /api/calls/webrtc-token`
-2. Response: `{ token, sipUsername }`
-3. Initialise `TelnyxRTC` with `{ login_token: token }`
-4. On `call.incoming` SDK event → show incoming call banner if not already shown via WebSocket
-5. On `call.answered` SDK event → start timer
-6. On `call.hangup` SDK event → clear active call card
+## LAYOUT — single page, 3 columns
+
+### LEFT COLUMN (320px) — Dialer & Status
+- **Status pill at top:** "Ready" (green) / "On Call" (blue) / "Wrap-Up" (orange) / "Offline" (gray). Click to toggle ready/offline.
+- **Dial pad:** 12-key grid (1-9, *, 0, #) + a phone-number input above it
+- **Call button:** big green circle with phone icon. Disabled when not registered.
+- **Recent contacts list** below: last 10 calls (number, time, disposition badge, click to redial)
+
+### CENTER COLUMN (flex) — Active Call Panel
+When **idle:** show empty state with a headset illustration + "Waiting for calls" text.
+
+When **call is active or ringing:**
+- Large caller info card:
+  - Caller phone (formatted)
+  - Caller name (from `/api/leads?phone=...` lookup, or "Unknown")
+  - Campaign name
+  - Call timer (mm:ss, ticking)
+  - Direction badge (Inbound / Outbound)
+- **Action button row** (large, color-coded):
+  - **Answer** (green) — only on incoming
+  - **Hang Up** (red)
+  - **Mute** (toggle, gray ↔ blue)
+  - **Hold** (toggle)
+  - **Transfer** — opens dropdown of available agents, calls `POST /calls/transfer`
+  - **Conference** — opens input for third-party number, calls `POST /calls/:callControlId/conference`
+  - **Keypad** — opens overlay dial pad for DTMF tones
+- **Live transcript area** (if available via WebSocket `transcript:partial` event) — scrolling text panel with speaker labels
+
+When **call ends:** show **Wrap-Up panel**:
+- Disposition dropdown: interested / not_interested / vm / no_answer / busy / connected / transferred / disconnected
+- Notes textarea
+- "Schedule callback?" toggle → datetime picker → calls `POST /callbacks/schedule`
+- **Save & Ready** button → PATCH disposition + sets agent back to Ready
+- **Discard** button → goes back to Ready without saving
+
+### RIGHT COLUMN (320px) — Today's Stats + Lead Context
+- **Stats card** (polled from `GET /agents/stats` every 30s — match the current row to logged-in agent):
+  - Calls Today (number)
+  - Avg Duration (mm:ss)
+  - Disposition breakdown (mini horizontal bar chart)
+- **Lead context card** (only shown during active call) — pulled from `/api/leads?phone=...`:
+  - Name, email, campaign
+  - Last 3 call dispositions
+  - Notes (read-only)
+  - Predicted intent badge (high/medium/low)
+  - Lifecycle stage badge
 
 ---
 
-### Style rules
-- Background `#0a0f1e` everywhere
-- Cards: `bg-slate-900 border border-slate-700 rounded-xl`
-- Accent colour `hsl(183 100% 50%)` for buttons, active states, timers
-- All fonts `font-mono`
-- Buttons: rounded-lg, px-4 py-2, transition-all
-- No light mode; no toggle
+## BEHAVIOR
 
-### Error handling
-- All API calls wrapped in try/catch; show a dismissable toast (`Sonner`) on error
-- If WebSocket disconnects, show a yellow reconnecting banner and retry every 5 s
+### Registration flow
+1. On mount, fetch `GET /api/calls/webrtc-token`
+2. Initialize `TelnyxRTC` client with the token
+3. On `telnyx.ready` → set status to "Ready"
+4. On `telnyx.error` → show toast "Phone offline" and a Retry button
 
-### Deliverable
-A fully functional single-page React app. No placeholder data — every widget reads from the real SHIVANSH backend.
+### Incoming call
+1. Telnyx SDK fires `notification` event with `call.state === "ringing"`
+2. Play ringtone (browser audio element looping a short tone)
+3. Show "Incoming Call" card with caller info, big Answer / Reject buttons
+4. Backend WebSocket may also push `agent:incoming_call` with extra context (campaignId, transferType) — merge it in.
+
+### Outgoing call
+1. User types number + clicks call button
+2. `telnyx.newCall({ destinationNumber, callerNumber })`
+3. Show active call panel; status → "On Call"
+
+### Transfer / Conference / DTMF
+- Transfer: closes current call after transfer succeeds
+- Conference: keeps both legs; show "3-way" badge on call panel
+- DTMF: call.dtmf("1"/"2"/etc) on Telnyx call object
+
+### After hangup
+- Status → "Wrap-Up" automatically
+- Force the agent to pick a disposition before going back to Ready (block the "Save & Ready" button until disposition selected)
+
+### Microphone permission
+- Request on first call attempt; if denied show a clear error card with retry instructions
+
+---
+
+## STRICT RULES
+
+1. **Do not modify any existing component, color, font, or theme.** Match the current dark dashboard exactly — same Card, Badge, Button, Input, Dialog, Select components already in the codebase.
+2. **No new color tokens.** Use existing semantic colors (success/destructive/warning/muted).
+3. **Auth on every fetch:** `Authorization: Bearer ${localStorage.getItem("auth_token")}`
+4. **Mobile responsive:** 3 columns collapse to a single stacked column under `md` breakpoint.
+5. **Errors → existing toast system.**
+6. **Loading → existing skeleton loaders.**
+7. **Audio:** use the SDK's auto-attached audio element (don't roll your own).
+8. **State management:** keep all softphone state in a single `useSoftphone()` hook so the rest of the app can show "On Call" indicators if needed.
+
+---
+
+## OPTIONAL POLISH
+- Persistent floating "On Call" mini-bar at the bottom of every dashboard page when a call is active (so agents can navigate away and still see/control the call).
+- Browser notifications on incoming call (with permission prompt).
+- Hotkeys: Space = answer/hangup, M = mute, H = hold.
+
+---
+
+That's it. Build only this softphone page + sidebar link + the optional mini-bar. Do not touch anything else.
