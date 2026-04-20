@@ -924,31 +924,37 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       ) {
         const bridge = getBridgeInfo(callControlId);
 
-        // Voicemail drop: if campaign has a vmDropMessage and we heard a beep, leave the message
+        // Voicemail drop: on beep, leave a TTS message — campaign-specific or default template.
         if (result === "machine_end_beep" && bridge?.campaignId) {
           const [camp] = await db
             .select({ vmDropMessage: campaignsTable.vmDropMessage, voice: campaignsTable.voice })
             .from(campaignsTable)
             .where(eq(campaignsTable.id, bridge.campaignId));
 
-          if (camp?.vmDropMessage) {
-            logger.info({ callControlId, campaignId: bridge.campaignId }, "AMD: voicemail beep — leaving VM drop message");
-            try {
-              const voiceId = bridge.voiceId ?? DEFAULT_ELEVEN_VOICE;
-              const audioUrl = await generateTTSWithFallback(camp.vmDropMessage, voiceId, (bridge.voiceProvider ?? "elevenlabs") as VoiceProvider);
-              await telnyxAction(callControlId, "playback_start", {
-                audio_url: audioUrl,
-                overlay: false,
-                stop_condition: "detecting_silence",
-              });
-              // Hang up after playback — handled by playback.ended event
-              pendingVmDropHangup.add(callControlId);
-              bridge.transcript.push(`AI Agent (VM Drop): ${camp.vmDropMessage}`);
-              logger.info({ callControlId }, "VM drop message playing — will hang up on playback.ended");
-              return; // Don't hang up immediately; let playback.ended do it
-            } catch (err) {
-              logger.warn({ err: String(err), callControlId }, "VM drop TTS failed — falling back to hangup");
-            }
+          // Use the configured message if present; otherwise build a sensible default
+          // using the campaign + agent name so every voicemail still gets a polite drop.
+          const defaultVm =
+            `Hi, this is ${bridge.agentName ?? "your agent"} calling from ${bridge.campaignName ?? "our team"}. ` +
+            `I tried to reach you to check in on your requirements. ` +
+            `If there's anything you need, please give us a call back whenever you're available. Thank you.`;
+          const vmMessage = (camp?.vmDropMessage && camp.vmDropMessage.trim()) || defaultVm;
+
+          logger.info({ callControlId, campaignId: bridge.campaignId, custom: !!camp?.vmDropMessage }, "AMD: voicemail beep — leaving VM drop message");
+          try {
+            const voiceId = bridge.voiceId ?? DEFAULT_ELEVEN_VOICE;
+            const audioUrl = await generateTTSWithFallback(vmMessage, voiceId, (bridge.voiceProvider ?? "elevenlabs") as VoiceProvider);
+            await telnyxAction(callControlId, "playback_start", {
+              audio_url: audioUrl,
+              overlay: false,
+              stop_condition: "detecting_silence",
+            });
+            // Hang up after playback — handled by playback.ended event
+            pendingVmDropHangup.add(callControlId);
+            bridge.transcript.push(`AI Agent (VM Drop): ${vmMessage}`);
+            logger.info({ callControlId }, "VM drop message playing — will hang up on playback.ended");
+            return; // Don't hang up immediately; let playback.ended do it
+          } catch (err) {
+            logger.warn({ err: String(err), callControlId }, "VM drop TTS failed — falling back to hangup");
           }
         }
 
@@ -1063,10 +1069,12 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         systemPrompt = `${systemPrompt}\n\n${BACKGROUND_CONTEXT_MAP[bgKey]}`;
       }
 
-      // First message — warm, natural, with pause markers for human-like delivery
+      // First message — warm, natural opening that confirms identity before the pitch.
+      // Format: "Hi this is <agent> calling from <campaign>. Am I speaking with <firstName>?"
+      // If we don't have a name, ask politely who we've reached.
       const firstMessage = firstName
-        ? `Hello, am I speaking with ${firstName}?`
-        : `Hello, is this a good time? I'm ${agentName} calling from ${outboundCtx.campaignName}.`;
+        ? `Hi, this is ${agentName} calling from ${outboundCtx.campaignName}. Am I speaking with ${firstName}?`
+        : `Hi, this is ${agentName} calling from ${outboundCtx.campaignName}. May I know who I'm speaking with?`;
 
       logger.info(
         { callControlId, campaignId, phone: outboundCtx.phone, leadName, agentName, voiceId: callVoiceId, backgroundSound: outboundCtx.backgroundSound },
