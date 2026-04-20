@@ -1,0 +1,216 @@
+---
+
+## ADD-ON: AUTO-SCALING + NGINX LOAD BALANCER + LOW LATENCY PIPELINE
+
+You are a senior DevOps and real-time systems engineer.
+
+Enhance my existing AI calling infrastructure WITHOUT modifying application logic or UI.
+
+---
+
+## STRICT RULES
+
+* DO NOT change UI
+* DO NOT change core backend logic
+* ONLY add infrastructure and performance layers
+
+---
+
+## GOAL
+
+* distribute load across multiple VPS
+* automatically scale when load increases
+* reduce call latency for real-time conversations
+
+---
+
+## STEP 1 — NGINX LOAD BALANCER SETUP
+
+Install and configure NGINX on a primary VPS.
+
+Create upstream block:
+
+* include VPS_1
+* include VPS_2
+* allow adding more VPS later
+
+Use:
+
+* round-robin load balancing
+* HTTP/WebSocket support
+
+---
+
+## STEP 2 — ROUTING CONFIGURATION
+
+Route all incoming traffic through NGINX:
+
+* forward requests to available VPS
+* ensure session consistency if needed
+
+---
+
+## STEP 3 — HEALTH CHECK SYSTEM
+
+Monitor VPS health:
+
+* ping /health endpoint
+* remove unhealthy VPS from pool
+* re-add when healthy
+
+---
+
+## STEP 4 — AUTO-SCALING ENGINE
+
+Create:
+
+autoScaler.js
+
+Responsibilities:
+
+* monitor system load
+* trigger scaling actions
+
+---
+
+## STEP 5 — SCALING METRICS
+
+Track:
+
+* CPU usage
+* memory usage
+* active calls
+* response latency
+
+---
+
+## STEP 6 — SCALE UP LOGIC
+
+If:
+
+* CPU > 70%
+* latency increasing
+* calls queue growing
+
+Then:
+
+* add new VPS to pool
+* update NGINX config dynamically
+
+---
+
+## STEP 7 — SCALE DOWN LOGIC
+
+If:
+
+* low load
+* idle resources
+
+Then:
+
+* remove VPS from pool
+* keep minimum safe capacity
+
+---
+
+## STEP 8 — VPS REGISTRATION SYSTEM
+
+Create:
+
+vpsRegistry.js
+
+* register new VPS automatically
+* store active nodes
+* update load balancer config
+
+---
+
+## STEP 9 — LOW LATENCY CALL PIPELINE
+
+Implement streaming pipeline:
+
+* STT streaming (partial transcripts)
+* LLM streaming (early response generation)
+* TTS streaming (start speaking early)
+
+---
+
+## STEP 10 — PARALLEL PROCESSING
+
+Run in parallel:
+
+* STT → partial input
+* LLM → partial output
+* TTS → immediate playback
+
+Do NOT wait for full responses.
+
+---
+
+## STEP 11 — RESPONSE CHUNKING
+
+Split responses:
+
+* send first sentence immediately
+* stream remaining content
+
+---
+
+## STEP 12 — INTERRUPT HANDLING
+
+If user speaks:
+
+* stop TTS immediately
+* cancel current response
+* process new input instantly
+
+---
+
+## STEP 13 — FAST PATH RESPONSES
+
+For simple queries:
+
+* bypass LLM
+* return instantly
+
+---
+
+## STEP 14 — CONNECTION OPTIMIZATION
+
+* use persistent WebSocket connections
+* avoid reconnect overhead
+* reduce round trips
+
+---
+
+## STEP 15 — EDGE OPTIMIZATION
+
+Minimize:
+
+* API latency
+* token size
+* response size
+
+---
+
+## STEP 16 — FAILSAFE
+
+If scaling fails:
+
+* continue using existing VPS
+* do NOT break system
+
+---
+
+## FINAL INSTRUCTION
+
+Enhance infrastructure to:
+
+* auto-scale across VPS
+* balance load using NGINX
+* optimize real-time call latency
+
+Do NOT modify UI.
+Do NOT break system.
+
+Write clean, production-ready DevOps code and configs.
