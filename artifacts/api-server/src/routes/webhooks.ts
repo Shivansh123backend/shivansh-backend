@@ -280,7 +280,7 @@ const pendingVmDropHangup       = new Set<string>();                  // callCon
 const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
 const awaitingFirstResponse     = new Set<string>();                  // callControlId → outbound call waiting for first caller word (silence guard)
 const initialSilenceTimer       = new Map<string, ReturnType<typeof setTimeout>>(); // callControlId → 30s start-silence timeout
-const AI_SPEAK_COOLDOWN_MS      = 1000;                               // ignore transcriptions this many ms after AI speaks
+const AI_SPEAK_COOLDOWN_MS      = 350;                                // ignore transcriptions this many ms after AI speaks (tight for snappier turn-taking)
 
 /** Stable numeric ID from a callControlId string (for live monitor without DB row) */
 function syntheticId(callControlId: string): number {
