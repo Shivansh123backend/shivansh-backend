@@ -191,5 +191,6 @@ Deployed to 2-VPS Hostinger setup (Ubuntu 22.04, Node 20 LTS, PM2):
 - SSH from Replit: `ssh -i ~/.ssh/vps_deploy root@<host>`
 - Update flow: `bash deploy/deploy.sh` (git push → ssh both VPS → `git pull` → `pnpm install` → `pnpm build` → `pm2 reload all` → health check)
 - Webhook base URL still points to `https://shivanshbackend.replit.app`; switch to a VPS-fronted domain when DNS/TLS ready
-- Worker disabled by default on both VPS (`WORKER_ENABLED=false`) until Redis is provisioned for the BullMQ queue
+- **Production database**: Supabase (`db.axebkssjglrdpdbddotj.supabase.co`, US-East, 1GB Micro). Replit's internal `helium` Postgres is not externally reachable; do NOT reuse the Replit DATABASE_URL on the VPS.
+- **Worker process intentionally removed** from PM2 (no `worker` script in api-server package.json — schedulers run inside the api process). Re-add when a real worker entrypoint exists + Redis is provisioned.
 - Optional env not yet set: `TELNYX_PUBLIC_KEY` (webhook signature verify), `CARTESIA_VOICE_ID`, `REDIS_*`, `RESEND_API_KEY`/`SENDGRID_API_KEY`
