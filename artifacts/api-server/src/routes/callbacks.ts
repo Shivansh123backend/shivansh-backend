@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { leadsTable, campaignsTable } from "@workspace/db";
-import { eq, and, lte, isNotNull } from "drizzle-orm";
+import { leadsTable, campaignsTable, phoneNumbersTable } from "@workspace/db";
+import { eq, and, lte, isNotNull, sql, asc } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { enqueueCall } from "../services/workerService.js";
 import { logger } from "../lib/logger.js";
@@ -187,19 +187,27 @@ export async function startCallbackScheduler(): Promise<void> {
     try {
       const now = new Date();
 
-      const dueLeads = await db
-        .select()
-        .from(leadsTable)
+      // ── Atomic claim ──────────────────────────────────────────────────────
+      // Single UPDATE...WHERE...RETURNING flips status callback→called for any
+      // due rows in one DB roundtrip. Even with multiple app instances polling
+      // concurrently, each lead is claimed by exactly one tick (Postgres MVCC).
+      // We move to "called" (terminal-ish) so a second tick can never re-claim,
+      // then dial. If dial enqueue fails, status stays "called" and the user
+      // can re-schedule via PATCH /callbacks/:id.
+      const claimedLeads = await db
+        .update(leadsTable)
+        .set({ status: "called", callbackAt: null, retryCount: 0 })
         .where(
           and(
             eq(leadsTable.status, "callback"),
             isNotNull(leadsTable.callbackAt),
             lte(leadsTable.callbackAt, now)
           )
-        );
+        )
+        .returning();
 
-      for (const lead of dueLeads) {
-        logger.info({ leadId: lead.id, phone: lead.phone, callbackAt: lead.callbackAt }, "Callback due — processing");
+      for (const lead of claimedLeads) {
+        logger.info({ leadId: lead.id, phone: lead.phone }, "Callback claimed — processing");
 
         const [campaign] = await db
           .select()
@@ -207,43 +215,73 @@ export async function startCallbackScheduler(): Promise<void> {
           .where(eq(campaignsTable.id, lead.campaignId))
           .limit(1);
 
+        // Campaign paused/draft → revert lead back to callback for next tick.
+        // Do NOT mutate callbackAt — preserve the user's originally scheduled time.
         if (!campaign || campaign.status !== "active") {
-          logger.warn({ leadId: lead.id, campaignId: lead.campaignId, status: campaign?.status }, "Callback skipped — campaign not active");
-          // Defer: leave as callback but push callbackAt 30 min into the future so we retry later.
-          // (Don't strip the callback marker; the user explicitly scheduled it.)
-          if (campaign && (campaign.status === "draft" || campaign.status === "paused")) {
-            await db.update(leadsTable)
-              .set({ callbackAt: new Date(Date.now() + 30 * 60_000) })
-              .where(eq(leadsTable.id, lead.id));
-          } else {
-            // No campaign — give up and reset to pending.
-            await db.update(leadsTable)
-              .set({ status: "pending", callbackAt: null })
-              .where(eq(leadsTable.id, lead.id));
-          }
+          logger.warn({ leadId: lead.id, campaignId: lead.campaignId, status: campaign?.status }, "Callback skipped — campaign not active; restoring");
+          await db.update(leadsTable)
+            .set({ status: "callback", callbackAt: now })   // re-arm so next tick re-tries
+            .where(eq(leadsTable.id, lead.id))
+            .catch(() => {});
           continue;
         }
 
-        // Reset lead to pending and clear callbackAt — campaign engine will pick it up,
-        // or we fire directly below if the campaign has a fromNumber.
-        await db.update(leadsTable)
-          .set({ status: "pending", callbackAt: null, retryCount: 0 })
-          .where(eq(leadsTable.id, lead.id));
+        // Resolve a from-number: prefer campaign.fromNumber, fall back to any
+        // active outbound number from the pool. NEVER drop the callback silently.
+        let fromNumber = campaign.fromNumber;
+        if (!fromNumber) {
+          const [poolRow] = await db
+            .select({ phoneNumber: phoneNumbersTable.phoneNumber })
+            .from(phoneNumbersTable)
+            .where(
+              and(
+                eq(phoneNumbersTable.status, "active"),
+                eq(phoneNumbersTable.isBlocked, false),
+                sql`${phoneNumbersTable.direction} IN ('outbound', 'both')`,
+                sql`(${phoneNumbersTable.campaignId} = ${campaign.id} OR ${phoneNumbersTable.campaignId} IS NULL)`
+              )
+            )
+            .orderBy(asc(phoneNumbersTable.usageCount))
+            .limit(1);
+          fromNumber = poolRow?.phoneNumber ?? null;
+        }
 
-        // Direct dial: fire the call immediately if we know the from number.
-        if (campaign.fromNumber) {
-          await enqueueCall({
+        if (!fromNumber) {
+          logger.error({ leadId: lead.id, campaignId: campaign.id }, "Callback: no from-number available — restoring callback for retry");
+          await db.update(leadsTable)
+            .set({ status: "callback", callbackAt: new Date(now.getTime() + 5 * 60_000) })
+            .where(eq(leadsTable.id, lead.id))
+            .catch(() => {});
+          continue;
+        }
+
+        // enqueueCall returns { success: false, error } instead of throwing
+        // for Telnyx/worker errors, so we MUST check both return value AND throw.
+        let dialOk = false;
+        let dialErr: string | undefined;
+        try {
+          const result = await enqueueCall({
             phone:           lead.phone,
-            from_number:     campaign.fromNumber,
+            from_number:     fromNumber,
             agent_prompt:    campaign.agentPrompt ?? "",
             voice:           campaign.voice ?? "default",
             transfer_number: campaign.transferNumber ?? undefined,
             campaign_id:     String(lead.campaignId),
             campaign_name:   campaign.name,
             amd_enabled:     campaign.amdEnabled ? "true" : undefined,
-          }).catch((err) =>
-            logger.error({ err: String(err), leadId: lead.id }, "Callback enqueue failed")
-          );
+          });
+          dialOk = result?.success === true;
+          if (!dialOk) dialErr = result?.error ?? "enqueueCall returned success=false";
+        } catch (err) {
+          dialErr = String(err);
+        }
+
+        if (!dialOk) {
+          logger.error({ leadId: lead.id, err: dialErr }, "Callback enqueue failed — restoring callback for retry in 5 min");
+          await db.update(leadsTable)
+            .set({ status: "callback", callbackAt: new Date(now.getTime() + 5 * 60_000) })
+            .where(eq(leadsTable.id, lead.id))
+            .catch(() => {});
         }
       }
     } catch (err) {

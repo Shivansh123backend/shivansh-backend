@@ -523,12 +523,15 @@ router.post("/calls/inbound", authenticate, async (req, res): Promise<void> => {
 // ── POST /calls/:callControlId/conference ─────────────────────────────────────
 // Dials a third party and bridges them into the active call (3-way calling).
 // Body: { to: E.164 phone number, from?: E.164 (optional; uses campaign default) }
+//
+// SECURITY: admin-only + strict E.164 to prevent toll-fraud / arbitrary dial-out.
+const E164_RE = /^\+[1-9]\d{6,14}$/;
 const conferenceSchema = z.object({
-  to:   z.string().min(7),
-  from: z.string().optional(),
+  to:   z.string().regex(E164_RE, "to must be E.164 format (e.g. +12035551234)"),
+  from: z.string().regex(E164_RE).optional(),
 });
 
-router.post("/calls/:callControlId/conference", authenticate, async (req, res): Promise<void> => {
+router.post("/calls/:callControlId/conference", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const { callControlId } = req.params as { callControlId: string };
 
   const parsed = conferenceSchema.safeParse(req.body);

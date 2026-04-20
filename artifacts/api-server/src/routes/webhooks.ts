@@ -15,6 +15,7 @@ import {
   campaignsTable,
   aiAgentsTable,
   callLogsTable,
+  callsTable,
   leadsTable,
   voicesTable,
   humanAgentsTable,
@@ -1341,6 +1342,17 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
     // ── 3b. Speak/playback ended — clear speaking flag & replay missed ────────
     if (eventType === "call.speak.ended" || eventType === "call.playback.ended") {
+      // ── If this was a VM drop message, hang up now ──────────────────────────
+      // CHECK FIRST — must run before the background-overlay early-return so a
+      // pending VM drop hangup is never swallowed when overlay audio is active.
+      if (pendingVmDropHangup.has(callControlId)) {
+        pendingVmDropHangup.delete(callControlId);
+        aiSpeaking.delete(callControlId);
+        logger.info({ callControlId }, "VM drop message finished — hanging up");
+        try { await telnyxAction(callControlId, "hangup", {}); } catch { /* already gone */ }
+        return;
+      }
+
       // If this event is from the background sound overlay ending, ignore it —
       // it must not clear aiSpeaking or trigger a caller-turn replay.
       if (eventType === "call.playback.ended" && backgroundSoundActive.has(callControlId)) {
@@ -1352,14 +1364,6 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       logger.info({ callControlId, eventType }, "AI speech finished");
       aiSpeaking.delete(callControlId);
       aiSpeakEndedAt.set(callControlId, Date.now()); // start cooldown window
-
-      // ── If this was a VM drop message, hang up now ───────────────────────────
-      if (pendingVmDropHangup.has(callControlId)) {
-        pendingVmDropHangup.delete(callControlId);
-        logger.info({ callControlId }, "VM drop message finished — hanging up");
-        try { await telnyxAction(callControlId, "hangup", {}); } catch { /* already gone */ }
-        return;
-      }
 
       // ── If a transfer is pending, execute it now that TTS has finished ──────
       if (pendingTransferAfterPlay.has(callControlId)) {
@@ -1614,6 +1618,38 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           .catch((err) => logger.warn({ err: String(err), numberUsed }, "Number pool release failed"));
 
         logger.info({ numberUsed, disposition, isUnproductive }, "Number released to pool");
+      }
+
+      // ── Mirror finalization onto callsTable so per-agent stats include
+      // duration + disposition for transferred calls. We match by externalCallId
+      // (= callControlId). Best-effort — never fails the webhook.
+      // Map free-form webhook dispositions onto the callsTable enum
+      // (interested, not_interested, vm, no_answer, busy, connected, transferred, disconnected).
+      const mapToCallsEnum = (d: string): "interested" | "not_interested" | "vm" | "no_answer" | "busy" | "connected" | "transferred" | "disconnected" | null => {
+        const allowed = new Set(["interested", "not_interested", "vm", "no_answer", "busy", "connected", "transferred", "disconnected"]);
+        if (allowed.has(d)) return d as "interested";
+        // Common webhook outputs that need mapping
+        if (d === "callback_requested" || d === "completed" || d === "successful") return "connected";
+        if (d === "voicemail") return "vm";
+        if (d === "failed" || d === "error") return "disconnected";
+        return null; // unknown — skip the disposition column rather than throw
+      };
+      try {
+        const mappedDisposition = mapToCallsEnum(disposition);
+        await db
+          .update(callsTable)
+          .set({
+            status: "completed",
+            ...(mappedDisposition ? { disposition: mappedDisposition } : {}),
+            duration: durationSecs,
+            recordingUrl: bridge.recordingUrl ?? null,
+            transcript,
+            summary,
+            endedAt: new Date(),
+          })
+          .where(eq(callsTable.externalCallId, callControlId));
+      } catch (err) {
+        logger.debug({ err: String(err), callControlId, disposition }, "callsTable mirror update skipped");
       }
 
       // Live monitor: call ended
