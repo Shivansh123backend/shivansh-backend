@@ -1,0 +1,155 @@
+You are a senior backend engineer and AI voice systems architect.
+
+Your task is to upgrade my existing AI calling system to production-level quality similar to Vapi/Air-style systems.
+
+You must MODIFY my existing backend codebase directly. Do not explain—implement.
+
+---
+
+## GOAL
+
+Fix conversational quality issues:
+
+* AI responding to noise (sighs, silence)
+* Slow responses to simple questions
+* Poor handling of rude users
+* No structured conversation flow
+* Robotic timing and delivery
+
+---
+
+## STEP 1 — INPUT FILTERING (MANDATORY)
+
+Add a preprocessing layer before LLM:
+
+* Ignore input if:
+
+  * confidence < 0.6
+  * transcript length < 2
+  * transcript is filler ("uh", "hmm", "ah")
+
+If ignored:
+
+* do nothing OR respond:
+  "Hello, are you there?"
+
+---
+
+## STEP 2 — FAST RESPONSE ENGINE
+
+Before calling LLM, check for exact/near matches:
+
+* "where are you calling from"
+* "who is this"
+* "how did you get my number"
+
+Return instant responses:
+
+* "I’m calling from Cloudisoft regarding your request."
+* "This is John from Cloudisoft."
+* "You had previously shown interest in our services."
+
+This must bypass LLM completely.
+
+---
+
+## STEP 3 — INTENT CLASSIFIER
+
+Create a lightweight function:
+
+Detect:
+
+* question
+* objection_price
+* rejection
+* positive
+* neutral
+
+Use keyword-based detection.
+
+---
+
+## STEP 4 — STATE MACHINE
+
+Implement conversation states:
+
+INTRO → QUALIFY → DISCOVER → PITCH → OBJECTION → CLOSE → END
+
+Rules:
+
+* maintain current state per call
+* transition based on detected intent
+* never skip logical progression
+
+---
+
+## STEP 5 — RESPONSE CONTROL
+
+When calling LLM:
+
+Pass:
+
+* user input
+* detected intent
+* current state
+
+Ensure:
+
+* short responses (1–2 sentences)
+* no long paragraphs
+* no repetition
+
+---
+
+## STEP 6 — INTERRUPTION HANDLING
+
+If user speaks while AI is speaking:
+
+* immediately stop TTS
+* process new input
+
+---
+
+## STEP 7 — TIMING LAYER
+
+Add artificial delay:
+
+* 300–800ms before responding
+* randomize delay for human feel
+
+---
+
+## STEP 8 — LOGGING (IMPORTANT)
+
+Log:
+
+* input
+* confidence
+* detected intent
+* state transitions
+
+---
+
+## STEP 9 — OUTPUT STYLE ENFORCEMENT
+
+Ensure all responses:
+
+* sound natural
+* not robotic
+* slightly conversational
+* calm and confident
+
+---
+
+## FINAL INSTRUCTION
+
+Modify my codebase to implement all above systems.
+
+Do not explain.
+Do not summarize.
+Write clean, production-ready code.
+
+If multiple files are needed, create them.
+If refactoring is needed, do it.
+
+Make my AI dialer feel human, controlled, and intelligent.

@@ -16,6 +16,17 @@ import OpenAI from "openai";
 import { logger } from "../lib/logger.js";
 import { emitToSupervisors, getIO } from "../websocket/index.js";
 import { getCallListeners } from "../websocket/callListeners.js";
+import {
+  filterTranscript,
+  getFastResponse,
+  classifyIntent,
+  nextState,
+  buildSystemPrompt,
+  humanThinkDelay,
+  logTurn,
+  type ConversationState,
+  type Intent,
+} from "./aiPipeline.js";
 
 const DEEPGRAM_API_KEY  = process.env.DEEPGRAM_API_KEY ?? "";
 const CARTESIA_API_KEY  = process.env.CARTESIA_API_KEY ?? "";
@@ -71,6 +82,8 @@ interface BridgeState {
   currentAbortCtrl: AbortController | null;   // aborts in-flight Cartesia fetch
   isClosed: boolean;
   pendingTransfer: boolean;
+  conversationState: ConversationState;
+  lastIntent: Intent;
   transcriptCallback?: (text: string) => void;
   onTransferRequested?: () => void;  // called when AI says transfer phrase
 }
@@ -238,10 +251,21 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
   let textBuffer = "";
 
   try {
-    // Always pin system message at [0]; keep last 13 turns to avoid context overflow
-    const sysMsg = state.messages[0]!;
+    // STEP 7: human-feel thinking delay before responding
+    await humanThinkDelay();
+    if (state.isClosed || state.currentTurnId !== turnId) return;
+
+    // STEP 4 + 5: rebuild system prompt with current stage + intent on every turn
+    const dynamicSystem = buildSystemPrompt(
+      state.systemPrompt,
+      state.conversationState,
+      state.lastIntent,
+    );
     const recentMsgs = state.messages.slice(1).slice(-13);
-    const msgsForLLM = [sysMsg, ...recentMsgs];
+    const msgsForLLM: Message[] = [
+      { role: "system", content: dynamicSystem },
+      ...recentMsgs,
+    ];
 
     const stream = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -383,45 +407,80 @@ function connectDeepgram(state: BridgeState): void {
       const alt = msg.channel?.alternatives?.[0];
       const transcript = (alt?.transcript ?? "").trim();
       const confidence = alt?.confidence ?? 0;
-
-      if (!transcript || confidence < 0.2) return;
+      if (!transcript) return;
 
       const isSpeechFinal = msg.speech_final === true;
 
       // ── Barge-in on ANY non-final result ────────────────────────────────
-      // Deepgram sends two types of pre-final messages:
-      //   is_final=false  → interim (classic)
-      //   is_final=true, speech_final=false → partial final (utterance chunk done but speech continuing)
-      // Both should interrupt the AI immediately — we were previously only catching is_final=false.
-      if (!isSpeechFinal && state.isAiSpeaking) {
+      // (only if confidence is high enough to be real speech, not noise)
+      if (!isSpeechFinal && state.isAiSpeaking && confidence >= 0.6) {
         triggerBargeIn(state);
-        return;  // Wait for speech_final to build the full response
+        return;
       }
 
       // ── Full response on speech_final ────────────────────────────────────
-      if (isSpeechFinal) {
-        logger.info(
-          { callControlId: state.callControlId, transcript, confidence },
-          "Deepgram speech_final"
-        );
+      if (!isSpeechFinal) return;
 
-        state.transcriptCallback?.(transcript);
+      // ── STEP 1: Input filtering ──────────────────────────────────────────
+      const filter = filterTranscript(transcript, confidence);
+      if (!filter.accept) {
+        logTurn(state.callControlId, {
+          transcript,
+          confidence,
+          filtered: filter.reason,
+        });
+        return;
+      }
 
-        // Emit caller transcript to live monitor
+      // ── STEP 3: Intent classification ────────────────────────────────────
+      const intent = classifyIntent(transcript);
+      const prevState = state.conversationState;
+      const newState = nextState(prevState, intent);
+      state.lastIntent = intent;
+      state.conversationState = newState;
+
+      logTurn(state.callControlId, {
+        transcript,
+        confidence,
+        intent,
+        state: prevState,
+        nextState: newState,
+      });
+
+      state.transcriptCallback?.(transcript);
+      emitToSupervisors("call:transcription", {
+        callControlId: state.callControlId,
+        speaker: "caller",
+        text: transcript,
+        ts: Date.now(),
+      });
+
+      if (state.isAiSpeaking) triggerBargeIn(state);
+
+      // ── STEP 2: Fast-response cache (bypass LLM) ─────────────────────────
+      const fast = getFastResponse(transcript);
+      if (fast) {
+        logTurn(state.callControlId, { transcript, fastResponse: true });
+        state.messages.push({ role: "user", content: transcript });
+        state.messages.push({ role: "assistant", content: fast });
+        const turnId = ++state.currentTurnId;
+        state.isAiSpeaking = true;
+        humanThinkDelay()
+          .then(() => speakText(state, fast, turnId))
+          .then(() => { if (state.currentTurnId === turnId) state.isAiSpeaking = false; })
+          .catch(() => { state.isAiSpeaking = false; });
         emitToSupervisors("call:transcription", {
           callControlId: state.callControlId,
-          speaker: "caller",
-          text: transcript,
+          speaker: "agent",
+          text: fast,
           ts: Date.now(),
         });
-
-        // Belt-and-suspenders: if AI is still speaking (e.g. very fast speech_final), stop it
-        if (state.isAiSpeaking) triggerBargeIn(state);
-
-        generateAndSpeak(state, transcript).catch((err) => {
-          logger.error({ err: String(err) }, "generateAndSpeak failed");
-        });
+        return;
       }
+
+      generateAndSpeak(state, transcript).catch((err) => {
+        logger.error({ err: String(err) }, "generateAndSpeak failed");
+      });
     } catch {
       // ignore
     }
@@ -466,6 +525,8 @@ export function connectCustomBridge(
     currentAbortCtrl: null,
     isClosed: false,
     pendingTransfer: false,
+    conversationState: "INTRO",
+    lastIntent: "neutral",
     transcriptCallback: opts.transcriptCallback,
     onTransferRequested: opts.onTransferRequested,
   };

@@ -1,0 +1,161 @@
+You are a senior AI systems engineer specializing in real-time voice agents.
+
+Your task is to upgrade my AI calling backend by implementing a premium objection handling engine that behaves intelligently, naturally, and conversationally.
+
+Do NOT explain. Directly modify and create code where needed.
+
+---
+
+## GOAL
+
+Fix weak objection handling and make conversations:
+
+* natural
+* adaptive
+* calm under pressure
+* human-like
+* conversion-focused
+
+---
+
+## STEP 1 — OBJECTION DETECTION SYSTEM
+
+Create a function to detect objection types from user input.
+
+Detect at least:
+
+* not_interested
+* price
+* time (busy / later)
+* already_have
+* info_brush (send details)
+* hard_reject (stop / remove / don’t call)
+
+Use keyword-based detection (case-insensitive).
+
+---
+
+## STEP 2 — OBJECTION RESPONSE ENGINE
+
+Create a structured response generator.
+
+Every response MUST follow:
+
+1. Acknowledge
+2. Normalize
+3. Redirect
+4. Ask a question
+
+Implement responses like:
+
+PRICE:
+"I understand—that’s the first thing most people check. Just so I’m clear, are you comparing based on price or overall coverage?"
+
+NOT INTERESTED:
+"Got it—usually that’s because it doesn’t seem relevant at first. Just quickly, is it something you’ve already sorted or just not looking right now?"
+
+TIME:
+"No worries—I’ll keep it quick. Would later today be better or tomorrow?"
+
+ALREADY HAVE:
+"Makes sense—most people already have something in place. This is more about seeing if there’s a better fit. Would you be open to a quick comparison?"
+
+INFO BRUSH:
+"I can send details—just so I send the right thing, what matters more to you here, price or coverage?"
+
+HARD REJECT:
+"Understood, I won’t push this further. Thanks for your time."
+
+---
+
+## STEP 3 — TONE CONTROL SYSTEM
+
+Add tone detection:
+
+* If user uses aggressive or abusive language:
+  → switch to "firm calm tone"
+
+Firm tone rules:
+
+* shorter responses
+* no persuasion
+* offer exit politely
+
+---
+
+## STEP 4 — MEMORY TRACKING
+
+Track per-call:
+
+* objectionCount
+* lastObjectionType
+
+If objectionCount > 2:
+→ reduce push
+→ offer callback or exit
+
+---
+
+## STEP 5 — RESPONSE VARIATION
+
+Avoid repeating same response.
+
+Create 2–3 variations per objection type.
+
+Randomize selection.
+
+---
+
+## STEP 6 — MICRO HUMANIZATION
+
+Inject natural conversational fillers occasionally:
+
+* "got it"
+* "makes sense"
+* "fair enough"
+
+Do NOT overuse.
+
+---
+
+## STEP 7 — INTEGRATION
+
+Integrate into main call handler:
+
+Flow:
+
+1. receive input
+2. detect objection
+3. if objection exists:
+   → generate objection response
+4. else:
+   → send to LLM
+
+---
+
+## STEP 8 — SAFETY RULES
+
+* Never argue
+* Never repeat same line
+* Never push after hard rejection
+* Always end objection response with a question (except hard reject)
+
+---
+
+## STEP 9 — CLEAN CODE
+
+* modular functions
+* reusable logic
+* production-ready structure
+
+---
+
+## FINAL INSTRUCTION
+
+Modify my backend to include this objection handling engine.
+
+Create new files if needed.
+Refactor existing code if needed.
+
+Do not explain anything.
+Only implement clean, working code.
