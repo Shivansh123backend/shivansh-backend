@@ -1428,6 +1428,22 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         bridge.campaignName
       );
 
+      // ── Step 6: Call scoring (additive — never breaks the existing flow) ──
+      let callScore: number | null = null;
+      let callObjections: string | null = null;
+      try {
+        const { scoreCall } = await import("../services/callScorer.js");
+        const result = scoreCall({ transcript, durationSecs, disposition });
+        callScore = result.score;
+        callObjections = JSON.stringify(result.objections);
+        logger.info(
+          { callControlId, score: result.score, objections: result.objections, breakdown: result.breakdown },
+          "Call scored"
+        );
+      } catch (err) {
+        logger.warn({ err: String(err), callControlId }, "Call scoring failed — continuing without score");
+      }
+
       // Resolve the from-number used for this call
       const numberUsed = callOwnNumber.get(callControlId) ?? null;
 
@@ -1450,6 +1466,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             summary,
             numberUsed,
             answerType,
+            score: callScore,
+            objections: callObjections,
           })
           .where(eq(callLogsTable.callControlId, callControlId))
           .returning()
@@ -1470,6 +1488,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             callControlId,
             numberUsed,
             answerType,
+            score: callScore,
+            objections: callObjections,
           }).catch((err) =>
             logger.error({ err: String(err), callControlId }, "Failed to insert outbound call log fallback")
           );
@@ -1509,6 +1529,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           callControlId,
           numberUsed,
           answerType,
+          score: callScore,
+          objections: callObjections,
         }).catch((err) =>
           logger.error({ err: String(err), callControlId }, "Failed to insert inbound call log")
         );

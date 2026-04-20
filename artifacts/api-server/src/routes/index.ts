@@ -21,6 +21,7 @@ import audioRouter from "./audio.js";
 import dncRouter from "./dnc.js";
 import queuesRouter from "./queues.js";
 import llmRouter from "./llm.js";
+import optimizerRouter from "./optimizer.js";
 import { globalErrorHandler } from "../lib/errors.js";
 import type { Request, Response, NextFunction } from "express";
 
@@ -48,6 +49,7 @@ router.use(audioRouter);
 router.use(dncRouter);
 router.use(queuesRouter);
 router.use(llmRouter);
+router.use(optimizerRouter);
 
 router.use((err: Error, req: Request, res: Response, next: NextFunction) => globalErrorHandler(err, req, res, next));
 
