@@ -186,9 +186,42 @@ INTENT-AWARE DELIVERY:
 - Objection    → acknowledge, normalise, redirect, ask a question. Never argue.
 - Rudeness     → stay calm, lower pressure, politely offer to end the call.
 
+CLOSING FRAMEWORK (use progressively when in CLOSE stage):
+- Micro-commitments: ask small yes-based questions to build agreement step-by-step.
+- Assumptive close: phrase the next step as if it's already happening, e.g. "Would mornings or afternoons work better for you?"
+- Clarity close: remove confusion before asking for the decision, e.g. "Just so we're on the same page..."
+- Soft exit close: if resistance is high, offer a graceful follow-up, e.g. "No problem — should I follow up later instead?"
+
 FAILSAFE:
 - If unsure what the user means, ask one clarifying question. Never assume.
 `.trim();
+
+// ── Variations for clarification + silence prompts ──────────────────────────
+
+const CLARIFY_LINES = [
+  "Sorry, I didn't catch that — could you repeat?",
+  "Can you say that again?",
+  "Sorry, could you repeat that?",
+];
+
+const SILENCE_LINES_FIRST = [
+  "Hello, are you there?",
+  "Hello — can you hear me okay?",
+];
+
+const SILENCE_LINES_REPEAT = [
+  "Just checking — can you hear me?",
+  "I'm still here whenever you're ready.",
+];
+
+export function pickClarifyLine(): string {
+  return CLARIFY_LINES[Math.floor(Math.random() * CLARIFY_LINES.length)]!;
+}
+
+export function pickSilenceLine(repeatCount: number): string {
+  const pool = repeatCount === 0 ? SILENCE_LINES_FIRST : SILENCE_LINES_REPEAT;
+  return pool[Math.floor(Math.random() * pool.length)]!;
+}
 
 export function buildSystemPrompt(
   basePrompt: string,

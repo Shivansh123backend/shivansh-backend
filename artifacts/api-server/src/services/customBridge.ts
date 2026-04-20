@@ -24,6 +24,8 @@ import {
   buildSystemPrompt,
   humanThinkDelay,
   logTurn,
+  pickClarifyLine,
+  pickSilenceLine,
   type ConversationState,
   type Intent,
 } from "./aiPipeline.js";
@@ -92,6 +94,9 @@ interface BridgeState {
   objectionMemory: ObjectionMemory;
   shouldEndAfterSpeech: boolean;
   lastClarifyAt: number;
+  lastUserActivityAt: number;
+  silencePromptCount: number;
+  silenceTimer: NodeJS.Timeout | null;
   transcriptCallback?: (text: string) => void;
   onTransferRequested?: () => void;  // called when AI says transfer phrase
 }
@@ -453,6 +458,10 @@ function connectDeepgram(state: BridgeState): void {
       const confidence = alt?.confidence ?? 0;
       if (!transcript) return;
 
+      // Any real transcript = caller activity. Reset silence tracker.
+      state.lastUserActivityAt = Date.now();
+      state.silencePromptCount = 0;
+
       const isSpeechFinal = msg.speech_final === true;
 
       // ── Barge-in on ANY non-final result ────────────────────────────────
@@ -479,7 +488,7 @@ function connectDeepgram(state: BridgeState): void {
           const ago = Date.now() - state.lastClarifyAt;
           if (ago > 8000) {  // throttle: at most one clarification per 8 s
             state.lastClarifyAt = Date.now();
-            speakInstant(state, transcript, "Sorry, I didn't catch that — could you repeat?");
+            speakInstant(state, transcript, pickClarifyLine());
           }
         }
         return;
@@ -590,14 +599,37 @@ export function connectCustomBridge(
     objectionMemory: createObjectionMemory(),
     shouldEndAfterSpeech: false,
     lastClarifyAt: 0,
+    lastUserActivityAt: Date.now(),
+    silencePromptCount: 0,
+    silenceTimer: null,
     transcriptCallback: opts.transcriptCallback,
     onTransferRequested: opts.onTransferRequested,
   };
 
   bridges.set(callControlId, state);
   connectDeepgram(state);
+  startSilenceWatchdog(state);
 
   logger.info({ callControlId }, "Custom bridge started (Deepgram + GPT-4o + Cartesia)");
+}
+
+/** Silence watchdog — every 1s checks if the caller has been silent for 4+ s while the AI is idle.
+ *  After 3 consecutive prompts with no response, gives up and stops nudging. */
+function startSilenceWatchdog(state: BridgeState): void {
+  const SILENCE_MS = 4000;
+  const MAX_PROMPTS = 3;
+  state.silenceTimer = setInterval(() => {
+    if (state.isClosed) return;
+    if (state.isAiSpeaking || state.pendingTransfer) return;
+    if (state.silencePromptCount >= MAX_PROMPTS) return;
+    const idle = Date.now() - state.lastUserActivityAt;
+    if (idle < SILENCE_MS) return;
+    const line = pickSilenceLine(state.silencePromptCount);
+    state.silencePromptCount += 1;
+    state.lastUserActivityAt = Date.now(); // reset so we wait another window before re-prompting
+    logger.info({ callControlId: state.callControlId, idle, count: state.silencePromptCount }, "Silence prompt");
+    speakInstant(state, "[silence]", line);
+  }, 1000);
 }
 
 /** Forward Telnyx µ-law audio to Deepgram. Also pipes to live listeners. */
@@ -625,6 +657,7 @@ export function closeCustomBridge(callControlId: string): void {
   state.currentTurnId++;
   state.currentAbortCtrl?.abort();
   state.deepgramWs?.close();
+  if (state.silenceTimer) { clearInterval(state.silenceTimer); state.silenceTimer = null; }
   bridges.delete(callControlId);
   logger.info({ callControlId }, "Custom bridge closed");
 }
