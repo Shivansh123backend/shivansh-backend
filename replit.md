@@ -174,3 +174,22 @@ All providers extend `CallProvider` (call/transfer/hangup). Registry provides `c
 - **Hold music**: served via `/api/audio/hold/:preset` proxy; returns streamed MP3 to Telnyx transfer `audio_url`.
 - **Auth token key**: `localStorage.getItem("auth_token")` — NOT "token"
 - **Audio cache**: `voiceRegistry.ts` → `audioCache`; token URL `GET /api/audio/:token` (no auth, CORS `*`)
+
+## Production Deployment (2026-04-20)
+
+Deployed to 2-VPS Hostinger setup (Ubuntu 22.04, Node 20 LTS, PM2):
+
+| Role | Host | Health URL |
+|---|---|---|
+| Primary | 72.62.211.160 | http://72.62.211.160:8080/api/health |
+| Secondary | 72.62.212.7 | http://72.62.212.7:8080/api/health |
+
+- App dir: `/opt/shivansh` (owner `shivansh:shivansh`); env at `/opt/shivansh/deploy/.env` (chmod 600)
+- PM2 procs per VPS: `shivansh-api` + `shivansh-worker`. VPS 2 also runs `shivansh-failover` (polls primary every 30s; promotes worker after 3 failures)
+- Reboot persistence: systemd unit `pm2-shivansh.service` patched with `EnvironmentFile=/opt/shivansh/deploy/.env`
+- Source: `https://github.com/Shivansh123backend/shivansh-backend.git` (private; deploy key on each repo)
+- SSH from Replit: `ssh -i ~/.ssh/vps_deploy root@<host>`
+- Update flow: `bash deploy/deploy.sh` (git push → ssh both VPS → `git pull` → `pnpm install` → `pnpm build` → `pm2 reload all` → health check)
+- Webhook base URL still points to `https://shivanshbackend.replit.app`; switch to a VPS-fronted domain when DNS/TLS ready
+- Worker disabled by default on both VPS (`WORKER_ENABLED=false`) until Redis is provisioned for the BullMQ queue
+- Optional env not yet set: `TELNYX_PUBLIC_KEY` (webhook signature verify), `CARTESIA_VOICE_ID`, `REDIS_*`, `RESEND_API_KEY`/`SENDGRID_API_KEY`
