@@ -1,0 +1,226 @@
+---
+
+## ADD-ON: VOICE CLONING + ACCENT TUNING + GEO-BASED OPTIMIZATION
+
+You must ADD advanced voice and geo-intelligence features to my AI calling system WITHOUT modifying UI or breaking existing logic.
+
+---
+
+## STRICT RULES
+
+* DO NOT change UI
+* DO NOT change UI colors
+* DO NOT rewrite existing system
+* ONLY add modular enhancements
+
+---
+
+## STEP 1 — VOICE PROFILE SYSTEM
+
+Create:
+
+voiceProfileManager.js
+
+Responsibilities:
+
+* manage multiple voice profiles
+* assign voice per campaign or agent
+
+Voice profiles must include:
+
+* voice ID (TTS provider)
+* accent type (US / UK / neutral)
+* speaking speed
+* tone style (friendly / professional)
+
+---
+
+## STEP 2 — VOICE CLONING SUPPORT
+
+Integrate with TTS provider:
+
+* support custom voice IDs
+* allow selection of cloned voices
+
+Ensure:
+
+* voices can be switched per campaign
+* fallback to default voice if unavailable
+
+---
+
+## STEP 3 — ACCENT TUNING ENGINE
+
+Create:
+
+accentEngine.js
+
+Modify responses BEFORE TTS:
+
+US style:
+
+* casual tone
+* shorter phrasing
+* direct
+
+Example:
+"Got it—let me walk you through it quickly."
+
+UK style:
+
+* slightly formal
+* polite phrasing
+* softer delivery
+
+Example:
+"Alright, let me just walk you through that briefly."
+
+---
+
+## STEP 4 — GEO DETECTION SYSTEM
+
+Create:
+
+geoDetector.js
+
+Detect user region using:
+
+* phone number country code
+* campaign settings
+* lead metadata
+
+Output:
+
+* region (US / UK / others)
+
+---
+
+## STEP 5 — GEO-BASED RESPONSE ADAPTATION
+
+Create:
+
+geoBehaviorEngine.js
+
+Adjust based on region:
+
+US behavior:
+
+* faster pace
+* confident tone
+* quicker closing
+
+UK behavior:
+
+* slower pace
+* polite tone
+* more explanation before closing
+
+---
+
+## STEP 6 — GEO-SPECIFIC CLOSING STYLE
+
+US closing:
+
+* assumptive close
+* direct:
+  "Would mornings or afternoons work better?"
+
+UK closing:
+
+* softer close:
+  "Would you be open to exploring this further?"
+
+---
+
+## STEP 7 — VOICE PACING ADJUSTMENT BY REGION
+
+US:
+
+* slightly faster speech
+* minimal pauses
+
+UK:
+
+* slightly slower
+* more pauses
+* softer delivery
+
+---
+
+## STEP 8 — SUPERVISOR INTEGRATION
+
+Send geo + voice data to aiSupervisor.
+
+Allow:
+
+* tone adjustments mid-call
+* pacing adjustments
+* closing style changes
+
+---
+
+## STEP 9 — COACHING INTEGRATION
+
+coachEngine must:
+
+* adapt phrasing based on region
+* ensure accent consistency
+* refine tone dynamically
+
+---
+
+## STEP 10 — CAMPAIGN CONFIG SUPPORT
+
+Allow campaign setup to include:
+
+* preferred accent
+* voice profile
+* target region
+
+---
+
+## STEP 11 — DATA STORAGE
+
+Store:
+
+* voice profile usage
+* region-based performance
+* conversion per region
+
+---
+
+## STEP 12 — PERFORMANCE OPTIMIZATION
+
+Analyze:
+
+* which accent performs better
+* which tone converts better per region
+
+Use this to:
+
+* auto-select best voice profile
+
+---
+
+## STEP 13 — FAILSAFE
+
+If voice/accent fails:
+
+* fallback to default voice
+* do NOT break call
+
+---
+
+## FINAL INSTRUCTION
+
+Enhance system with:
+
+* voice cloning support
+* accent tuning
+* geo-based behavior
+
+Do NOT modify UI.
+Do NOT break existing system.
+
+Ensure natural, region-appropriate conversations.
+Write clean, modular, production-ready code.

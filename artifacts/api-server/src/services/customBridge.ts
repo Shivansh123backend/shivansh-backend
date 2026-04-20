@@ -39,6 +39,7 @@ import {
 } from "./aiSupervisor.js";
 import { planIntervention, type InterventionPlan } from "./interventionEngine.js";
 import { coachResponse } from "./coachEngine.js";
+import { applyPacing, paceForEmotion } from "./voicePacing.js";
 import {
   handleObjection,
   createObjectionMemory,
@@ -168,8 +169,11 @@ async function speakText(
   text: string,
   turnId: number,
 ): Promise<void> {
-  const clean = stripMarkdown(text);
-  if (!clean.trim() || state.isClosed || state.currentTurnId !== turnId) return;
+  const cleanRaw = stripMarkdown(text);
+  if (!cleanRaw.trim() || state.isClosed || state.currentTurnId !== turnId) return;
+  // Apply pacing transformations so TTS sounds human (commas → soft pauses,
+  // longer pauses before key terms). Failsafe: returns input on any error.
+  const clean = applyPacing(cleanRaw, { intensity: paceForEmotion(state.supervisorMemory.emotion.current) });
 
   const ctrl = new AbortController();
   state.currentAbortCtrl = ctrl;

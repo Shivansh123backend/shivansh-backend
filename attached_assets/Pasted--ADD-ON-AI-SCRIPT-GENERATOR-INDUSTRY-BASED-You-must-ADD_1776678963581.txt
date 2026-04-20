@@ -1,0 +1,197 @@
+---
+
+## ADD-ON: AI SCRIPT GENERATOR (INDUSTRY-BASED)
+
+You must ADD an AI script generation engine to my system WITHOUT modifying UI or breaking existing logic.
+
+---
+
+## STRICT RULES
+
+* DO NOT change UI
+* DO NOT change UI colors
+* DO NOT rewrite existing system
+* ONLY add modular enhancements
+
+---
+
+## GOAL
+
+Allow user to input a simple campaign description (industry + goal)
+
+Example:
+"Sell auto insurance in USA"
+"Solar panel leads UK"
+"Health insurance seniors US"
+
+Automatically generate a full call script and campaign configuration.
+
+---
+
+## STEP 1 — SCRIPT GENERATOR MODULE
+
+Create:
+
+scriptGenerator.js
+
+Use LLM to generate structured output:
+
+* INTRO
+* QUALIFY
+* DISCOVER
+* PITCH
+* OBJECTION HANDLING
+* CLOSE
+
+---
+
+## STEP 2 — INDUSTRY DETECTION
+
+Detect industry from input:
+
+* insurance
+* solar
+* real estate
+* finance
+* healthcare
+* others
+
+Apply relevant tone and structure.
+
+---
+
+## STEP 3 — AUDIENCE DETECTION
+
+Extract:
+
+* region (US / UK / etc.)
+* target audience (age, intent)
+
+Adjust:
+
+* tone
+* pace
+* complexity
+
+---
+
+## STEP 4 — SCRIPT STRUCTURE OUTPUT
+
+Generate:
+
+INTRO:
+
+* short opening line
+* identity + purpose
+
+QUALIFY:
+
+* 2–3 quick qualifying questions
+
+DISCOVER:
+
+* understand needs
+
+PITCH:
+
+* simple value explanation
+
+OBJECTION HANDLING:
+
+* industry-specific objections
+
+CLOSE:
+
+* appropriate closing strategy
+
+---
+
+## STEP 5 — INDUSTRY-SPECIFIC OBJECTIONS
+
+Generate common objections per industry:
+
+Insurance:
+
+* price
+* coverage confusion
+
+Solar:
+
+* upfront cost
+* trust
+
+Healthcare:
+
+* eligibility
+* confusion
+
+---
+
+## STEP 6 — COMPLIANCE-AWARE LANGUAGE
+
+Ensure:
+
+* no misleading claims
+* clear and honest phrasing
+* professional tone
+
+---
+
+## STEP 7 — MULTIPLE VARIATIONS
+
+Generate:
+
+* 2–3 variations per section
+* allow rotation for optimization
+
+---
+
+## STEP 8 — INTEGRATION
+
+Store generated script as campaign config.
+
+Plug into:
+
+* stateManager
+* objectionEngine
+* coachEngine
+
+---
+
+## STEP 9 — OPTIMIZATION INTEGRATION
+
+Allow optimizer to:
+
+* refine generated scripts
+* replace weak lines over time
+
+---
+
+## STEP 10 — GEO + VOICE INTEGRATION
+
+Adjust script based on:
+
+* region (US / UK tone)
+* voice profile
+
+---
+
+## STEP 11 — FAILSAFE
+
+If generation fails:
+
+* fallback to default script
+* do NOT break campaign
+
+---
+
+## FINAL INSTRUCTION
+
+Add intelligent script generation capability.
+
+Allow system to create full campaign scripts from a single sentence.
+
+Do NOT modify UI.
+Do NOT break system.
+
+Write clean, modular, production-ready code.

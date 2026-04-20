@@ -513,8 +513,17 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       inArray(leadsTable.status, ["pending", "called"]),
     ));
 
-  // Sort: higher priority first, then by created date
-  pendingLeads.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  // ── Lead Prioritization ─────────────────────────────────────────────────
+  // Compute a per-lead rank score from prior call history + campaign signal,
+  // then dial highest-value leads first. Falls back to the legacy sort if the
+  // ranker errors out, so dialing is never blocked.
+  try {
+    const { prioritizeLeads } = await import("../services/leadPrioritizer.js");
+    pendingLeads = await prioritizeLeads(pendingLeads as never) as typeof pendingLeads;
+  } catch (err) {
+    logger.warn({ err: String(err), campaignId }, "Prioritization failed — using priority sort");
+    pendingLeads.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  }
 
   logger.info(
     { campaignId, count: pendingLeads.length, concurrency: maxConcurrency, dialingSpeed, mode: campaign.dialingMode },
@@ -571,9 +580,37 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
     // Dynamic number allocation from pool (picks least-used, non-busy, non-blocked number)
     const callFromNumber = await allocateNumber(campaignId, fromNumber);
 
+    // ── Conversion prediction (additive — never blocks dial) ─────────────
+    let predProb: number | null = null;
+    let predLabel: string | null = null;
+    try {
+      const { predictConversion } = await import("../services/conversionPredictor.js");
+      const prediction = await predictConversion({
+        campaignId,
+        rankScore: lead.rankScore ?? 50,
+      });
+      predProb = Math.round(prediction.probability * 100);
+      predLabel = prediction.label;
+      // Persist on the lead row for dashboard surfacing
+      await db.update(leadsTable)
+        .set({ predictedProb: predProb, predictedLabel: predLabel })
+        .where(eq(leadsTable.id, lead.id))
+        .catch(() => {});
+    } catch (err) {
+      logger.warn({ err: String(err), leadId: lead.id }, "Conversion prediction failed — continuing");
+    }
+
     const [logEntry] = await db
       .insert(callLogsTable)
-      .values({ phoneNumber: normPhone, campaignId, status: "initiated", direction: "outbound", numberUsed: callFromNumber })
+      .values({
+        phoneNumber: normPhone,
+        campaignId,
+        status: "initiated",
+        direction: "outbound",
+        numberUsed: callFromNumber,
+        predictedProb: predProb,
+        predictedLabel: predLabel,
+      })
       .returning();
 
     totalCalls++;

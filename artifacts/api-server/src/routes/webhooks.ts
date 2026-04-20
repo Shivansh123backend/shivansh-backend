@@ -1483,6 +1483,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             score: callScore,
             objections: callObjections,
             emotion: callEmotion,
+            // predictedProb / predictedLabel were stamped at dial time; preserve them
           })
           .where(eq(callLogsTable.callControlId, callControlId))
           .returning()
@@ -1506,6 +1507,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
             score: callScore,
             objections: callObjections,
             emotion: callEmotion,
+            // predictedProb / predictedLabel were stamped at dial time; preserve them
           }).catch((err) =>
             logger.error({ err: String(err), callControlId }, "Failed to insert outbound call log fallback")
           );
@@ -1548,6 +1550,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           score: callScore,
           objections: callObjections,
             emotion: callEmotion,
+            // predictedProb / predictedLabel were stamped at dial time; preserve them
         }).catch((err) =>
           logger.error({ err: String(err), callControlId }, "Failed to insert inbound call log")
         );
