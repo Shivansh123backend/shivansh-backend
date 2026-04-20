@@ -189,8 +189,14 @@ export function buildSystemPrompt(
 
 // ── 6. Timing layer ─────────────────────────────────────────────────────────
 
-export function humanThinkDelay(): Promise<void> {
-  const ms = 300 + Math.floor(Math.random() * 500); // 300–800 ms
+/** Tiny natural pause — kept short so the AI never feels sluggish.
+ *  - "instant" = 0 (used for fast-response cache: must feel immediate)
+ *  - "short"   = 80–180 ms (used for objection replies, light human feel)
+ *  - "none"    = 0 (used before LLM — the LLM's own latency already provides the pause)
+ */
+export function humanThinkDelay(kind: "instant" | "short" | "none" = "short"): Promise<void> {
+  if (kind === "instant" || kind === "none") return Promise.resolve();
+  const ms = 80 + Math.floor(Math.random() * 100);
   return new Promise((r) => setTimeout(r, ms));
 }
 

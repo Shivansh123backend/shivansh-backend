@@ -255,8 +255,8 @@ function speakInstant(
     text: reply,
     ts: Date.now(),
   });
-  humanThinkDelay()
-    .then(() => speakText(state, reply, turnId))
+  // Fast/objection replies: speak immediately, no artificial delay
+  speakText(state, reply, turnId)
     .then(() => {
       if (state.currentTurnId === turnId) state.isAiSpeaking = false;
       onDone?.();
@@ -298,10 +298,6 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
   let textBuffer = "";
 
   try {
-    // STEP 7: human-feel thinking delay before responding
-    await humanThinkDelay();
-    if (state.isClosed || state.currentTurnId !== turnId) return;
-
     // STEP 4 + 5: rebuild system prompt with current stage + intent on every turn
     const dynamicSystem = buildSystemPrompt(
       state.systemPrompt,
