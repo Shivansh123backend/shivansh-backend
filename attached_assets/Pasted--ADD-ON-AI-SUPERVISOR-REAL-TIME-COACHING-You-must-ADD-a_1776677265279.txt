@@ -1,0 +1,180 @@
+---
+
+## ADD-ON: AI SUPERVISOR + REAL-TIME COACHING
+
+You must ADD a real-time supervision layer to the system WITHOUT breaking existing functionality.
+
+---
+
+## STEP 13 — AI SUPERVISOR MODULE
+
+Create:
+
+aiSupervisor.js
+
+Responsibilities:
+
+* monitor live calls in real-time
+* analyze:
+
+  * user sentiment (positive / neutral / negative)
+  * agent performance
+  * conversation flow
+  * hesitation or breakdown
+
+Detect issues:
+
+* long silence
+* repeated confusion
+* failed objections
+* user frustration
+* call going off-track
+
+---
+
+## STEP 14 — LIVE CALL ANALYSIS
+
+During call execution:
+
+Continuously evaluate:
+
+* Is user engaged?
+* Is agent repeating?
+* Is user getting confused?
+* Is objection handled poorly?
+
+If issues detected → trigger intervention
+
+---
+
+## STEP 15 — REAL-TIME INTERVENTION ENGINE
+
+Create:
+
+interventionEngine.js
+
+If supervisor detects problem:
+
+* adjust response strategy
+* simplify language
+* change tone
+* reframe explanation
+
+Examples:
+
+If confusion:
+→ "Let me simplify that quickly..."
+
+If frustration:
+→ "I understand—let me keep this brief..."
+
+If disengagement:
+→ ask a sharper, direct question
+
+---
+
+## STEP 16 — REAL-TIME COACHING SYSTEM
+
+Create:
+
+coachEngine.js
+
+Instead of replacing agent:
+
+* guide the agent internally
+* suggest improved response before sending
+
+Flow:
+
+1. agent generates response
+2. coach reviews it
+3. improve if needed
+4. send optimized version
+
+---
+
+## STEP 17 — COACHING RULES
+
+Coach must ensure:
+
+* response is short (1–2 lines)
+* clear and natural
+* aligned with SOP
+* not repetitive
+* objection handled properly
+
+If weak:
+→ rewrite response before sending
+
+---
+
+## STEP 18 — ESCALATION CONTROL
+
+If call quality keeps degrading:
+
+* reduce pressure
+* switch to softer tone
+* move toward exit
+
+Example:
+"Seems like this might not be the right time—should I follow up later?"
+
+---
+
+## STEP 19 — SUPERVISOR MEMORY
+
+Track during call:
+
+* mistakes count
+* repeated objections
+* user sentiment trend
+
+Use this to adjust strategy dynamically
+
+---
+
+## STEP 20 — FAILSAFE SYSTEM
+
+If supervisor or coach fails:
+
+* allow original system to run
+* do NOT break call flow
+
+---
+
+## STEP 21 — INTEGRATION FLOW
+
+Updated call flow:
+
+1. input received
+2. input filter
+3. fast response
+4. intent detection
+5. state tracking
+6. objection engine
+7. agent generates response
+8. coachEngine refines response
+9. aiSupervisor monitors call
+10. interventionEngine adjusts if needed
+11. send final response
+
+---
+
+## STEP 22 — NON-DESTRUCTIVE DESIGN
+
+* supervisor runs in parallel
+* coaching layer is optional
+* system must remain stable
+
+---
+
+## FINAL INSTRUCTION
+
+Enhance system with real-time intelligence.
+
+Do NOT modify UI.
+Do NOT break existing logic.
+
+Only add advanced monitoring, coaching, and intervention layers.
+
+Write clean, modular, production-ready code.

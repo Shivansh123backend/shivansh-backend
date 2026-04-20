@@ -30,6 +30,16 @@ import {
   type Intent,
 } from "./aiPipeline.js";
 import {
+  createSupervisorMemory,
+  observeUserTurn,
+  observeAssistantTurn,
+  observeSilence,
+  deriveSignal,
+  type SupervisorMemory,
+} from "./aiSupervisor.js";
+import { planIntervention, type InterventionPlan } from "./interventionEngine.js";
+import { coachResponse } from "./coachEngine.js";
+import {
   handleObjection,
   createObjectionMemory,
   type ObjectionMemory,
@@ -97,6 +107,8 @@ interface BridgeState {
   lastUserActivityAt: number;
   silencePromptCount: number;
   silenceTimer: NodeJS.Timeout | null;
+  supervisorMemory: SupervisorMemory;
+  pendingIntervention: InterventionPlan | null;
   transcriptCallback?: (text: string) => void;
   onTransferRequested?: () => void;  // called when AI says transfer phrase
 }
@@ -255,6 +267,11 @@ function speakInstant(
   state.messages.push({ role: "assistant", content: reply });
   const turnId = ++state.currentTurnId;
   state.isAiSpeaking = true;
+  // One-shot intervention applies to LLM turns only — clear it here so a
+  // canned/instant assistant reply (objection, fast-response, silence prompt)
+  // doesn't cause it to leak into a later LLM turn.
+  try { observeAssistantTurn(state.supervisorMemory, reply); } catch { /* ignore */ }
+  state.pendingIntervention = null;
   emitToSupervisors("call:transcription", {
     callControlId: state.callControlId,
     speaker: "agent",
@@ -288,6 +305,25 @@ function endBridge(state: BridgeState): void {
 
 const SENTENCE_END = /([.!?]["']?\s)|([.!?]["']?$)/;
 
+/**
+ * Run the coach over a single fragment about to be spoken.
+ * Failsafe: if the coach throws, return the original fragment unchanged
+ * so we never break the call. Returns "" if the coach blanks the fragment.
+ */
+function coachSafe(state: BridgeState, fragment: string): string {
+  if (!fragment.trim()) return fragment;
+  try {
+    const out = coachResponse({
+      reply: fragment,
+      recentAssistantReplies: state.supervisorMemory.lastAssistantTexts,
+      intervention: state.pendingIntervention,
+    });
+    return out.reply;
+  } catch {
+    return fragment;
+  }
+}
+
 async function generateAndSpeak(state: BridgeState, userText: string): Promise<void> {
   if (state.isClosed || state.pendingTransfer) return;
 
@@ -304,12 +340,17 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
   let textBuffer = "";
 
   try {
-    // STEP 4 + 5: rebuild system prompt with current stage + intent on every turn
-    const dynamicSystem = buildSystemPrompt(
+    // STEP 4 + 5: rebuild system prompt with current stage + intent on every turn.
+    // If supervisor flagged an issue, append the intervention nudge so the LLM
+    // adapts its strategy for this turn only.
+    let dynamicSystem = buildSystemPrompt(
       state.systemPrompt,
       state.conversationState,
       state.lastIntent,
     );
+    if (state.pendingIntervention?.promptAddition) {
+      dynamicSystem = `${dynamicSystem}\n\nREAL-TIME INTERVENTION:\n${state.pendingIntervention.promptAddition}`;
+    }
     const recentMsgs = state.messages.slice(1).slice(-13);
     const msgsForLLM: Message[] = [
       { role: "system", content: dynamicSystem },
@@ -338,25 +379,33 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
       // Flush at sentence boundaries for lowest TTS latency
       const match = textBuffer.search(SENTENCE_END);
       if (match !== -1) {
-        const sentence = textBuffer.slice(0, match + 1).trim();
+        const rawSentence = textBuffer.slice(0, match + 1).trim();
         textBuffer = textBuffer.slice(match + 1).trim();
-        if (sentence) await speakText(state, sentence, turnId);
+        const coached = coachSafe(state, rawSentence);
+        if (coached) await speakText(state, coached, turnId);
       }
     }
 
     // Flush any remaining text
     if (textBuffer.trim() && !state.isClosed && state.currentTurnId === turnId) {
-      await speakText(state, textBuffer.trim(), turnId);
+      const coached = coachSafe(state, textBuffer.trim());
+      if (coached) await speakText(state, coached, turnId);
     }
 
     if (fullResponse.trim()) {
-      state.messages.push({ role: "assistant", content: fullResponse.trim() });
+      const finalText = fullResponse.trim();
+      state.messages.push({ role: "assistant", content: finalText });
+
+      // Supervisor: observe what we just said for repetition tracking, then clear
+      // the one-shot intervention so it isn't re-applied on the next turn.
+      try { observeAssistantTurn(state.supervisorMemory, finalText); } catch { /* ignore */ }
+      state.pendingIntervention = null;
 
       // Emit agent transcript to live monitor
       emitToSupervisors("call:transcription", {
         callControlId: state.callControlId,
         speaker: "agent",
-        text: fullResponse.trim(),
+        text: finalText,
         ts: Date.now(),
       });
     }
@@ -461,6 +510,18 @@ function connectDeepgram(state: BridgeState): void {
       // Any real transcript = caller activity. Reset silence tracker.
       state.lastUserActivityAt = Date.now();
       state.silencePromptCount = 0;
+
+      // ── Supervisor observation (additive — never blocks) ─────────────────
+      try {
+        observeUserTurn(state.supervisorMemory, transcript);
+        const signal = deriveSignal(state.supervisorMemory);
+        state.pendingIntervention = signal === "ok" ? null : planIntervention(signal);
+        if (state.pendingIntervention) {
+          logger.info({ callControlId: state.callControlId, signal, health: state.supervisorMemory.health }, "Supervisor flagged");
+        }
+      } catch (err) {
+        logger.warn({ err: String(err), callControlId: state.callControlId }, "Supervisor observe failed — bypassed");
+      }
 
       const isSpeechFinal = msg.speech_final === true;
 
@@ -602,6 +663,8 @@ export function connectCustomBridge(
     lastUserActivityAt: Date.now(),
     silencePromptCount: 0,
     silenceTimer: null,
+    supervisorMemory: createSupervisorMemory(),
+    pendingIntervention: null,
     transcriptCallback: opts.transcriptCallback,
     onTransferRequested: opts.onTransferRequested,
   };
@@ -628,6 +691,7 @@ function startSilenceWatchdog(state: BridgeState): void {
     state.silencePromptCount += 1;
     state.lastUserActivityAt = Date.now(); // reset so we wait another window before re-prompting
     logger.info({ callControlId: state.callControlId, idle, count: state.silencePromptCount }, "Silence prompt");
+    try { observeSilence(state.supervisorMemory); } catch { /* ignore */ }
     speakInstant(state, "[silence]", line);
   }, 1000);
 }

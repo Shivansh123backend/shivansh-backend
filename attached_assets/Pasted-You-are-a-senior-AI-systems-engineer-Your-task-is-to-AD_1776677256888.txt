@@ -1,0 +1,191 @@
+You are a senior AI systems engineer.
+
+Your task is to ADD an auto campaign optimizer system to my existing AI dialer WITHOUT modifying or breaking the current system.
+
+---
+
+## STRICT RULES
+
+* DO NOT change UI
+* DO NOT change UI colors
+* DO NOT rewrite existing working logic
+* ONLY add modular enhancements
+
+---
+
+## GOAL
+
+Create a system that automatically improves campaign scripts based on real call data.
+
+---
+
+## STEP 1 — DATA COLLECTION MODULE
+
+Create:
+
+callAnalytics.js
+
+Collect after each call:
+
+* full transcript
+* call duration
+* detected objections
+* final outcome (success / drop / reject)
+* stage reached (INTRO → CLOSE)
+
+Store structured data.
+
+---
+
+## STEP 2 — DROP-OFF DETECTION
+
+Analyze:
+
+* where users hang up
+* which stage fails most
+
+Example:
+
+* many drops at PITCH → pitch is weak
+
+Store:
+
+* dropOffStage
+* frequency
+
+---
+
+## STEP 3 — WEAK RESPONSE DETECTION
+
+Identify:
+
+* responses that lead to:
+
+  * silence
+  * rejection
+  * confusion
+
+Mark them as "low-performing"
+
+---
+
+## STEP 4 — RESPONSE VARIATION ENGINE
+
+Create:
+
+responseOptimizer.js
+
+For weak responses:
+
+* generate 2–3 improved variations using LLM
+* keep original as fallback
+
+---
+
+## STEP 5 — A/B TESTING SYSTEM
+
+Create:
+
+abTesting.js
+
+Logic:
+
+* rotate between:
+
+  * original response
+  * variation A
+  * variation B
+
+Track performance:
+
+* which response leads to:
+
+  * longer calls
+  * more engagement
+  * successful progression
+
+---
+
+## STEP 6 — PERFORMANCE SCORING
+
+Create scoring logic:
+
+Score each response based on:
+
+* user engagement
+* continuation rate
+* conversion signal
+
+Select best-performing variation.
+
+---
+
+## STEP 7 — AUTO PROMOTION SYSTEM
+
+If a variation consistently outperforms:
+
+* replace original response with best version
+* keep others for backup
+
+---
+
+## STEP 8 — SAFE OPTIMIZATION RULES
+
+* NEVER change core SOP structure
+* ONLY optimize phrasing
+* DO NOT create aggressive or unnatural responses
+* maintain human tone
+
+---
+
+## STEP 9 — LEARNING LOOP
+
+Run optimizer periodically:
+
+* every X calls OR
+* every Y minutes
+
+Continuously improve scripts.
+
+---
+
+## STEP 10 — STORAGE
+
+Store:
+
+* original responses
+* variations
+* performance scores
+* winning responses
+
+---
+
+## STEP 11 — INTEGRATION
+
+Hook into existing system:
+
+* before response is sent
+* check if optimized version exists
+* use best-performing response
+
+---
+
+## STEP 12 — FAILSAFE
+
+If optimizer fails:
+
+* fallback to original script
+* do not break system
+
+---
+
+## FINAL INSTRUCTION
+
+Implement this as a modular system.
+
+Do NOT break existing code.
+Do NOT change UI.
+
+Only enhance intelligence and learning capability.
+
+Write clean, production-ready code.

@@ -10,6 +10,7 @@ import { ensureAdminUser, ensurePhoneNumbers, ensureElevenLabsVoices, ensureCata
 import { handleTelnyxMediaSocket, warmupElevenAgent } from "./services/elevenBridge.js";
 import { handleListenForkSocket } from "./websocket/listenFork.js";
 import { startCallbackScheduler } from "./routes/callbacks.js";
+import { startScriptOptimizer } from "./services/scriptOptimizer.js";
 
 const rawPort = process.env["PORT"];
 
@@ -90,6 +91,12 @@ warmupElevenAgent().catch((err) => {
 startCallbackScheduler().catch((err) => {
   logger.warn({ err: String(err) }, "Callback scheduler failed to start");
 });
+
+try {
+  startScriptOptimizer();
+} catch (err) {
+  logger.warn({ err: String(err) }, "Script optimizer failed to start");
+}
 
 httpServer.listen(port, () => {
   logger.info({ port }, "AI Calling SaaS backend listening");
