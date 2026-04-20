@@ -27,6 +27,27 @@ const createVoiceSchema = z.object({
   description: z.string().optional(),
 });
 
+router.delete("/voices/all", authenticate, requireRole("admin"), async (_req, res): Promise<void> => {
+  await db.delete(agentVoicesTable);
+  const deleted = await db.delete(voicesTable).returning({ id: voicesTable.id });
+  res.json({ deleted: deleted.length });
+});
+
+router.delete("/voices/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  await db.delete(agentVoicesTable).where(eq(agentVoicesTable.voiceId, id));
+  const [row] = await db.delete(voicesTable).where(eq(voicesTable.id, id)).returning();
+  if (!row) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  res.json({ ok: true });
+});
+
 router.post("/voices/create", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const parsed = createVoiceSchema.safeParse(req.body);
   if (!parsed.success) {
