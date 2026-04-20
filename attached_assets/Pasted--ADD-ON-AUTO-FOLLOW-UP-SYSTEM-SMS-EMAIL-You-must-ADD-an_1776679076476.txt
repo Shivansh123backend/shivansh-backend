@@ -1,0 +1,236 @@
+---
+
+## ADD-ON: AUTO FOLLOW-UP SYSTEM (SMS + EMAIL)
+
+You must ADD an automated follow-up system to my AI calling platform WITHOUT modifying UI or breaking existing logic.
+
+---
+
+## STRICT RULES
+
+* DO NOT change UI
+* DO NOT change UI colors
+* DO NOT rewrite existing system
+* ONLY add modular enhancements
+
+---
+
+## GOAL
+
+Automatically follow up with leads after calls using:
+
+* SMS
+* Email
+
+Based on call outcome and user behavior.
+
+---
+
+## STEP 1 — FOLLOW-UP ENGINE
+
+Create:
+
+followUpEngine.js
+
+Responsibilities:
+
+* trigger follow-ups after calls
+* decide message type and timing
+
+---
+
+## STEP 2 — CALL OUTCOME DETECTION
+
+Detect outcome:
+
+* interested
+* not interested
+* no answer
+* callback requested
+* partial engagement
+
+Use this to determine follow-up type.
+
+---
+
+## STEP 3 — MESSAGE GENERATOR
+
+Create:
+
+followUpGenerator.js
+
+Generate messages dynamically using:
+
+* call context
+* user responses
+* campaign type
+
+---
+
+## STEP 4 — SMS INTEGRATION
+
+Integrate SMS provider (e.g., Twilio or API)
+
+Send:
+
+* short, clear follow-ups
+* personalized messages
+
+Example:
+"Hey, this is John from Cloudisoft—just following up on our quick chat earlier."
+
+---
+
+## STEP 5 — EMAIL INTEGRATION
+
+Create:
+
+emailSender.js
+
+Send:
+
+* detailed follow-ups
+* summary of discussion
+* next steps
+
+---
+
+## STEP 6 — TIMING LOGIC
+
+Follow-up timing:
+
+* immediate → if call drops
+* 5–10 mins → if interested
+* next day → if no response
+* scheduled → if callback requested
+
+---
+
+## STEP 7 — MULTI-STEP SEQUENCES
+
+Create:
+
+followUpSequence.js
+
+Example:
+
+Day 0 → SMS
+Day 1 → Email
+Day 2 → SMS reminder
+Day 4 → Final message
+
+---
+
+## STEP 8 — PERSONALIZATION ENGINE
+
+Create:
+
+personalizationEngine.js
+
+Customize messages using:
+
+* user name
+* past responses
+* objections raised
+* interest level
+
+---
+
+## STEP 9 — INDUSTRY-SPECIFIC PERSUASION FRAMEWORKS
+
+Create:
+
+persuasionEngine.js
+
+Apply deep psychology per industry:
+
+INSURANCE:
+
+* risk framing
+* loss aversion
+* security focus
+
+SOLAR:
+
+* savings + ROI
+* long-term benefits
+
+FINANCE:
+
+* trust + credibility
+* risk reduction
+
+HEALTHCARE:
+
+* clarity + reassurance
+* simplicity
+
+Ensure messages:
+
+* match industry psychology
+* feel natural and ethical
+
+---
+
+## STEP 10 — AI SCRIPT PERSONALIZATION PER LEAD
+
+Create:
+
+leadPersonalizer.js
+
+Adjust script dynamically per lead:
+
+* high-intent → faster close
+* low-intent → softer approach
+* skeptical → more explanation
+* busy → shorter responses
+
+---
+
+## STEP 11 — FOLLOW-UP OPTIMIZATION
+
+Track:
+
+* open rates (email)
+* reply rates (SMS)
+* conversion after follow-up
+
+Optimize:
+
+* message timing
+* phrasing
+* sequence length
+
+---
+
+## STEP 12 — SUPERVISOR + COACH INTEGRATION
+
+Allow:
+
+* aiSupervisor to trigger follow-ups
+* coachEngine to refine messages
+
+---
+
+## STEP 13 — FAILSAFE
+
+If any module fails:
+
+* skip follow-up
+* do NOT break system
+
+---
+
+## FINAL INSTRUCTION
+
+Enhance system with:
+
+* automated follow-ups
+* personalized messaging
+* industry-specific persuasion
+* lead-level intelligence
+
+Do NOT modify UI.
+Do NOT break system.
+
+Write clean, modular, production-ready code.

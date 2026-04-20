@@ -43,6 +43,10 @@ export const campaignsTable = pgTable("campaigns", {
   vmDropMessage: text("vm_drop_message"),   // TTS message to leave on voicemail (null = hang up)
   // Compliance
   tcpaEnabled: boolean("tcpa_enabled").notNull().default(false), // enforce 8am-9pm TCPA calling hours per lead timezone
+  // Geo + voice profile (additive — empty = neutral defaults)
+  region: text("region"),          // "US" | "UK" | "CA" | "AU" | "IN" | "OTHER"
+  accent: text("accent"),          // "US" | "UK" | "neutral"
+  voiceProfile: text("voice_profile"),  // JSON: { voiceId, speed, tone }
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

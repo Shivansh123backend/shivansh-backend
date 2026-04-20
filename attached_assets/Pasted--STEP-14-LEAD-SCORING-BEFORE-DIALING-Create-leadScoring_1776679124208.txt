@@ -1,0 +1,205 @@
+---
+
+## STEP 14 — LEAD SCORING BEFORE DIALING
+
+Create:
+
+leadScoring.js
+
+Purpose:
+
+* score leads BEFORE calling
+* prioritize high-conversion leads
+
+Score (0–100) based on:
+
+* past interaction history
+* engagement level
+* previous call outcomes
+* response behavior (if available)
+* demographic signals
+
+Output:
+
+* high priority
+* medium
+* low
+
+---
+
+## STEP 15 — PRE-CALL PRIORITIZATION ENGINE
+
+Create:
+
+preCallPrioritizer.js
+
+Responsibilities:
+
+* sort leads based on score
+* send highest score leads first to dialer
+* delay or batch low-quality leads
+
+---
+
+## STEP 16 — CONVERSION PREDICTION (PRE-DIAL)
+
+Create:
+
+conversionPredictor.js
+
+Predict:
+
+* probability of conversion (0–1)
+
+Use:
+
+* historical campaign data
+* lead score
+* industry patterns
+
+Label:
+
+* high intent
+* medium intent
+* low intent
+
+---
+
+## STEP 17 — DYNAMIC CALL STRATEGY
+
+Adjust call approach BEFORE dialing:
+
+HIGH INTENT:
+
+* direct approach
+* faster close
+
+MEDIUM:
+
+* balanced conversation
+
+LOW:
+
+* softer tone
+* more discovery
+
+---
+
+## STEP 18 — RETARGETING ENGINE (DEAD LEADS)
+
+Create:
+
+retargetingEngine.js
+
+Identify leads:
+
+* no response
+* rejected earlier
+* dropped calls
+* partial engagement
+
+---
+
+## STEP 19 — RETARGETING STRATEGY
+
+Re-engage leads using:
+
+* new messaging
+* different tone
+* different timing
+* alternative angle
+
+Example:
+
+Initial:
+"Following up on insurance options"
+
+Retarget:
+"Quick update—new options might actually save you more"
+
+---
+
+## STEP 20 — RETARGETING TIMING
+
+Schedule retries:
+
+* 24 hours later
+* 3 days later
+* 7 days later
+
+Avoid spamming.
+
+---
+
+## STEP 21 — CHANNEL SWITCHING
+
+If call fails:
+
+* switch to SMS
+* switch to email
+
+If SMS ignored:
+
+* retry call later
+
+---
+
+## STEP 22 — LEAD LIFECYCLE TRACKING
+
+Track:
+
+* new lead
+* contacted
+* engaged
+* converted
+* dead
+* retargeted
+
+---
+
+## STEP 23 — LEARNING LOOP
+
+Analyze:
+
+* which leads convert
+* which retargeting works
+* best timing
+
+Update:
+
+* scoring model
+* prioritization logic
+* retargeting strategy
+
+---
+
+## STEP 24 — SUPERVISOR INTEGRATION
+
+Allow aiSupervisor to:
+
+* flag leads for retargeting
+* adjust priority dynamically
+
+---
+
+## STEP 25 — FAILSAFE
+
+If scoring or retargeting fails:
+
+* fallback to original dialing order
+* do NOT break system
+
+---
+
+## FINAL INSTRUCTION
+
+Enhance system with:
+
+* intelligent lead scoring before calls
+* predictive conversion modeling
+* automated retargeting engine
+
+Do NOT modify UI.
+Do NOT break system.
+
+Write clean, modular, production-ready code.

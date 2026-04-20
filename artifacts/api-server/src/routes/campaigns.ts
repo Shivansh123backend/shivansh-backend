@@ -55,6 +55,10 @@ const createCampaignSchema = z.object({
   tcpaEnabled: z.boolean().default(false),
   voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).default("elevenlabs").nullish(),
   vmDropMessage: z.string().nullish(),
+  // Geo + voice profile (additive)
+  region: z.enum(["US", "UK", "CA", "AU", "IN", "OTHER"]).nullish(),
+  accent: z.enum(["US", "UK", "neutral"]).nullish(),
+  voiceProfile: z.string().nullish(),
 });
 
 const assignAgentSchema = z.object({
@@ -148,6 +152,9 @@ const updateCampaignSchema = z.object({
   amdEnabled: z.boolean().optional(),
   tcpaEnabled: z.boolean().optional(),
   voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).optional(),
+  region: z.enum(["US", "UK", "CA", "AU", "IN", "OTHER"]).nullish(),
+  accent: z.enum(["US", "UK", "neutral"]).nullish(),
+  voiceProfile: z.string().nullish(),
   vmDropMessage: z.string().nullish(),
 });
 
@@ -505,7 +512,7 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
   const dncSet = await buildDncSet();
 
   // Fetch dialable leads: pending + called (called = previously attempted, retry allowed)
-  const pendingLeads = await db
+  let pendingLeads = await db
     .select()
     .from(leadsTable)
     .where(and(

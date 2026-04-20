@@ -105,6 +105,8 @@ export interface BridgeInfo {
   holdMusicUrl?: string;
   backgroundSound?: string;    // "office" | "typing" | "cafe" | "none" | undefined
   voiceProvider?: string;      // "elevenlabs" | "deepgram" | "cartesia"
+  accent?: string;             // "US" | "UK" | "neutral" — passed to custom bridge for accent tuning
+  region?: string;             // "US" | "UK" | "CA" | "AU" | "IN" | "OTHER" — for geo behavior
   transcript: string[];
   voiceId: string;
   systemPrompt: string;
@@ -503,6 +505,8 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
           systemPrompt: bridge.systemPrompt,
           firstMessage: bridge.firstMessage,
           telnyxWs: ws,
+          accent: bridge.accent,
+          region: bridge.region,
           transcriptCallback: (text) => {
             bridge.transcript.push(`Caller: ${text}`);
             // Emit to live monitor — custom bridge caller transcript

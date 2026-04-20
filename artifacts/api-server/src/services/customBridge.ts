@@ -92,6 +92,8 @@ interface BridgeState {
   systemPrompt: string;
   firstMessage: string;
   cartesiaVoiceId: string;
+  accent?: string;
+  paceMultiplier?: number;
   telnyxWs: WebSocket;
   deepgramWs: WebSocket | null;
   messages: Message[];
@@ -169,11 +171,19 @@ async function speakText(
   text: string,
   turnId: number,
 ): Promise<void> {
-  const cleanRaw = stripMarkdown(text);
+  let cleanRaw = stripMarkdown(text);
   if (!cleanRaw.trim() || state.isClosed || state.currentTurnId !== turnId) return;
-  // Apply pacing transformations so TTS sounds human (commas → soft pauses,
-  // longer pauses before key terms). Failsafe: returns input on any error.
-  const clean = applyPacing(cleanRaw, { intensity: paceForEmotion(state.supervisorMemory.emotion.current) });
+  // Apply accent tuning (US/UK phrasing) BEFORE pacing — failsafe.
+  try {
+    const accent = (state as unknown as { accent?: string }).accent;
+    if (accent === "US" || accent === "UK") {
+      const { applyAccent } = await import("./accentEngine.js");
+      cleanRaw = applyAccent(cleanRaw, accent);
+    }
+  } catch { /* failsafe: skip accent on error */ }
+  // Apply pacing transformations (geo-aware multiplier if set).
+  const geoMult = (state as unknown as { paceMultiplier?: number }).paceMultiplier ?? 1;
+  const clean = applyPacing(cleanRaw, { intensity: paceForEmotion(state.supervisorMemory.emotion.current) * geoMult });
 
   const ctrl = new AbortController();
   state.currentAbortCtrl = ctrl;
@@ -643,15 +653,30 @@ export function connectCustomBridge(
     firstMessage: string;
     cartesiaVoiceId?: string;
     telnyxWs: WebSocket;
+    accent?: string;
+    region?: string;
     transcriptCallback?: (text: string) => void;
     onTransferRequested?: () => void;
   }
 ): void {
+  // Derive geo-based pace multiplier (failsafe — defaults to 1.0)
+  let paceMultiplier = 1;
+  try {
+    if (opts.region) {
+      // Lazy import to avoid circular concerns; safe synchronous default if it fails
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { geoBehaviorFor } = require("./geoBehaviorEngine.js");
+      paceMultiplier = geoBehaviorFor(opts.region).paceMultiplier ?? 1;
+    }
+  } catch { /* keep default 1.0 */ }
+
   const state: BridgeState = {
     callControlId,
     systemPrompt: opts.systemPrompt,
     firstMessage: opts.firstMessage,
     cartesiaVoiceId: opts.cartesiaVoiceId ?? DEFAULT_CARTESIA_VOICE,
+    accent: opts.accent,
+    paceMultiplier,
     telnyxWs: opts.telnyxWs,
     deepgramWs: null,
     messages: [{ role: "system", content: opts.systemPrompt }],

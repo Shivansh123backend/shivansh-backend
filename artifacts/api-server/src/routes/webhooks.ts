@@ -1094,6 +1094,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         holdMusicUrl: outboundHoldMusicUrl,
         backgroundSound: outboundCtx.backgroundSound ?? undefined,
         voiceProvider: outboundCtx.voiceProvider ?? "elevenlabs",
+        // accent + region resolved later from campaign row (set after initBridge below)
         voiceId: callVoiceId,
         systemPrompt,
         firstMessage,
@@ -1120,6 +1121,24 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       // Store our campaign phone number (needed if transfer is requested)
       callOwnNumber.set(callControlId, fromNumber);
+
+      // Resolve campaign accent/region for accent tuning + geo behavior (failsafe)
+      try {
+        const [campaignRow] = await db
+          .select({ accent: campaignsTable.accent, region: campaignsTable.region })
+          .from(campaignsTable)
+          .where(eq(campaignsTable.id, campaignId))
+          .limit(1);
+        if (campaignRow) {
+          const bridgeInfo = getBridgeInfo(callControlId);
+          if (bridgeInfo) {
+            bridgeInfo.accent = campaignRow.accent ?? undefined;
+            bridgeInfo.region = campaignRow.region ?? undefined;
+          }
+        }
+      } catch (err) {
+        logger.warn({ err: String(err), callControlId }, "Failed to resolve campaign accent/region — continuing with neutral defaults");
+      }
 
       await startRecording(callControlId).catch((err) =>
         logger.warn({ err: String(err), callControlId }, "Recording start failed — continuing")
@@ -1176,6 +1195,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         transferNumber: effectiveTransferNumber ?? undefined,  // per-number override > campaign default
         holdMusicUrl: inboundHoldMusicUrl,
         voiceProvider: inboundVoiceProvider ?? campaign.voiceProvider ?? "elevenlabs",
+        accent: campaign.accent ?? undefined,
+        region: campaign.region ?? undefined,
         voiceId: inboundVoiceId,
         systemPrompt,
         firstMessage,
