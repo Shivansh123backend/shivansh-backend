@@ -91,6 +91,7 @@ interface BridgeState {
   lastIntent: Intent;
   objectionMemory: ObjectionMemory;
   shouldEndAfterSpeech: boolean;
+  lastClarifyAt: number;
   transcriptCallback?: (text: string) => void;
   onTransferRequested?: () => void;  // called when AI says transfer phrase
 }
@@ -472,6 +473,15 @@ function connectDeepgram(state: BridgeState): void {
           confidence,
           filtered: filter.reason,
         });
+        // Only ask for clarification on low confidence (real speech but unclear).
+        // Silence/filler/too-short get ignored to avoid talking over breath sounds.
+        if (filter.reason === "low_confidence" && !state.isAiSpeaking) {
+          const ago = Date.now() - state.lastClarifyAt;
+          if (ago > 8000) {  // throttle: at most one clarification per 8 s
+            state.lastClarifyAt = Date.now();
+            speakInstant(state, transcript, "Sorry, I didn't catch that — could you repeat?");
+          }
+        }
         return;
       }
 
@@ -579,6 +589,7 @@ export function connectCustomBridge(
     lastIntent: "neutral",
     objectionMemory: createObjectionMemory(),
     shouldEndAfterSpeech: false,
+    lastClarifyAt: 0,
     transcriptCallback: opts.transcriptCallback,
     onTransferRequested: opts.onTransferRequested,
   };
