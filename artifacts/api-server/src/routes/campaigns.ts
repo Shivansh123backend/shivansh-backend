@@ -16,6 +16,7 @@ import { authenticate, requireRole } from "../middlewares/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { emitToSupervisors } from "../websocket/index.js";
 import { enqueueCall, delay } from "../services/workerService.js";
+import { logger } from "../lib/logger.js";
 import { z } from "zod";
 
 const router: IRouter = Router();

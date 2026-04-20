@@ -539,7 +539,7 @@ router.post("/calls/:callControlId/conference", authenticate, async (req, res): 
 
   const apiKey       = process.env.TELNYX_API_KEY;
   const connectionId = process.env.TELNYX_CONNECTION_ID ?? "2935188068224730263";
-  const webhookUrl   = `${process.env.WEBHOOK_BASE_URL ?? "https://shivanshbackend.replit.app"}/webhooks/telnyx`;
+  const webhookUrl   = `${process.env.WEBHOOK_BASE_URL ?? "https://shivanshbackend.replit.app"}/api/webhooks/telnyx`;
 
   if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
 

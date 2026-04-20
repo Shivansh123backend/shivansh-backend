@@ -643,7 +643,11 @@ function connectDeepgram(state: BridgeState): void {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function isCustomBridgeAvailable(): boolean {
-  return Boolean(DEEPGRAM_API_KEY && CARTESIA_API_KEY);
+  const hasOpenAI = Boolean(
+    process.env.AI_INTEGRATIONS_OPENAI_API_KEY ||
+    process.env.OPENAI_API_KEY
+  );
+  return Boolean(DEEPGRAM_API_KEY && CARTESIA_API_KEY && hasOpenAI);
 }
 
 export function connectCustomBridge(

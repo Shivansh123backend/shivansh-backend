@@ -34,7 +34,7 @@ async function findRetargetCandidates(): Promise<Array<{ leadId: number; campaig
     WHERE l.dnc_flag = false
       AND COALESCE(l.lifecycle_stage, '') NOT IN ('converted', 'dead', 'retargeted')
       AND cl.timestamp <= ${cutoff}
-      AND cl.disposition = ANY(${RETARGETABLE_DISPOSITIONS as unknown as string[]})
+      AND cl.disposition IN (${sql.join(RETARGETABLE_DISPOSITIONS.map((d) => sql`${d}`), sql`, `)})
     ORDER BY l.id, cl.timestamp DESC
     LIMIT 50
   `);

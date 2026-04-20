@@ -176,10 +176,14 @@ export default router;
 
 // ── Callback scheduler ────────────────────────────────────────────────────────
 // Exported so index.ts can start it. Polls every 60s and auto-dials due leads.
+let _callbackTickRunning = false;
+
 export async function startCallbackScheduler(): Promise<void> {
   logger.info("Callback scheduler started — polling every 60s for due callbacks");
 
   async function tick(): Promise<void> {
+    if (_callbackTickRunning) return;
+    _callbackTickRunning = true;
     try {
       const now = new Date();
 
@@ -203,12 +207,20 @@ export async function startCallbackScheduler(): Promise<void> {
           .where(eq(campaignsTable.id, lead.campaignId))
           .limit(1);
 
-        if (!campaign || campaign.status === "completed") {
-          logger.warn({ leadId: lead.id, campaignId: lead.campaignId }, "Callback skipped — no active campaign");
-          // Mark as pending so it isn't re-fired on next tick
-          await db.update(leadsTable)
-            .set({ status: "pending", callbackAt: null })
-            .where(eq(leadsTable.id, lead.id));
+        if (!campaign || campaign.status !== "active") {
+          logger.warn({ leadId: lead.id, campaignId: lead.campaignId, status: campaign?.status }, "Callback skipped — campaign not active");
+          // Defer: leave as callback but push callbackAt 30 min into the future so we retry later.
+          // (Don't strip the callback marker; the user explicitly scheduled it.)
+          if (campaign && (campaign.status === "draft" || campaign.status === "paused")) {
+            await db.update(leadsTable)
+              .set({ callbackAt: new Date(Date.now() + 30 * 60_000) })
+              .where(eq(leadsTable.id, lead.id));
+          } else {
+            // No campaign — give up and reset to pending.
+            await db.update(leadsTable)
+              .set({ status: "pending", callbackAt: null })
+              .where(eq(leadsTable.id, lead.id));
+          }
           continue;
         }
 
@@ -236,6 +248,8 @@ export async function startCallbackScheduler(): Promise<void> {
       }
     } catch (err) {
       logger.error({ err: String(err) }, "Callback scheduler tick error");
+    } finally {
+      _callbackTickRunning = false;
     }
   }
 
