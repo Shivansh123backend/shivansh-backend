@@ -166,9 +166,6 @@ function VoiceCard({
           </div>
           <div>
             <p className="text-sm font-mono font-medium text-foreground leading-tight">{voice.name}</p>
-            <p className="text-[10px] font-mono text-muted-foreground uppercase">
-              {PROVIDER_LABELS[voice.provider] ?? voice.provider}
-            </p>
           </div>
         </div>
         <span className={cn(
