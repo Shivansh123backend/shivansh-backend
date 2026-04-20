@@ -27,6 +27,11 @@ import {
   type ConversationState,
   type Intent,
 } from "./aiPipeline.js";
+import {
+  handleObjection,
+  createObjectionMemory,
+  type ObjectionMemory,
+} from "./objectionEngine.js";
 
 const DEEPGRAM_API_KEY  = process.env.DEEPGRAM_API_KEY ?? "";
 const CARTESIA_API_KEY  = process.env.CARTESIA_API_KEY ?? "";
@@ -84,6 +89,8 @@ interface BridgeState {
   pendingTransfer: boolean;
   conversationState: ConversationState;
   lastIntent: Intent;
+  objectionMemory: ObjectionMemory;
+  shouldEndAfterSpeech: boolean;
   transcriptCallback?: (text: string) => void;
   onTransferRequested?: () => void;  // called when AI says transfer phrase
 }
@@ -229,6 +236,46 @@ function triggerBargeIn(state: BridgeState): void {
   state.currentAbortCtrl?.abort();    // cancel the in-flight Cartesia fetch
   state.currentAbortCtrl = null;
   state.isAiSpeaking = false;
+}
+
+/** Speak a pre-canned line (objection / fast-response) — bypasses LLM entirely. */
+function speakInstant(
+  state: BridgeState,
+  userText: string,
+  reply: string,
+  onDone?: () => void,
+): void {
+  state.messages.push({ role: "user", content: userText });
+  state.messages.push({ role: "assistant", content: reply });
+  const turnId = ++state.currentTurnId;
+  state.isAiSpeaking = true;
+  emitToSupervisors("call:transcription", {
+    callControlId: state.callControlId,
+    speaker: "agent",
+    text: reply,
+    ts: Date.now(),
+  });
+  humanThinkDelay()
+    .then(() => speakText(state, reply, turnId))
+    .then(() => {
+      if (state.currentTurnId === turnId) state.isAiSpeaking = false;
+      onDone?.();
+    })
+    .catch(() => { state.isAiSpeaking = false; });
+}
+
+/** Hard-stop the bridge cleanly (used after hard rejection). */
+function endBridge(state: BridgeState): void {
+  setTimeout(() => {
+    if (state.isClosed) return;
+    logger.info({ callControlId: state.callControlId }, "Ending bridge after hard rejection");
+    state.isClosed = true;
+    state.currentTurnId++;
+    state.currentAbortCtrl?.abort();
+    state.currentAbortCtrl = null;
+    state.deepgramWs?.close();
+    try { state.telnyxWs.close(1000, "hard_reject"); } catch { /* already closed */ }
+  }, 1500);
 }
 
 // ── GPT-4o LLM ───────────────────────────────────────────────────────────────
@@ -461,19 +508,26 @@ function connectDeepgram(state: BridgeState): void {
       const fast = getFastResponse(transcript);
       if (fast) {
         logTurn(state.callControlId, { transcript, fastResponse: true });
-        state.messages.push({ role: "user", content: transcript });
-        state.messages.push({ role: "assistant", content: fast });
-        const turnId = ++state.currentTurnId;
-        state.isAiSpeaking = true;
-        humanThinkDelay()
-          .then(() => speakText(state, fast, turnId))
-          .then(() => { if (state.currentTurnId === turnId) state.isAiSpeaking = false; })
-          .catch(() => { state.isAiSpeaking = false; });
-        emitToSupervisors("call:transcription", {
+        speakInstant(state, transcript, fast);
+        return;
+      }
+
+      // ── STEP 2b: Objection handling engine (bypass LLM) ──────────────────
+      const objection = handleObjection(transcript, state.objectionMemory);
+      if (objection.reply) {
+        logger.info({
           callControlId: state.callControlId,
-          speaker: "agent",
-          text: fast,
-          ts: Date.now(),
+          objection: {
+            type: objection.type,
+            count: state.objectionMemory.objectionCount,
+            firmTone: objection.firmTone,
+            hardReject: objection.hardReject,
+          },
+        }, "Objection handled");
+
+        if (objection.endCall) state.shouldEndAfterSpeech = true;
+        speakInstant(state, transcript, objection.reply, () => {
+          if (objection.endCall) endBridge(state);
         });
         return;
       }
@@ -527,6 +581,8 @@ export function connectCustomBridge(
     pendingTransfer: false,
     conversationState: "INTRO",
     lastIntent: "neutral",
+    objectionMemory: createObjectionMemory(),
+    shouldEndAfterSpeech: false,
     transcriptCallback: opts.transcriptCallback,
     onTransferRequested: opts.onTransferRequested,
   };
