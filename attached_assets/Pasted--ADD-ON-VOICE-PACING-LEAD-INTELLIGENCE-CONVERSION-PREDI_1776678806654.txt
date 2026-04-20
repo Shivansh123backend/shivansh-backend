@@ -1,0 +1,214 @@
+---
+
+## ADD-ON: VOICE PACING + LEAD INTELLIGENCE + CONVERSION PREDICTION
+
+You must ADD advanced intelligence layers to my AI calling system WITHOUT modifying UI or breaking existing logic.
+
+---
+
+## STRICT RULES
+
+* DO NOT change UI
+* DO NOT change UI colors
+* DO NOT rewrite existing system
+* ONLY add modular enhancements
+
+---
+
+## STEP 1 — VOICE PACING ENGINE (HUMAN DELIVERY)
+
+Create:
+
+voicePacing.js
+
+Responsibilities:
+
+* add natural pauses in responses
+* simulate human breathing patterns
+* control sentence rhythm
+
+Rules:
+
+* insert micro pauses at commas
+* insert longer pause before important points
+* avoid long continuous speech
+* break long responses into chunks
+
+Example transformation:
+
+Input:
+"Let me explain how this works"
+
+Output behavior:
+"Let me explain… how this works"
+
+---
+
+## STEP 2 — RESPONSE RHYTHM CONTROL
+
+* vary speaking speed slightly
+* avoid constant pacing
+* introduce slight delay between sentences
+
+---
+
+## STEP 3 — BREATHING SIMULATION
+
+* add slight pauses before new sentences
+* simulate thinking gaps
+* avoid robotic continuous output
+
+---
+
+## STEP 4 — INTEGRATION WITH TTS
+
+Ensure:
+
+* TTS receives segmented text
+* pauses are respected in playback
+* streaming chunks include pacing markers
+
+---
+
+## STEP 5 — AI CALL RANKING SYSTEM
+
+Create:
+
+callRanking.js
+
+Rank leads BEFORE calling based on:
+
+* past interaction data
+* engagement history
+* response patterns
+* demographic signals (if available)
+
+Assign score (0–100):
+
+* high score → prioritize first
+* low score → deprioritize
+
+---
+
+## STEP 6 — LEAD PRIORITIZATION ENGINE
+
+Create:
+
+leadPrioritizer.js
+
+Responsibilities:
+
+* sort leads by ranking score
+* feed high-quality leads first
+* optimize call queue
+
+---
+
+## STEP 7 — CONVERSION PREDICTION MODEL
+
+Create:
+
+conversionPredictor.js
+
+Predict likelihood of success BEFORE call.
+
+Factors:
+
+* past conversion patterns
+* lead quality score
+* campaign performance data
+
+Output:
+
+* probability (0–1)
+* label:
+
+  * high chance
+  * medium
+  * low
+
+---
+
+## STEP 8 — DYNAMIC STRATEGY ADJUSTMENT
+
+Based on prediction:
+
+HIGH CONVERSION:
+
+* move faster toward close
+* more confident tone
+
+MEDIUM:
+
+* balanced approach
+
+LOW:
+
+* softer tone
+* exploratory conversation
+
+---
+
+## STEP 9 — FEEDBACK LOOP INTEGRATION
+
+After calls:
+
+* compare prediction vs actual outcome
+* refine model continuously
+
+---
+
+## STEP 10 — SUPERVISOR INTEGRATION
+
+Send ranking + prediction to aiSupervisor.
+
+Allow supervisor to:
+
+* adjust strategy mid-call
+* change pacing
+* modify pressure level
+
+---
+
+## STEP 11 — COACHING INTEGRATION
+
+coachEngine must:
+
+* adjust pacing dynamically
+* optimize tone based on prediction
+* ensure natural delivery
+
+---
+
+## STEP 12 — DATA STORAGE
+
+Store:
+
+* lead scores
+* prediction results
+* actual outcomes
+* pacing adjustments
+
+---
+
+## STEP 13 — FAILSAFE
+
+If modules fail:
+
+* fallback to existing system
+* do NOT break call flow
+
+---
+
+## FINAL INSTRUCTION
+
+Enhance system with:
+
+* human-like voice pacing
+* intelligent lead prioritization
+* predictive conversion modeling
+
+Do NOT modify UI.
+Do NOT break system.
+
+Write clean, modular, production-ready code.

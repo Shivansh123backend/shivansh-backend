@@ -21,6 +21,9 @@ export const leadsTable = pgTable("leads", {
   dncFlag: boolean("dnc_flag").notNull().default(false),
   notes: text("notes"),
   callbackAt: timestamp("callback_at", { withTimezone: true }),   // scheduled callback time
+  rankScore: integer("rank_score"),                                // 0–100 ranking score (callRanking)
+  predictedProb: integer("predicted_prob"),                        // 0–100, persisted prediction percentage
+  predictedLabel: text("predicted_label"),                         // "high" | "medium" | "low"
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
