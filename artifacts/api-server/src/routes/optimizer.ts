@@ -10,6 +10,7 @@ import { authenticate, requireRole } from "../middlewares/auth.js";
 
 const requireAdmin = requireRole("admin");
 import { computeInsights, dailyAverageScores } from "../services/optimizer.js";
+import { listVariations } from "../services/scriptOptimizer.js";
 import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
@@ -45,6 +46,27 @@ router.get("/optimizer/daily", authenticate, requireAdmin, async (req, res): Pro
   } catch (err) {
     logger.error({ err: String(err) }, "Optimizer daily failed");
     res.status(500).json({ error: "Failed to compute daily series" });
+  }
+});
+
+router.get("/optimizer/variations/:campaignId", authenticate, requireAdmin, async (req, res): Promise<void> => {
+  try {
+    const campaignId = parseInt(String(req.params.campaignId), 10);
+    if (isNaN(campaignId)) { res.status(400).json({ error: "Invalid campaignId" }); return; }
+    const rows = await listVariations(campaignId);
+    res.json(rows.map((r) => ({
+      id: r.id,
+      slot: r.slot,
+      text: r.text,
+      isOriginal: r.isOriginal,
+      uses: r.uses,
+      avgScore: r.uses > 0 ? Math.round((r.totalScore / r.uses) * 10) / 10 : null,
+      promotedAt: r.promotedAt,
+      createdAt: r.createdAt,
+    })));
+  } catch (err) {
+    logger.error({ err: String(err) }, "List variations failed");
+    res.status(500).json({ error: "Failed to list variations" });
   }
 });
 
