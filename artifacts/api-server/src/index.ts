@@ -78,13 +78,10 @@ ensurePhoneNumbers().catch((err) => {
   logger.warn({ err }, "ensurePhoneNumbers failed — continuing anyway");
 });
 
-ensureElevenLabsVoices().catch((err) => {
-  logger.warn({ err }, "ensureElevenLabsVoices failed — continuing anyway");
-});
-
-ensureCatalogVoices().catch((err) => {
-  logger.warn({ err }, "ensureCatalogVoices failed — continuing anyway");
-});
+// Voice library auto-seeding disabled — admins manage voices manually via the UI.
+// To re-enable, uncomment the calls below.
+// ensureElevenLabsVoices().catch((err) => logger.warn({ err }, "ensureElevenLabsVoices failed"));
+// ensureCatalogVoices().catch((err) => logger.warn({ err }, "ensureCatalogVoices failed"));
 
 warmupElevenAgent().catch((err) => {
   logger.warn({ err: String(err) }, "ElevenLabs agent warmup failed — will retry on first call");
