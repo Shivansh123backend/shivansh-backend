@@ -190,7 +190,10 @@ Deployed to 2-VPS Hostinger setup (Ubuntu 22.04, Node 20 LTS, PM2):
 - Source: `https://github.com/Shivansh123backend/shivansh-backend.git` (private; deploy key on each repo)
 - SSH from Replit: `ssh -i ~/.ssh/vps_deploy root@<host>`
 - Update flow: `bash deploy/deploy.sh` (git push → ssh both VPS → `git pull` → `pnpm install` → `pnpm build` → `pm2 reload all` → health check)
-- Webhook base URL still points to `https://shivanshbackend.replit.app`; switch to a VPS-fronted domain when DNS/TLS ready
 - **Production database**: Supabase (`db.axebkssjglrdpdbddotj.supabase.co`, US-East, 1GB Micro). Replit's internal `helium` Postgres is not externally reachable; do NOT reuse the Replit DATABASE_URL on the VPS.
+- **Public HTTPS endpoint**: `https://api.shivanshagent.cloudisoft.com` → VPS 1 (72.62.211.160). Namecheap A record + nginx reverse proxy on port 443 → API on `localhost:8080`. Let's Encrypt cert auto-renews via certbot.timer (current cert expires 2026-07-19).
+- `WEBHOOK_BASE_URL` and `PUBLIC_BASE_URL` in `/opt/shivansh/deploy/.env` on both VPS = `https://api.shivanshagent.cloudisoft.com`. Update Telnyx webhook URL to `https://api.shivanshagent.cloudisoft.com/api/webhooks/telnyx` so callbacks land on VPS 1 instead of Replit.
+- **Important**: `deploy/ecosystem.config.cjs` parses the `.env` file at config-load time (instead of relying on PM2's unreliable `env_file` directive) and merges into `env:`. This ensures all env vars actually reach the API child process. Restart pm2 cleanly with `pm2 delete all && pm2 start ecosystem.config.cjs --only shivansh-api && pm2 save` after env changes.
+- Lovable frontend stays at `shivanshagent.cloudisoft.com` and calls the API at `api.shivanshagent.cloudisoft.com`. CORS is currently `*` (open).
 - **Worker process intentionally removed** from PM2 (no `worker` script in api-server package.json — schedulers run inside the api process). Re-add when a real worker entrypoint exists + Redis is provisioned.
 - Optional env not yet set: `TELNYX_PUBLIC_KEY` (webhook signature verify), `CARTESIA_VOICE_ID`, `REDIS_*`, `RESEND_API_KEY`/`SENDGRID_API_KEY`
