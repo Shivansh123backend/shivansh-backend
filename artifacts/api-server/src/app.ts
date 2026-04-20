@@ -45,7 +45,13 @@ if (process.env.NODE_ENV === "production") {
   logger.info({ dashboardDist }, "Serving dashboard static files");
 
   app.use(express.static(dashboardDist));
-  app.get("/{*path}", (_req, res) => {
+  app.get("/{*path}", (req, res) => {
+    // Never serve the SPA shell for unknown /api/* paths — return a real 404
+    // so frontend bugs don't masquerade as backend 500s.
+    if (req.path.startsWith("/api/")) {
+      res.status(404).json({ error: "Not Found", path: req.path });
+      return;
+    }
     const indexFile = path.join(dashboardDist, "index.html");
     res.sendFile(indexFile, (err) => {
       if (err) {

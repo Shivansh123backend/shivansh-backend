@@ -43,6 +43,9 @@ router.use(manualCallRouter);
 router.use(callLogsRouter);
 router.use(dashboardRouter);
 router.use(humanAgentsRouter);
+// Frontend uses /human-agents/* — alias the same router under that prefix
+// so both /agents/* and /human-agents/* work without duplicating handlers.
+router.use("/human-agents", humanAgentsRouter);
 router.use(smsRouter);
 router.use(webhooksRouter);
 router.use(exportRouter);
