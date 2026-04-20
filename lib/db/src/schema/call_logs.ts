@@ -16,6 +16,8 @@ export const callLogsTable = pgTable("call_logs", {
   callControlId: text("call_control_id"),
   numberUsed: text("number_used"),
   answerType: text("answer_type"),
+  score: integer("score"),                // 0–100 quality score (callScorer)
+  objections: text("objections"),         // JSON array of detected objection types
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
 });
 

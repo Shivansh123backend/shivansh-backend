@@ -1,0 +1,249 @@
+You are a senior AI systems engineer.
+
+Your task is to enhance my existing AI calling platform by ADDING advanced intelligence layers WITHOUT modifying or breaking the current system.
+
+---
+
+## STRICT RULES (DO NOT VIOLATE)
+
+* DO NOT change existing UI
+* DO NOT change UI colors or styling
+* DO NOT remove or rewrite current working logic
+* DO NOT break existing APIs or flows
+
+ONLY:
+
+* add new modules
+* extend functionality
+* integrate safely
+
+---
+
+## GOAL
+
+Enhance system to:
+
+* handle calls more naturally
+* improve conversation quality
+* manage multiple agents smoothly
+* learn and improve from past calls
+
+---
+
+## STEP 1 — ADD INPUT FILTER MODULE
+
+Create a new module:
+
+inputFilter.js
+
+Responsibilities:
+
+* ignore noise (sighs, "uh", "hmm")
+* ignore low confidence (<0.6)
+* detect unclear input
+
+Return:
+
+* valid / invalid input flag
+
+Do NOT modify existing logic—wrap it before LLM call.
+
+---
+
+## STEP 2 — ADD FAST RESPONSE MODULE
+
+Create:
+
+fastResponse.js
+
+Handle instantly:
+
+* where are you calling from
+* who is this
+* how did you get my number
+
+Return response BEFORE LLM call.
+
+---
+
+## STEP 3 — ADD INTENT + OBJECTION MODULE
+
+Create:
+
+intentEngine.js
+
+Detect:
+
+* question
+* objection (price, not interested, time, already have, info brush, hard reject)
+* positive / neutral
+
+Also create:
+
+objectionEngine.js
+
+Use structured responses:
+
+* acknowledge
+* normalize
+* redirect
+* ask
+
+Do NOT replace LLM—augment it.
+
+---
+
+## STEP 4 — ADD STATE MACHINE (NON-INTRUSIVE)
+
+Create:
+
+stateManager.js
+
+Track per call:
+
+INTRO → QUALIFY → DISCOVER → PITCH → OBJECTION → CLOSE → END
+
+Store state externally per session.
+
+Do NOT alter current flow—only track and assist.
+
+---
+
+## STEP 5 — ADD MULTI-AGENT CONTROLLER
+
+Create:
+
+agentOrchestrator.js
+
+Responsibilities:
+
+* manage concurrent calls
+* isolate sessions
+* assign unique IDs
+* prevent cross-session conflicts
+
+Use queue system (lightweight if needed).
+
+---
+
+## STEP 6 — ADD CALL SCORING SYSTEM
+
+Create:
+
+callScorer.js
+
+After each call:
+
+Score (0–100) based on:
+
+* flow completion
+* engagement (responses, duration)
+* objection handling
+* outcome
+
+Store:
+
+* score
+* transcript
+* objections
+
+---
+
+## STEP 7 — ADD OPTIMIZATION ENGINE
+
+Create:
+
+optimizer.js
+
+Responsibilities:
+
+* analyze past calls
+* detect weak responses
+* suggest improved phrasing
+* rotate response variations
+
+DO NOT auto-break system—only enhance responses gradually.
+
+---
+
+## STEP 8 — ADD LATENCY & TIMING LAYER
+
+Create:
+
+timingController.js
+
+Responsibilities:
+
+* add 300–800ms delay before responses
+* vary timing based on complexity
+* prevent instant robotic replies
+
+---
+
+## STEP 9 — ADD SILENCE HANDLING
+
+Create:
+
+silenceHandler.js
+
+Rules:
+
+* 2–4 sec silence → "Hello, are you there?"
+* repeated silence → "Can you hear me?"
+
+---
+
+## STEP 10 — SAFE INTEGRATION LAYER
+
+Wrap everything inside a middleware:
+
+callEnhancer.js
+
+Flow:
+
+1. inputFilter
+2. fastResponse
+3. intent detection
+4. objection handling
+5. timing control
+6. fallback to existing system
+
+---
+
+## STEP 11 — DATA STORAGE
+
+Store:
+
+* call transcripts
+* scores
+* objections
+* improvements
+
+Use existing DB if available.
+
+---
+
+## STEP 12 — NON-DESTRUCTIVE DESIGN
+
+* All new features must be modular
+* Existing system must run even if new modules fail
+* Use feature flags if needed
+
+---
+
+## FINAL INSTRUCTION
+
+Enhance the system safely.
+
+Do NOT break anything.
+Do NOT modify UI.
+Do NOT change colors.
+
+Only add intelligent backend layers that improve:
+
+* conversation quality
+* stability
+* performance
+* scalability
+
+Write clean, modular, production-ready code.
