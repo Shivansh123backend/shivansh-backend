@@ -225,6 +225,11 @@ export async function triggerCall(payload: TriggerCallPayload): Promise<TriggerC
 
 /** POST /api/calls/enqueue — queue via worker's BullMQ or Telnyx direct */
 export async function enqueueCall(payload: EnqueueCallPayload): Promise<TriggerCallResult> {
+  // Rate-limit outbound dial rate to stay under Telnyx account caps and
+  // protect downstream STT/LLM/TTS streams. No-op when DIAL_RATE_PER_SEC=0.
+  const { acquireDispatchToken } = await import("../lib/dispatchLimiter.js");
+  await acquireDispatchToken();
+
   // If no worker configured (or WORKER_URL not set), use Telnyx direct
   if (!WORKER_URL) {
     return telnyxDirectCall(payload);

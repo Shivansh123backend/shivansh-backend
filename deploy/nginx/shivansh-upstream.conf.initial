@@ -1,0 +1,12 @@
+# Initial upstream pool — copied to /etc/nginx/conf.d/shivansh-upstream.conf
+# on first install. After that, deploy/lb/health-monitor.sh owns this file.
+#
+# `ip_hash` keeps each client pinned to the same upstream for session/socket
+# continuity. Round-robin can be substituted by removing the `ip_hash;` line.
+
+upstream shivansh_upstream {
+    ip_hash;
+    server 72.62.211.160:8080 max_fails=3 fail_timeout=15s;
+    server 72.62.212.7:8080   max_fails=3 fail_timeout=15s;
+    keepalive 32;
+}

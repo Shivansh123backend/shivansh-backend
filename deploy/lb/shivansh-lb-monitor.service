@@ -1,0 +1,16 @@
+[Unit]
+Description=SHIVANSH LB health monitor
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/env bash /opt/shivansh/deploy/lb/health-monitor.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/shivansh/lb-monitor.log
+StandardError=append:/var/log/shivansh/lb-monitor.log
+
+[Install]
+WantedBy=multi-user.target

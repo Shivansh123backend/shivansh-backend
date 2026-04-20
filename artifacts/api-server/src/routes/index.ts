@@ -23,6 +23,7 @@ import queuesRouter from "./queues.js";
 import llmRouter from "./llm.js";
 import optimizerRouter from "./optimizer.js";
 import scriptsRouter from "./scripts.js";
+import clusterRouter from "./cluster.js";
 import { globalErrorHandler } from "../lib/errors.js";
 import type { Request, Response, NextFunction } from "express";
 
@@ -52,6 +53,7 @@ router.use(queuesRouter);
 router.use(llmRouter);
 router.use(optimizerRouter);
 router.use(scriptsRouter);
+router.use(clusterRouter);
 
 router.use((err: Error, req: Request, res: Response, next: NextFunction) => globalErrorHandler(err, req, res, next));
 

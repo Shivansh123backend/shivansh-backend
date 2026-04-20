@@ -1,0 +1,28 @@
+{
+  "pool": [
+    {
+      "id": "vps1",
+      "host": "72.62.211.160",
+      "port": 8080,
+      "weight": 1,
+      "role": "primary",
+      "enabled": true
+    },
+    {
+      "id": "vps2",
+      "host": "72.62.212.7",
+      "port": 8080,
+      "weight": 1,
+      "role": "secondary",
+      "enabled": true
+    }
+  ],
+  "settings": {
+    "health_path": "/api/health",
+    "check_interval_seconds": 10,
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "request_timeout_seconds": 5,
+    "min_pool_size": 1
+  }
+}
