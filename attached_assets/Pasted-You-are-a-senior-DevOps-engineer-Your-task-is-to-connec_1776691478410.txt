@@ -1,0 +1,157 @@
+You are a senior DevOps engineer.
+
+Your task is to connect my Replit backend to TWO Hostinger VPS servers and deploy my AI calling system for production execution.
+
+Do NOT modify application logic. Only handle deployment, infrastructure, and execution.
+
+---
+
+## GOAL
+
+* Replit = development/control layer
+* VPS = execution/processing layer
+
+Ensure:
+
+* code sync from Replit → VPS
+* processes run reliably
+* system scales across 2 VPS
+
+---
+
+## STEP 1 — SSH CONNECTION SETUP
+
+Create secure SSH connection from Replit to both VPS.
+
+Use:
+
+* VPS_1_IP
+* VPS_2_IP
+* SSH private key authentication
+
+Store keys securely using environment variables.
+
+---
+
+## STEP 2 — REPOSITORY SYNC
+
+Ensure code is synced via Git:
+
+* push from Replit to GitHub (or repo)
+* VPS pulls latest code
+
+Commands on VPS:
+
+* git clone (first time)
+* git pull (updates)
+
+---
+
+## STEP 3 — VPS SETUP
+
+On both VPS:
+
+Install:
+
+* Node.js (latest LTS)
+* npm
+* pm2 (global)
+
+---
+
+## STEP 4 — PROCESS MANAGEMENT
+
+Use PM2 to run services:
+
+* main server (API)
+* worker (call processor)
+* background jobs
+
+Ensure:
+
+* auto restart on crash
+* startup on reboot
+
+---
+
+## STEP 5 — MULTI-VPS DISTRIBUTION
+
+Split workload:
+
+* VPS 1 → primary call processor
+* VPS 2 → secondary / overflow / backup
+
+Implement simple load distribution:
+
+* round-robin OR queue-based assignment
+
+---
+
+## STEP 6 — DEPLOYMENT SCRIPT
+
+Create deploy.sh in Replit:
+
+1. push code to repo
+
+2. SSH into VPS 1:
+
+   * pull latest code
+   * install dependencies
+   * restart PM2
+
+3. SSH into VPS 2:
+
+   * same process
+
+---
+
+## STEP 7 — ENVIRONMENT CONFIG
+
+Ensure environment variables exist on VPS:
+
+* API keys (STT, TTS, LLM)
+* database connection
+* campaign configs
+
+---
+
+## STEP 8 — HEALTH CHECK
+
+Create simple health endpoint:
+
+/health
+
+Return:
+
+* server status
+* uptime
+
+---
+
+## STEP 9 — FAILOVER LOGIC
+
+If VPS 1 fails:
+
+* route new calls to VPS 2
+
+---
+
+## STEP 10 — LOGGING
+
+Enable logs via PM2:
+
+* monitor errors
+* track crashes
+
+---
+
+## FINAL INSTRUCTION
+
+Set up full deployment pipeline from Replit to both VPS.
+
+Do NOT change UI.
+Do NOT change core logic.
+
+Ensure system runs reliably and scales across both servers.
+
+Write clean, production-ready scripts.
