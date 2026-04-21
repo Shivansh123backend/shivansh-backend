@@ -250,9 +250,25 @@ router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, r
     return;
   }
 
-  const parsed = updateCampaignSchema.safeParse(req.body);
+  // ── Tolerant pre-processing of the body ────────────────────────────────────
+  // The frontend "Resume Draft" path re-sends the full stored row, including
+  // null values for unset fields and JSON objects/arrays for fields stored as
+  // serialized strings. Strip nulls (they mean "no change") and stringify any
+  // object/array values for the few text-stored JSON columns.
+  const JSON_TEXT_FIELDS = new Set(["voiceProfile", "transferRules"]);
+  const cleanBody: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries((req.body ?? {}) as Record<string, unknown>)) {
+    if (v === null || v === undefined) continue;            // skip nulls
+    if (JSON_TEXT_FIELDS.has(k) && typeof v !== "string") {
+      cleanBody[k] = JSON.stringify(v);
+    } else {
+      cleanBody[k] = v;
+    }
+  }
+
+  const parsed = updateCampaignSchema.safeParse(cleanBody);
   if (!parsed.success) {
-    logger.warn({ campaignId: id, body: req.body, errors: parsed.error.message }, "PATCH /campaigns rejected by schema");
+    logger.warn({ campaignId: id, body: cleanBody, errors: parsed.error.message }, "PATCH /campaigns rejected by schema");
     res.status(400).json({ error: parsed.error.message });
     return;
   }
@@ -273,6 +289,13 @@ router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, r
   const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, id));
   if (!campaign) {
     res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+
+  // No-op: every supplied field was null/undefined → nothing to update.
+  // Return the current row so the dashboard's "Save" feedback succeeds.
+  if (Object.keys(parsed.data).length === 0) {
+    res.json(campaign);
     return;
   }
 
