@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   useListUsers,
   useCreateUser,
+  customFetch,
   getListUsersQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, X, ShieldCheck, Shield, User } from "lucide-react";
+import { Plus, X, ShieldCheck, Shield, User, Trash2 } from "lucide-react";
 
 const ROLE_ICONS = { admin: ShieldCheck, supervisor: Shield, agent: User };
 const ROLE_STYLES: Record<string, string> = {
@@ -90,6 +91,35 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 export default function UsersPage() {
   const { data: users, isLoading } = useListUsers();
   const [showCreate, setShowCreate] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  // Decode the current admin's userId from the JWT so we can hide the delete
+  // button on their own row (the API also blocks it server-side).
+  const currentUserId = (() => {
+    try {
+      const t = localStorage.getItem("auth_token");
+      if (!t) return null;
+      const payload = JSON.parse(atob(t.split(".")[1]));
+      return Number(payload.userId ?? payload.sub ?? null) || null;
+    } catch { return null; }
+  })();
+
+  const handleDelete = async (u: { id: number; name: string }) => {
+    if (!window.confirm(`Remove ${u.name}? This cannot be undone.`)) return;
+    setDeletingId(u.id);
+    try {
+      await customFetch(`/api/users/${u.id}`, { method: "DELETE" });
+      toast({ title: `${u.name} removed` });
+      qc.invalidateQueries({ queryKey: getListUsersQueryKey() });
+    } catch (e: unknown) {
+      const msg = (e as { message?: string })?.message ?? "Failed to remove user";
+      toast({ title: msg, variant: "destructive" });
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <Layout>
@@ -112,13 +142,14 @@ export default function UsersPage() {
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Email</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Role</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
+                <th className="px-4 py-2.5 w-12"></th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 [...Array(5)].map((_, i) => (
                   <tr key={i}>
-                    {[...Array(4)].map((_, j) => (
+                    {[...Array(5)].map((_, j) => (
                       <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>
                     ))}
                   </tr>
@@ -142,6 +173,18 @@ export default function UsersPage() {
                       </Badge>
                     </td>
                     <td className="px-4 py-3"><StatusBadge status={u.status} /></td>
+                    <td className="px-4 py-3 text-right">
+                      {u.id !== currentUserId && (
+                        <button
+                          onClick={() => handleDelete(u)}
+                          disabled={deletingId === u.id}
+                          title="Remove member"
+                          className="p-1.5 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

@@ -121,4 +121,47 @@ router.post("/users", authenticate, requireRole("admin"), async (req, res): Prom
   res.status(201).json(user);
 });
 
+// DELETE /users/:id — admin removes a team member.
+// Safeguards: cannot delete yourself; cannot delete the last admin.
+router.delete("/users/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid user ID" });
+    return;
+  }
+
+  if (req.user?.userId === id) {
+    res.status(400).json({ error: "You cannot remove your own account" });
+    return;
+  }
+
+  const [target] = await db.select().from(usersTable).where(eq(usersTable.id, id));
+  if (!target) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  if (target.role === "admin") {
+    const [{ count: adminCount }] = await db
+      .select({ count: count() })
+      .from(usersTable)
+      .where(eq(usersTable.role, "admin"));
+    if (adminCount <= 1) {
+      res.status(400).json({ error: "Cannot remove the last admin" });
+      return;
+    }
+  }
+
+  await db.delete(usersTable).where(eq(usersTable.id, id));
+
+  await createAuditLog({
+    userId: req.user?.userId,
+    action: "delete",
+    resource: "user",
+    resourceId: id,
+  });
+
+  res.json({ ok: true, id });
+});
+
 export default router;
