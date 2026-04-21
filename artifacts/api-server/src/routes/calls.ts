@@ -273,8 +273,11 @@ router.get("/calls/live", authenticate, async (req, res): Promise<void> => {
       id: Math.abs(h) % 9_000_000 + 1_000_000,
       callControlId: b.callControlId,
       campaignId: b.campaignId,
+      campaignName: b.campaignName ?? null,
+      agentName: b.agentName ?? null,
       leadId: b.leadId,
       phoneNumber: b.callerNumber,
+      direction: b.direction ?? "outbound",       // ← added so the softphone can badge inbound vs outbound
       providerUsed: "telnyx",
       status: "in_progress",
       startedAt: b.startedAt.toISOString(),

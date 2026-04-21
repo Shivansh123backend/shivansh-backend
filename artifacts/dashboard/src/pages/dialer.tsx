@@ -27,7 +27,20 @@ type LiveCall = {
   status?: string;
   startedAt?: string;
   campaignId?: number | null;
+  campaignName?: string | null;
+  agentName?: string | null;
+  direction?: "inbound" | "outbound";
 };
+
+function elapsedSince(iso?: string): string {
+  if (!iso) return "0:00";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0 || isNaN(ms)) return "0:00";
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
 type CdrCall = {
   id: number | string;
@@ -115,12 +128,20 @@ export default function DialerPage() {
     queryFn: () => customFetch("/api/numbers") as Promise<PhoneNumber[]>,
   });
 
-  // ── Active AI calls (poll every 4s) — to render live call controls ─────────
+  // ── Active AI calls (poll every 2s) — to render live call controls ─────────
   const { data: liveCalls = [], refetch: refetchLive } = useQuery<LiveCall[]>({
     queryKey: ["calls-live"],
     queryFn: () => customFetch("/api/calls/live") as Promise<LiveCall[]>,
-    refetchInterval: 4_000,
+    refetchInterval: 2_000,
   });
+
+  // 1-second tick to drive per-call elapsed timers without re-fetching
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(t);
+  }, []);
+  void now;  // referenced only to trigger re-render; elapsed read inside JSX
 
   // ── Recent inbound calls (poll every 8s) — "who called" panel ──────────────
   const { data: recentCdr = [], refetch: refetchCdr } = useQuery<CdrCall[]>({
@@ -487,38 +508,87 @@ export default function DialerPage() {
             )}
           </div>
 
-          {/* ── Active AI Calls (live, with controls) ─────────────────────── */}
-          {liveCalls.filter(c => c.callControlId).length > 0 && (
-            <div className="bg-[hsl(224,71%,3%)] border border-border rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <PhoneCall className="w-3.5 h-3.5 text-green-400" />
-                <h3 className="text-xs font-mono uppercase tracking-wider text-foreground">Active AI Calls</h3>
-                <span className="ml-auto text-[10px] font-mono text-muted-foreground">
-                  {liveCalls.filter(c => c.callControlId).length} live
-                </span>
+          {/* ── Active AI Calls (always visible, with live timer + controls) ── */}
+          <div className="bg-[hsl(224,71%,3%)] border border-border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <PhoneCall className={cn(
+                "w-3.5 h-3.5",
+                liveCalls.filter(c => c.callControlId).length > 0 ? "text-green-400" : "text-muted-foreground"
+              )} />
+              <h3 className="text-xs font-mono uppercase tracking-wider text-foreground">Active AI Calls</h3>
+              <span className="ml-auto text-[10px] font-mono text-muted-foreground">
+                {liveCalls.filter(c => c.callControlId).length} live
+              </span>
+            </div>
+            {liveCalls.filter(c => c.callControlId).length === 0 ? (
+              <div className="py-6 text-center">
+                <div className="w-10 h-10 mx-auto mb-2 rounded-full border border-border/50 flex items-center justify-center">
+                  <PhoneIncoming className="w-4 h-4 text-muted-foreground/50" />
+                </div>
+                <p className="text-[11px] font-mono text-muted-foreground">
+                  Waiting for calls…
+                </p>
+                <p className="text-[10px] font-mono text-muted-foreground/60 mt-1">
+                  Inbound + outbound AI calls appear here in real time
+                </p>
               </div>
-              <div className="space-y-2">
+            ) : (
+              <div className="space-y-3">
                 {liveCalls.filter(c => c.callControlId).map(c => {
                   const cid = c.callControlId!;
                   const held = heldCallIds.has(cid);
+                  const isInbound = c.direction === "inbound";
                   return (
-                    <div key={cid} className="rounded-md border border-border bg-white/[0.02] p-3">
+                    <div key={cid} className={cn(
+                      "rounded-lg border p-3 transition-all",
+                      held
+                        ? "border-yellow-500/40 bg-yellow-500/5"
+                        : isInbound
+                          ? "border-blue-500/30 bg-blue-500/5"
+                          : "border-green-500/30 bg-green-500/5"
+                    )}>
+                      {/* Top row: direction badge + phone + status */}
                       <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
                           <span className={cn(
-                            "w-1.5 h-1.5 rounded-full",
+                            "text-[9px] font-mono uppercase px-1.5 py-0.5 rounded shrink-0",
+                            isInbound ? "bg-blue-500/20 text-blue-300" : "bg-green-500/20 text-green-300"
+                          )}>
+                            {isInbound ? "IN" : "OUT"}
+                          </span>
+                          <span className={cn(
+                            "w-1.5 h-1.5 rounded-full shrink-0",
                             held ? "bg-yellow-400" : "bg-green-400 animate-pulse"
                           )} />
-                          <span className="font-mono text-sm text-foreground">{c.phoneNumber || "Unknown"}</span>
+                          <span className="font-mono text-sm text-foreground truncate">{c.phoneNumber || "Unknown"}</span>
                         </div>
-                        <span className="text-[10px] font-mono uppercase text-muted-foreground">
-                          {held ? "On Hold" : (c.status || "in_progress")}
+                        <span className="text-[10px] font-mono uppercase text-muted-foreground shrink-0 ml-2">
+                          {held ? "On Hold" : "Live"}
                         </span>
                       </div>
+
+                      {/* Big live timer + campaign / agent context */}
+                      <div className="flex items-baseline justify-between mb-3">
+                        <div className="min-w-0">
+                          {c.campaignName && (
+                            <div className="text-[10px] font-mono text-muted-foreground truncate">
+                              {c.campaignName}{c.agentName ? ` · ${c.agentName}` : ""}
+                            </div>
+                          )}
+                        </div>
+                        <div className={cn(
+                          "font-mono text-xl tabular-nums",
+                          held ? "text-yellow-400" : "text-green-400"
+                        )}>
+                          {elapsedSince(c.startedAt)}
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
                       <div className="grid grid-cols-4 gap-1.5">
                         <button onClick={() => callAction(cid, held ? "unhold" : "hold")}
                           className={cn(
-                            "h-9 rounded border font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all",
+                            "h-10 rounded border font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all",
                             held
                               ? "border-green-500/40 bg-green-500/10 text-green-400 hover:bg-green-500/20"
                               : "border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10"
@@ -529,21 +599,21 @@ export default function DialerPage() {
                           <span>{held ? "Resume" : "Hold"}</span>
                         </button>
                         <button onClick={() => promptAndAct(cid, "transfer")}
-                          className="h-9 rounded border border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all"
+                          className="h-10 rounded border border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all"
                           title="Blind transfer to another number"
                         >
                           <ArrowRightLeft className="w-3 h-3" />
                           <span>Transfer</span>
                         </button>
                         <button onClick={() => promptAndAct(cid, "conference")}
-                          className="h-9 rounded border border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all"
+                          className="h-10 rounded border border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all"
                           title="Bridge a third party into this call"
                         >
                           <UserPlus className="w-3 h-3" />
                           <span>Conf</span>
                         </button>
                         <button onClick={() => callAction(cid, "hangup")}
-                          className="h-9 rounded bg-red-600 hover:bg-red-700 text-white font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all"
+                          className="h-10 rounded bg-red-600 hover:bg-red-700 text-white font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all"
                           title="End this call"
                         >
                           <PhoneOff className="w-3 h-3" />
@@ -554,8 +624,8 @@ export default function DialerPage() {
                   );
                 })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* ── Recent Inbound Calls (who has called) ─────────────────────── */}
           <div className="bg-[hsl(224,71%,3%)] border border-border rounded-lg p-4">
