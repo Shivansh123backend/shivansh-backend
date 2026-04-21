@@ -6,6 +6,7 @@ export const campaignStatusEnum = pgEnum("campaign_status", ["draft", "active", 
 export const campaignTypeEnum = pgEnum("campaign_type", ["outbound", "inbound", "both"]);
 export const routingTypeEnum = pgEnum("routing_type", ["ai", "human", "ai_then_human"]);
 export const dialingModeEnum = pgEnum("dialing_mode", ["manual", "progressive", "predictive", "preview"]);
+export const routingStrategyEnum = pgEnum("routing_strategy", ["round_robin", "priority", "sequential"]);
 
 export const campaignsTable = pgTable("campaigns", {
   id: serial("id").primaryKey(),
@@ -14,6 +15,7 @@ export const campaignsTable = pgTable("campaigns", {
   status: campaignStatusEnum("status").notNull().default("draft"),
   type: campaignTypeEnum("type").notNull().default("outbound"),
   routingType: routingTypeEnum("routing_type").notNull().default("ai"),
+  routingStrategy: routingStrategyEnum("routing_strategy").notNull().default("round_robin"),
   maxConcurrentCalls: integer("max_concurrent_calls").notNull().default(5),
   transferRules: text("transfer_rules"),
   // AI calling configuration
@@ -59,6 +61,11 @@ export const campaignAgentsTable = pgTable("campaign_agents", {
   id: serial("id").primaryKey(),
   campaignId: integer("campaign_id").notNull(),
   agentId: integer("agent_id").notNull(),
+  // For "priority" routing: lower number = higher priority (1 wins over 5).
+  // For "sequential" routing: agents are dialed in ascending priority order,
+  // resuming from where the last call left off (round-robin style but
+  // through a fixed ordered list, not a rotation index).
+  priority: integer("priority").notNull().default(1),
 });
 
 export const insertCampaignAgentSchema = createInsertSchema(campaignAgentsTable).omit({ id: true });

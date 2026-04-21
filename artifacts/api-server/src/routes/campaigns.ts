@@ -32,6 +32,7 @@ const createCampaignSchema = z.object({
   agentId: z.number().nullish(),
   type: z.enum(["outbound", "inbound", "both"]).default("outbound"),
   routingType: z.enum(["ai", "human", "ai_then_human"]).default("ai"),
+  routingStrategy: z.enum(["round_robin", "priority", "sequential"]).default("round_robin"),
   maxConcurrentCalls: z.number().min(1).max(100).default(5),
   transferRules: z.string().nullish(),
   agentPrompt: z.string().nullish(),
@@ -65,6 +66,9 @@ const createCampaignSchema = z.object({
 
 const assignAgentSchema = z.object({
   agentId: z.number(),
+  // Used by routing strategies "priority" and "sequential" — lower = first.
+  // Optional; defaults to 1.
+  priority: z.number().int().min(1).max(999).optional(),
 });
 
 router.post("/campaigns/create", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
@@ -102,6 +106,7 @@ const draftCampaignSchema = z.object({
   agentId: z.number().nullish(),
   type: z.enum(["outbound", "inbound", "both"]).optional(),
   routingType: z.enum(["ai", "human", "ai_then_human"]).optional(),
+  routingStrategy: z.enum(["round_robin", "priority", "sequential"]).optional(),
   agentPrompt: z.string().nullish(),
   knowledgeBase: z.string().nullish(),
   recordingNotes: z.string().nullish(),
@@ -204,6 +209,7 @@ const updateCampaignSchema = z.object({
   type: z.enum(["outbound", "inbound", "both"]).optional(),
   agentId: z.number().nullish(),
   routingType: z.enum(["ai", "human", "ai_then_human"]).optional(),
+  routingStrategy: z.enum(["round_robin", "priority", "sequential"]).optional(),
   agentPrompt: z.string().nullish(),
   knowledgeBase: z.string().nullish(),
   recordingNotes: z.string().nullish(),
@@ -1340,10 +1346,34 @@ router.post("/campaigns/:id/agents", authenticate, requireRole("admin"), async (
 
   const [assignment] = await db
     .insert(campaignAgentsTable)
-    .values({ campaignId, agentId: parsed.data.agentId })
+    .values({
+      campaignId,
+      agentId: parsed.data.agentId,
+      priority: parsed.data.priority ?? 1,
+    })
     .returning();
 
   res.status(201).json(assignment);
+});
+
+// PATCH /campaigns/:id/agents/:agentId — change an assigned agent's priority
+// (used by "priority" + "sequential" routing strategies).
+router.patch("/campaigns/:id/agents/:agentId", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const campaignId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  const agentId    = parseInt(Array.isArray(req.params.agentId) ? req.params.agentId[0] : req.params.agentId, 10);
+  if (isNaN(campaignId) || isNaN(agentId)) { res.status(400).json({ error: "Invalid IDs" }); return; }
+
+  const body = z.object({ priority: z.number().int().min(1).max(999) }).safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
+
+  const [updated] = await db
+    .update(campaignAgentsTable)
+    .set({ priority: body.data.priority })
+    .where(and(eq(campaignAgentsTable.campaignId, campaignId), eq(campaignAgentsTable.agentId, agentId)))
+    .returning();
+
+  if (!updated) { res.status(404).json({ error: "Assignment not found" }); return; }
+  res.json(updated);
 });
 
 router.get("/campaigns/:id/agents", authenticate, async (req, res): Promise<void> => {
@@ -1360,10 +1390,12 @@ router.get("/campaigns/:id/agents", authenticate, async (req, res): Promise<void
       name: usersTable.name,
       email: usersTable.email,
       status: usersTable.status,
+      priority: campaignAgentsTable.priority,
     })
     .from(campaignAgentsTable)
     .innerJoin(usersTable, eq(campaignAgentsTable.agentId, usersTable.id))
-    .where(eq(campaignAgentsTable.campaignId, campaignId));
+    .where(eq(campaignAgentsTable.campaignId, campaignId))
+    .orderBy(asc(campaignAgentsTable.priority), asc(usersTable.id));
 
   res.json(agents);
 });
