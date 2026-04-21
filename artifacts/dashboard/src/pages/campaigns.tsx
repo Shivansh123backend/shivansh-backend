@@ -194,8 +194,60 @@ function FileUploadArea({
       onContent(`[Audio recording: ${file.name}]\nKey insights from this recording should be extracted and applied to the agent's behavior.`, file.name);
       return;
     }
-    const text = await file.text();
-    onContent(text, file.name);
+
+    const name = file.name.toLowerCase();
+    try {
+      // ── DOCX (Microsoft Word) ────────────────────────────────────────────
+      if (name.endsWith(".docx")) {
+        const mammoth = await import("mammoth/mammoth.browser");
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        onContent(result.value.trim(), file.name);
+        return;
+      }
+
+      // ── PDF ──────────────────────────────────────────────────────────────
+      if (name.endsWith(".pdf")) {
+        const pdfjs = await import("pdfjs-dist");
+        // Worker is required by pdfjs — load from the package's CDN-style URL
+        // so we don't need to copy the worker file into our public dir.
+        const workerUrl = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
+        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+        const pages: string[] = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          const pageText = content.items
+            .map((item) => ("str" in item ? item.str : ""))
+            .join(" ");
+          pages.push(pageText);
+        }
+        onContent(pages.join("\n\n").trim(), file.name);
+        return;
+      }
+
+      // ── DOC (legacy Word) — not supported in browser; warn user ─────────
+      if (name.endsWith(".doc")) {
+        onContent(
+          `[Could not read ${file.name} — legacy .doc format is not supported. Please save as .docx or .pdf and re-upload.]`,
+          file.name,
+        );
+        return;
+      }
+
+      // ── Plain text fallback (.txt, .md, anything else) ──────────────────
+      const text = await file.text();
+      onContent(text, file.name);
+    } catch (err) {
+      console.error("File extraction failed:", err);
+      onContent(
+        `[Failed to extract text from ${file.name}: ${err instanceof Error ? err.message : "unknown error"}]`,
+        file.name,
+      );
+    }
   };
 
   return (
