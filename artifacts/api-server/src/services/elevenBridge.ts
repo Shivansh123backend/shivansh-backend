@@ -17,7 +17,7 @@ import WebSocket from "ws";
 import { type IncomingMessage } from "http";
 import { logger } from "../lib/logger.js";
 import { emitToSupervisors, getIO } from "../websocket/index.js";
-import { getCallListeners } from "../websocket/callListeners.js";
+import { getIO } from "../websocket/index.js";
 import {
   isCustomBridgeAvailable,
   connectCustomBridge,
@@ -326,14 +326,12 @@ async function connectToElevenLabs(
         }
 
         // Relay AI (agent) µ-law audio to any live-listening supervisors
-        const listeners = getCallListeners(callControlId);
-        if (listeners.length > 0) {
-          try {
-            const ioInst = getIO();
-            const audioPayload = { callControlId, payload: ulawB64, side: "agent" as const };
-            for (const sid of listeners) ioInst.to(sid).emit("call:audio", audioPayload);
-          } catch { /* IO not yet initialised */ }
-        }
+        // (cluster-synced via Redis adapter — emits to room `listen:<cid>`)
+        // NOTE: emit blindly to the room — local rooms.get() only sees sockets on
+        // *this* node. The Redis adapter forwards to subscribers on other nodes.
+        try {
+          getIO().to(`listen:${callControlId}`).emit("call:audio", { callControlId, payload: ulawB64, side: "agent" as const });
+        } catch { /* IO not yet initialised */ }
         return;
       }
 
@@ -561,14 +559,11 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
         }));
 
         // Relay raw µ-law caller audio to any live-listening supervisors
-        const listeners = getCallListeners(callControlId);
-        if (listeners.length > 0) {
-          try {
-            const ioInst = getIO();
-            const audioPayload = { callControlId, payload, side: "caller" as const };
-            for (const sid of listeners) ioInst.to(sid).emit("call:audio", audioPayload);
-          } catch { /* IO not yet initialised — safe to ignore */ }
-        }
+        // (cluster-synced via Redis adapter — emits to room `listen:<cid>`)
+        // NOTE: emit blindly — Redis adapter forwards to subscribers on other nodes.
+        try {
+          getIO().to(`listen:${callControlId}`).emit("call:audio", { callControlId, payload, side: "caller" as const });
+        } catch { /* IO not yet initialised — safe to ignore */ }
       }
       return;
     }

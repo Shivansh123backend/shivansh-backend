@@ -286,12 +286,14 @@ function LiveCallCard({
   transcriptLines,
   isListening,
   onToggleListen,
+  onBargeIn,
 }: {
   call: LiveCall;
   campaignMap: Record<number, string>;
   transcriptLines: TranscriptLine[];
   isListening: boolean;
   onToggleListen: () => void;
+  onBargeIn: () => void;
 }) {
   useLiveClock();
   const elapsed = formatElapsed(call._localStart);
@@ -335,6 +337,17 @@ function LiveCallCard({
             >
               <Headphones className="w-2.5 h-2.5" />
               {isListening ? "Listening" : "Listen"}
+            </button>
+          )}
+          {/* Barge-in (3-way) — bridge the supervisor's phone into the live call */}
+          {call.callControlId && (
+            <button
+              onClick={onBargeIn}
+              title="Barge in: dial your phone and bridge into this call"
+              className="flex items-center gap-1 text-[9px] font-mono px-2 py-1 rounded border border-border/50 text-muted-foreground hover:text-orange-400 hover:border-orange-400/40 transition-all"
+            >
+              <Phone className="w-2.5 h-2.5" />
+              Barge
             </button>
           )}
           <div className="text-right">
@@ -700,6 +713,37 @@ export default function LiveMonitorPage() {
   const activeCallsArr = Array.from(activeCalls.values());
   const successRate = totalToday > 0 ? Math.round((completedToday / totalToday) * 100) : 0;
 
+  const bargeIn = useCallback(async (callControlId: string) => {
+    const saved = typeof window !== "undefined" ? window.localStorage.getItem("supervisor_phone") : "";
+    const to = window.prompt(
+      "Enter your phone number in E.164 format (e.g. +14155551234). We will dial you and bridge you into the call.",
+      saved ?? ""
+    );
+    if (!to) return;
+    const trimmed = to.trim();
+    if (!/^\+\d{8,15}$/.test(trimmed)) {
+      alert("Phone must be E.164 format starting with + and 8–15 digits.");
+      return;
+    }
+    try {
+      window.localStorage.setItem("supervisor_phone", trimmed);
+      const res = await fetch(`/api/calls/${encodeURIComponent(callControlId)}/conference`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: trimmed }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`Barge failed: ${err.error || res.statusText}`);
+        return;
+      }
+      alert(`Dialing ${trimmed} — answer your phone to join the call.`);
+    } catch (e) {
+      alert(`Barge failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, []);
+
   const toggleListen = useCallback((callControlId: string) => {
     const socket = socketRef.current;
     if (!socket) return;
@@ -811,6 +855,7 @@ export default function LiveMonitorPage() {
                   transcriptLines={c.callControlId ? (liveTranscripts.get(c.callControlId) ?? []) : []}
                   isListening={!!c.callControlId && listeningCallControlId === c.callControlId}
                   onToggleListen={() => c.callControlId && toggleListen(c.callControlId)}
+                  onBargeIn={() => c.callControlId && bargeIn(c.callControlId)}
                 />
               ))}
             </div>

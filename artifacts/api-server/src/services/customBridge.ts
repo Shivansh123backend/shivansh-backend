@@ -15,7 +15,7 @@ import WebSocket from "ws";
 import OpenAI from "openai";
 import { logger } from "../lib/logger.js";
 import { emitToSupervisors, getIO } from "../websocket/index.js";
-import { getCallListeners } from "../websocket/callListeners.js";
+import { getIO } from "../websocket/index.js";
 import {
   filterTranscript,
   getFastResponse,
@@ -149,15 +149,18 @@ function injectAudio(state: BridgeState, ulawB64: string): void {
     media: { payload: ulawB64 },
   }));
 
-  // Stream AI (agent) audio to live listeners
-  const listeners = getCallListeners(state.callControlId);
-  if (listeners.length > 0) {
-    try {
-      const ioInst = getIO();
-      const payload = { callControlId: state.callControlId, payload: ulawB64, side: "agent" };
-      for (const sid of listeners) ioInst.to(sid).emit("call:audio", payload);
-    } catch { /* not initialized yet */ }
-  }
+  // Stream AI (agent) audio to live listeners (cluster-synced via Redis adapter)
+  try {
+    const ioInst = getIO();
+    const room = `listen:${state.callControlId}`;
+    if ((ioInst.sockets.adapter.rooms.get(room)?.size ?? 0) > 0) {
+      ioInst.to(room).emit("call:audio", {
+        callControlId: state.callControlId,
+        payload: ulawB64,
+        side: "agent",
+      });
+    }
+  } catch { /* not initialized yet */ }
 }
 
 // ── Cartesia TTS ─────────────────────────────────────────────────────────────
@@ -751,15 +754,14 @@ export function sendAudioToCustomBridge(callControlId: string, ulawB64: string):
   if (state.deepgramWs.readyState !== WebSocket.OPEN) return;
   state.deepgramWs.send(Buffer.from(ulawB64, "base64"));
 
-  // Stream caller audio to live listeners (supervisor listen-in)
-  const listeners = getCallListeners(callControlId);
-  if (listeners.length > 0) {
-    try {
-      const ioInst = getIO();
-      const payload = { callControlId, payload: ulawB64, side: "caller" };
-      for (const sid of listeners) ioInst.to(sid).emit("call:audio", payload);
-    } catch { /* not initialized yet */ }
-  }
+  // Stream caller audio to live listeners (cluster-synced via Redis adapter)
+  try {
+    const ioInst = getIO();
+    const room = `listen:${callControlId}`;
+    if ((ioInst.sockets.adapter.rooms.get(room)?.size ?? 0) > 0) {
+      ioInst.to(room).emit("call:audio", { callControlId, payload: ulawB64, side: "caller" });
+    }
+  } catch { /* not initialized yet */ }
 }
 
 export function closeCustomBridge(callControlId: string): void {

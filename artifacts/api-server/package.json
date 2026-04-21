@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "@swc/helpers": "^0.5.21",
     "@types/pdfkit": "^0.17.5",
     "@workspace/api-zod": "workspace:*",

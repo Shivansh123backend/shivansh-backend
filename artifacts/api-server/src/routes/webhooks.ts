@@ -32,6 +32,7 @@ import {
   closeBridge,
   setRecordingUrl,
 } from "../services/elevenBridge.js";
+import { closeCustomBridge } from "../services/customBridge.js";
 import { emitToSupervisors } from "../websocket/index.js";
 import {
   audioCache,
@@ -1063,10 +1064,15 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       // ── Conference bridge: third party answered — bridge legs together ───────
       if (ctx?.type === "conference_bridge") {
         const { originalCallControlId } = ctx;
-        logger.info({ callControlId, originalCallControlId }, "Conference leg answered — bridging to original call");
+        logger.info({ callControlId, originalCallControlId }, "Conference leg (supervisor) answered — tearing down AI bridge and bridging legs");
+        // Tear down the AI bridge on the original call so the AI does not
+        // continue to listen / respond once a human supervisor joins.
+        try { closeCustomBridge(originalCallControlId); } catch { /* not active */ }
+        try { closeBridge(originalCallControlId); } catch { /* not active */ }
         try {
+          await telnyxAction(originalCallControlId, "transcription_stop", {}).catch(() => {});
           await telnyxAction(callControlId, "bridge", { call_control_id: originalCallControlId });
-          logger.info({ callControlId, originalCallControlId }, "Conference bridge executed");
+          logger.info({ callControlId, originalCallControlId }, "Conference bridge executed (AI silenced)");
         } catch (err) {
           logger.error({ err: String(err), callControlId, originalCallControlId }, "Conference bridge failed");
         }
