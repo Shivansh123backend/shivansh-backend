@@ -71,6 +71,29 @@ const ALLOWED_DISPOSITIONS = new Set([
   "sale", "no_sale", "do_not_call", "dnc", "wrong_number", "answering_machine",
   "left_message", "appointment_set", "follow_up", "other",
 ]);
+// ── GET /dispositions — server-controlled list for the wrap-up dropdown ──────
+// Mirrors ALLOWED_DISPOSITIONS so the softphone can never submit a value the
+// backend will reject. Each row has a stable `code` (what the backend stores)
+// and a friendly `label` for the UI.
+const DISPOSITION_OPTIONS: { code: string; label: string }[] = [
+  { code: "interested",        label: "Interested" },
+  { code: "not_interested",    label: "Not Interested" },
+  { code: "callback_requested",label: "Callback Requested" },
+  { code: "appointment_set",   label: "Appointment Set" },
+  { code: "sale",              label: "Sale" },
+  { code: "no_sale",           label: "No Sale" },
+  { code: "voicemail",         label: "Voicemail / No Answer" },
+  { code: "wrong_number",      label: "Wrong Number" },
+  { code: "do_not_call",       label: "Do Not Call (DNC)" },
+  { code: "follow_up",         label: "Follow Up" },
+  { code: "transferred",       label: "Transferred" },
+  { code: "completed",         label: "Completed" },
+  { code: "other",             label: "Other" },
+];
+router.get("/dispositions", authenticate, (_req, res): void => {
+  res.json(DISPOSITION_OPTIONS);
+});
+
 const dispositionSchema = z.object({
   disposition: z.string().min(1).refine(v => ALLOWED_DISPOSITIONS.has(v), {
     message: `disposition must be one of: ${[...ALLOWED_DISPOSITIONS].join(", ")}`,
