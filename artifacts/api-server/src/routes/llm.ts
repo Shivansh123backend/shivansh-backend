@@ -50,9 +50,9 @@ router.post("/llm/chat/completions", async (req, res) => {
     if (!stream) {
       // Non-streaming fallback (ElevenLabs almost always uses streaming)
       const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
+        model: "gpt-4o-mini",
         messages,
-        max_completion_tokens: 200,
+        max_completion_tokens: 90,
         temperature: 0.85,
       });
       res.json(completion);
@@ -67,9 +67,9 @@ router.post("/llm/chat/completions", async (req, res) => {
     res.flushHeaders();
 
     const streamResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini",          // ~3x faster TTFT than gpt-4o (150ms vs 500ms+) — critical for phone-call latency
       messages,
-      max_completion_tokens: 200,   // phone calls need short responses
+      max_completion_tokens: 90,     // 1-2 sentences ≈ 6-10s of TTS — short, conversational, low chance of barge-in
       temperature: 0.85,
       stream: true,
     });

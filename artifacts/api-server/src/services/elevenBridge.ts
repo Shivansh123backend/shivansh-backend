@@ -194,7 +194,7 @@ async function getBaseAgentId(): Promise<string> {
             language: "en",
           },
           tts: {
-            model_id: "eleven_turbo_v2_5",
+            model_id: "eleven_flash_v2_5",   // ~75ms TTFT vs ~250ms for turbo — best for phone-call latency
             voice_id: "21m00Tcm4TlvDq8ikWAM",
           },
           asr: {
@@ -206,7 +206,7 @@ async function getBaseAgentId(): Promise<string> {
             turn_timeout: 15,
             silence_end_call_timeout: 20,
             mode: "silence",
-            endpointing_ms: 800,
+            endpointing_ms: 350,             // 350ms = humans typically speak again ~250-400ms after partner stops
           },
         },
       }),
@@ -268,15 +268,15 @@ async function connectToElevenLabs(
         },
         tts: {
           voice_id: bridge.voiceId,
-          model_id: "eleven_turbo_v2_5",
+          model_id: "eleven_flash_v2_5",   // ~75ms TTFT — best for phone-call latency (turbo was ~250ms)
           // 0=off 1=light 2=medium 3=max
-          optimize_streaming_latency: 1,
+          optimize_streaming_latency: 3,   // MAX latency optimization — start streaming audio ASAP
           voice_settings: {
-            stability: 0.38,          // LOW = more natural pitch variation (high = robotic monotone)
-            similarity_boost: 0.80,
-            style: 0.35,              // moderate expressiveness — emotion without rushing
+            stability: 0.30,               // LOWER = more natural prosody variation (was 0.38; high = robotic monotone)
+            similarity_boost: 0.85,        // slightly higher for more expressive, in-character voice
+            style: 0.45,                   // more expressiveness — natural emotion + warmth
             use_speaker_boost: true,
-            speed: 0.85,              // natural conversational pace — not too slow, not rushed
+            speed: 1.0,                    // natural conversational pace — slowing down made it sound sleepy
           },
         },
         asr: {
@@ -286,10 +286,10 @@ async function connectToElevenLabs(
           keywords: [],
         },
         turn: {
-          turn_timeout: 15,           // seconds of total silence before AI speaks again (gave more room)
+          turn_timeout: 15,                // seconds of total silence before AI speaks again
           silence_end_call_timeout: 35,
-          mode: "silence",            // explicit silence-based VAD (more predictable than default)
-          endpointing_ms: 800,        // wait 800ms of speech-pause before deciding user is done talking
+          mode: "silence",                 // explicit silence-based VAD (more predictable than default)
+          endpointing_ms: 350,             // 350ms = how fast humans actually take turns (was 800 = slow/awkward)
         },
       },
     }));
