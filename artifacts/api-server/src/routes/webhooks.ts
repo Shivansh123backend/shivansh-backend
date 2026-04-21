@@ -356,6 +356,8 @@ const objectionAttempts         = new Map<string, number>();          // callCon
 const pendingVmDropHangup       = new Set<string>();                  // callControlId → hang up after VM drop message finishes playing
 const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
 const pendingAmdGreet           = new Map<string, NodeJS.Timeout>();   // callControlId → fallback timer; bridge initialized but greeting deferred until AMD says "human"
+const greetStarted              = new Set<string>();                   // callControlId that have already been greeted — prevents double-greet from AMD + speech-trigger races
+const transcriptionStarted      = new Set<string>();                   // callControlId where Telnyx transcription_start has been issued — prevents duplicate starts
 const awaitingFirstResponse     = new Set<string>();                  // callControlId → outbound call waiting for first caller word (silence guard)
 const initialSilenceTimer       = new Map<string, ReturnType<typeof setTimeout>>(); // callControlId → 30s start-silence timeout
 const AI_SPEAK_COOLDOWN_MS      = 420;                                // ignore transcriptions this many ms after AI speaks (snappy turn-taking)
@@ -401,16 +403,47 @@ async function playWithFallback(
  * Start Telnyx transcription and play the AI's greeting via ElevenLabs TTS.
  * This replaces the fork_start approach — no inbound WebSocket needed.
  */
+/**
+ * Start Telnyx STT immediately on call.answered — idempotent.
+ * We do this BEFORE the greeting so we can hear the caller say "Hello"
+ * and use that as proof-of-human to fire the greeting instantly,
+ * skipping the 1-4 second AMD analysis delay.
+ */
+async function startTranscriptionEarly(callControlId: string): Promise<void> {
+  if (transcriptionStarted.has(callControlId)) return;
+  transcriptionStarted.add(callControlId);
+  try {
+    await telnyxAction(callControlId, "transcription_start", {
+      language: "en",
+      transcription_engine: "B",
+      interim_results: false,
+    });
+  } catch (err) {
+    transcriptionStarted.delete(callControlId);
+    logger.warn({ err: String(err), callControlId }, "Early transcription_start failed — will retry inside greet");
+  }
+}
+
 async function startTranscriptionAndGreet(callControlId: string): Promise<void> {
   const bridge = getBridgeInfo(callControlId);
   if (!bridge) return;
 
-  // Start Telnyx real-time transcription (STT)
-  await telnyxAction(callControlId, "transcription_start", {
-    language: "en",
-    transcription_engine: "B",
-    interim_results: false,
-  });
+  // Idempotent — never greet twice (AMD-human + speech-trigger can race).
+  if (greetStarted.has(callControlId)) {
+    logger.debug({ callControlId }, "Greet already started — skipping duplicate");
+    return;
+  }
+  greetStarted.add(callControlId);
+
+  // Start Telnyx real-time transcription (STT) if not already started by the early-start path
+  if (!transcriptionStarted.has(callControlId)) {
+    transcriptionStarted.add(callControlId);
+    await telnyxAction(callControlId, "transcription_start", {
+      language: "en",
+      transcription_engine: "B",
+      interim_results: false,
+    });
+  }
 
   // If a background sound is selected, inject it as an overlay audio track.
   // overlay:true mixes the audio underneath the call rather than replacing it.
@@ -1370,13 +1403,22 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         logger.warn({ err: String(err), callControlId }, "Recording start failed — continuing")
       );
 
-      // ── Defer greeting until AMD confirms a real human ───────────────────────
+      // ── Start transcription IMMEDIATELY so we can detect the caller's "Hello" ──
+      // We don't wait for AMD to start STT — listening early lets us treat any
+      // caller speech as proof-of-human and fire the greeting instantly,
+      // skipping the 1-4 second AMD analysis lag. AMD result is still used
+      // as the primary trigger; speech-trigger is the fast path.
+      startTranscriptionEarly(callControlId).catch(() => { /* logged inside */ });
+
+      // ── Defer greeting until AMD confirms a real human OR caller speaks ──────
       // Telnyx fires `call.machine.premium.detection.ended` 1-4s after answer.
-      // We do NOT start transcription/greeting here — that happens in the AMD
-      // handler when result === "human". This guarantees the AI never speaks
-      // into a voicemail beep or before the callee is actually listening.
-      // Safety net: if AMD never returns within 8s (rare carrier edge case),
-      // start anyway so we never silently drop a live call.
+      // The greeting is deferred until EITHER:
+      //   (a) AMD returns "human"          — primary path (also handles silence)
+      //   (b) the caller says ANYTHING     — fast path; their voice = proof-of-human
+      //   (c) 8s safety-net fallback fires — rare carrier edge case
+      // This guarantees the AI never speaks into a voicemail beep or before the
+      // callee is actually listening, but also that the AI starts talking the
+      // moment the human says "Hello" rather than after AMD's analysis pause.
       const fallback = setTimeout(() => {
         if (!pendingAmdGreet.has(callControlId)) return;
         pendingAmdGreet.delete(callControlId);
@@ -1610,6 +1652,24 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       lastProcessedText.set(callControlId, { text: transcript, ts: Date.now() });
 
       logger.info({ callControlId, transcript: transcript.slice(0, 100) }, "Final transcription accepted");
+
+      // ── FAST-PATH: caller spoke before AMD finished — fire greeting NOW ─────────
+      // If we're still waiting for AMD to complete, the caller's voice is
+      // definitive proof they're a human (voicemails don't say "Hello?" and
+      // wait for a response). Cancel the AMD fallback timer and start the
+      // greeting immediately. We DROP this transcript (it's just "Hello") so
+      // the AI greets cleanly instead of trying to LLM-respond to "Hello".
+      if (pendingAmdGreet.has(callControlId)) {
+        const t = pendingAmdGreet.get(callControlId);
+        if (t) clearTimeout(t);
+        pendingAmdGreet.delete(callControlId);
+        logger.info({ callControlId, transcript: transcript.slice(0, 60) }, "Caller spoke before AMD — firing greeting immediately (speech-trigger fast path)");
+        startTranscriptionAndGreet(callControlId).catch((err) =>
+          logger.error({ err: String(err), callControlId }, "Speech-triggered greet failed")
+        );
+        return;   // discard "Hello" — it's just the pickup signal, not a real turn
+      }
+
       handleCallerTurn(callControlId, transcript).catch((err) =>
         logger.error({ err: String(err), callControlId }, "handleCallerTurn error")
       );
