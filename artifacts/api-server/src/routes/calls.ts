@@ -73,10 +73,13 @@ router.post("/calls/initiate", authenticate, requireRole("admin"), async (req, r
     if (profile.blocked) {
       logger.warn(
         { leadId, phone: lead.phone, spamScore: profile.spamScore, reason: profile.reason },
-        "Outbound /calls/initiate REFUSED — spam/DNC match",
+        "Outbound /calls/initiate REFUSED — spam/DNC match (lead status NOT changed)",
       );
-      // Mark lead so the campaign engine won't retry it either
-      await db.update(leadsTable).set({ status: "do_not_call", dncFlag: true }).where(eq(leadsTable.id, leadId));
+      // NOTE: do NOT auto-flip the lead to do_not_call here. A one-off softphone
+      // dial being refused must not poison the lead for the campaign engine —
+      // operators were ending up with whole campaigns silently emptied. The
+      // dashboard caller can override by adding the number to manual DNC if
+      // they truly want to block it permanently.
       res.status(409).json({
         error: "Number blocked by DNC / spam policy",
         spam_score: profile.spamScore,

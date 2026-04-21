@@ -955,12 +955,6 @@ TONE: Be a real person having a real conversation. Stay warm, listen actively, a
   return { script, voiceName, voiceProvider, fromNumber: resolvedFromNumber, transferNumber, backgroundSound, holdMusicUrl };
 }
 
-// Shared logger (pino-style simple wrapper)
-const logger = {
-  info: (msg: string) => console.log(JSON.stringify({ level: "info", msg, time: Date.now() })),
-  error: (msg: string) => console.error(JSON.stringify({ level: "error", msg, time: Date.now() })),
-};
-
 router.post("/campaigns/stop/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(rawId, 10);
