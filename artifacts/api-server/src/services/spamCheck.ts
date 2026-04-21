@@ -36,6 +36,23 @@ function normalize(phone: string): string {
   return phone.replace(/[^\d+]/g, "");
 }
 
+// ── Permanent allow-list ────────────────────────────────────────────────────
+// Numbers in this list are NEVER blocked, NEVER added to the dnc_list, and
+// NEVER auto-marked as do_not_call by any code path. Use for owner test lines,
+// known-good business contacts, etc. Source: ALWAYS_ALLOWED_NUMBERS env
+// (comma-separated E.164) plus a small hard-coded fallback the operator can
+// always rely on even if the env var is unset.
+const HARDCODED_ALLOW = ["+14843040647"];
+const ENV_ALLOW = (process.env.ALWAYS_ALLOWED_NUMBERS ?? "")
+  .split(",")
+  .map((s) => normalize(s.trim()))
+  .filter((s) => s.length > 4);
+const ALLOW_LIST = new Set<string>([...HARDCODED_ALLOW, ...ENV_ALLOW]);
+
+export function isAlwaysAllowed(phone: string): boolean {
+  return ALLOW_LIST.has(normalize(phone));
+}
+
 /** Heuristic spam score from Telnyx line_type + carrier signals.
  *  Scoring rationale:
  *    shared_cost / premium → almost always spam scams or toll fraud → 95
@@ -111,6 +128,20 @@ export async function getSpamProfile(
   opts: { forceRefresh?: boolean } = {},
 ): Promise<SpamProfile> {
   const normalised = normalize(phoneNumber);
+
+  // 0. Permanent allow-list short-circuit — never block, never cache, never DB-write.
+  if (ALLOW_LIST.has(normalised)) {
+    return {
+      phoneNumber: normalised,
+      onDnc: false,
+      spamScore: 0,
+      lineType: null,
+      carrierName: null,
+      blocked: false,
+      reason: null,
+      cached: false,
+    };
+  }
 
   // 1. Check existing dnc_list row (covers both manual blocks AND prior auto-scans)
   const [existing] = await db
