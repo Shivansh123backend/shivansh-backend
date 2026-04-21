@@ -63,9 +63,20 @@ router.post("/calls/log", async (req, res): Promise<void> => {
 });
 
 // ── PATCH /call-logs/:id/disposition — manually tag/update disposition ────────
+// Accepts the canonical enum values *and* common synonyms used by the agent
+// wrap-up screen so the UI never gets a 400 for harmless variants.
+const ALLOWED_DISPOSITIONS = new Set([
+  "interested", "not_interested", "vm", "voicemail", "no_answer", "busy",
+  "connected", "callback_requested", "callback", "transferred", "completed",
+  "sale", "no_sale", "do_not_call", "dnc", "wrong_number", "answering_machine",
+  "left_message", "appointment_set", "follow_up", "other",
+]);
 const dispositionSchema = z.object({
-  disposition: z.enum(["interested", "not_interested", "vm", "no_answer", "busy", "connected", "callback_requested", "transferred", "completed"]),
+  disposition: z.string().min(1).refine(v => ALLOWED_DISPOSITIONS.has(v), {
+    message: `disposition must be one of: ${[...ALLOWED_DISPOSITIONS].join(", ")}`,
+  }),
   summary: z.string().optional(),
+  notes: z.string().optional(),
 });
 
 router.patch("/call-logs/:id/disposition", authenticate, async (req, res): Promise<void> => {
@@ -91,8 +102,118 @@ router.patch("/call-logs/:id/disposition", authenticate, async (req, res): Promi
   res.json(updated);
 });
 
-// ── PATCH /calls/:id/disposition — same for the calls table ──────────────────
+// ── POST /calls/disposition — flexible wrap-up endpoint ──────────────────────
+// Used by the agent softphone "Save" / "Save & Ready" buttons. Accepts EITHER
+// a numeric callLogId / callId OR a Telnyx callControlId string, so the UI can
+// just hand us whatever it's holding without translating IDs first.
 import { callsTable } from "@workspace/db";
+import { humanAgentsTable } from "@workspace/db";
+import { setAgentStatus } from "../lib/redis.js";
+
+const wrapUpSchema = z.object({
+  callControlId: z.string().optional(),
+  callLogId:     z.union([z.string(), z.number()]).optional(),
+  callId:        z.union([z.string(), z.number()]).optional(),
+  disposition:   z.string().min(1).refine(v => ALLOWED_DISPOSITIONS.has(v), {
+    message: `disposition must be one of: ${[...ALLOWED_DISPOSITIONS].join(", ")}`,
+  }),
+  summary:       z.string().optional(),
+  notes:         z.string().optional(),
+  setReady:      z.boolean().optional(),     // "Save & Ready" → flip agent back to available
+  agentId:       z.union([z.string(), z.number()]).optional(),
+});
+
+router.post("/calls/disposition", authenticate, async (req, res): Promise<void> => {
+  const parsed = wrapUpSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const msg = parsed.error.issues[0]?.message ?? "Invalid request";
+    res.status(400).json({ error: msg, issues: parsed.error.issues });
+    return;
+  }
+
+  const { callControlId, callLogId, callId, disposition, summary, notes, setReady, agentId } = parsed.data;
+
+  if (!callControlId && callLogId == null && callId == null) {
+    res.status(400).json({ error: "Provide callControlId, callLogId, or callId" });
+    return;
+  }
+
+  const updateLog: Record<string, unknown> = { disposition };
+  if (summary) updateLog.summary = summary;
+  if (notes)   updateLog.summary = (updateLog.summary ? updateLog.summary + "\n" : "") + notes;
+
+  let updated:
+    | { table: "call_logs"; row: typeof callLogsTable.$inferSelect }
+    | { table: "calls";     row: typeof callsTable.$inferSelect }
+    | null = null;
+
+  // Try call_logs by callControlId first (most common path from the softphone)
+  if (callControlId) {
+    const [row] = await db
+      .update(callLogsTable)
+      .set(updateLog)
+      .where(eq(callLogsTable.callControlId, callControlId))
+      .returning();
+    if (row) updated = { table: "call_logs", row };
+  }
+
+  // Fall back to numeric IDs
+  if (!updated && callLogId != null) {
+    const id = typeof callLogId === "number" ? callLogId : parseInt(callLogId, 10);
+    if (!Number.isFinite(id)) { res.status(400).json({ error: "callLogId must be numeric" }); return; }
+    const [row] = await db
+      .update(callLogsTable)
+      .set(updateLog)
+      .where(eq(callLogsTable.id, id))
+      .returning();
+    if (row) updated = { table: "call_logs", row };
+  }
+
+  if (!updated && callId != null) {
+    const id = typeof callId === "number" ? callId : parseInt(callId, 10);
+    if (!Number.isFinite(id)) { res.status(400).json({ error: "callId must be numeric" }); return; }
+    const [row] = await db
+      .update(callsTable)
+      .set({ disposition: disposition as never, ...(summary || notes ? { summary: [summary, notes].filter(Boolean).join("\n") } : {}) })
+      .where(eq(callsTable.id, id))
+      .returning();
+    if (row) updated = { table: "calls", row };
+  }
+
+  if (!updated) {
+    res.status(404).json({ error: "No call found for the given callControlId / callLogId / callId" });
+    return;
+  }
+
+  // "Save & Ready" — flip the human agent back to available so the dialer can route again
+  let agentResult: { id: number; status: string } | null = null;
+  if (setReady) {
+    const aid = agentId != null
+      ? (typeof agentId === "number" ? agentId : parseInt(agentId, 10))
+      : (req as unknown as { user?: { humanAgentId?: number; id?: number } }).user?.humanAgentId
+        ?? (req as unknown as { user?: { humanAgentId?: number; id?: number } }).user?.id;
+
+    if (aid && Number.isFinite(aid)) {
+      try {
+        const [agent] = await db
+          .update(humanAgentsTable)
+          .set({ status: "available", updatedAt: new Date() })
+          .where(eq(humanAgentsTable.id, aid as number))
+          .returning();
+        if (agent) {
+          await setAgentStatus({ agent_id: agent.id, status: "available", updated_at: new Date().toISOString() });
+          agentResult = { id: agent.id, status: "available" };
+        }
+      } catch (err) {
+        logger.warn({ err, aid }, "setReady failed — disposition still saved");
+      }
+    }
+  }
+
+  res.json({ ok: true, table: updated.table, row: updated.row, agent: agentResult });
+});
+
+// ── PATCH /calls/:id/disposition — same for the calls table ──────────────────
 
 router.patch("/calls/:id/disposition", authenticate, async (req, res): Promise<void> => {
   const id = parseInt(req.params.id as string, 10);
