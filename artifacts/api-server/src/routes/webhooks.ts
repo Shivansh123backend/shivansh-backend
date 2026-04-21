@@ -595,6 +595,23 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
     return;
   }
 
+  // ── Backchannel filter (Vapi-style) ──────────────────────────────────────
+  // Short acknowledgement words like "yeah", "uh huh", "ok", "right" are NOT
+  // real interruptions — they're the listener confirming they're following.
+  // If the AI is currently speaking and we hear one of these, ignore it
+  // entirely so the AI doesn't get cut off by polite agreement.
+  const BACKCHANNELS = new Set([
+    "yeah", "yes", "yep", "yup", "ok", "okay", "k", "mhm", "mm", "mmhm",
+    "uh huh", "uhhuh", "uh-huh", "huh", "hmm", "hm", "right", "sure",
+    "so", "well", "and", "but", "oh", "ah", "ha", "alright", "got it",
+    "gotcha", "i see", "i hear you", "for sure", "true", "exactly",
+  ]);
+  const normalized = clean.toLowerCase().replace(/[.,!?]+$/g, "").trim();
+  if (aiSpeaking.has(callControlId) && BACKCHANNELS.has(normalized)) {
+    logger.info({ callControlId, callerText: clean }, "Backchannel during AI speech — ignoring (not a real interruption)");
+    return;
+  }
+
   // Caller interrupted AI — stop playback immediately (barge-in) and queue for replay
   if (aiSpeaking.has(callControlId)) {
     // EXCEPTION: the very first greeting must finish cleanly. If the caller's
