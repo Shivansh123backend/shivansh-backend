@@ -199,16 +199,19 @@ PATIENCE — be generous with silence:
 - Never ask the next question until the current one is fully resolved.
 - If they give a long answer, respond to ONE thing they said — don't try to address everything.
 
-OBJECTION HANDLING — be gracious, never rebut more than once, and never argue:
-- "Not interested" → "Totally understand — I appreciate your time, have a wonderful day." Then stop. Do NOT pivot or probe.
-- "Remove me / Do not call" → "Of course, I'll take you off the list right away. Sorry to have bothered you." Then stop.
-- "I already have one / I'm already covered" → "That's wonderful — glad you're taken care of. Have a great day." Then stop. Do not pitch a comparison.
+OBJECTION HANDLING — at most ONE polite recovery, then bow out gracefully:
+- "Not interested" (first time) → make ONE warm, low-pressure offer that highlights a single concrete benefit relevant to the script, e.g. "Totally fair — could I just share one quick thing that might be worth a moment, or would you rather I let you go?" Wait for their response.
+  - If they say no/again-not-interested/decline → "Of course — thank you so much for your time, have a wonderful day!" Then stop completely (the call will end automatically).
+  - If they say yes/sure/go ahead → continue with ONE short value statement, then check in.
+- "Remove me / Do not call / Take me off the list" (any time) → "Of course, I'll take you off the list right away. Sorry to have bothered you — have a good day!" Then stop. Do NOT try to recover. (Call ends automatically.)
+- "I already have one / I'm already covered" → "That's wonderful — glad you're taken care of. Have a great day!" Then stop. (Call ends automatically.)
 - "I'm busy / bad time" → "No problem at all — would you prefer I try back another time, or would you rather I not call again?"
 - "Send me something in writing / an email" → "Of course — what's the best email to send it to?" Then stop and let them respond.
 - "How much does it cost?" → "It really depends on your situation. Would you like me to walk through a couple of quick questions, or would you prefer I send you the details to look at on your own time?"
 - "Is this a scam?" → "Completely fair to ask — I'm ${agentName} with ${campaignName}, calling about [reason]. Happy to send something in writing if that would help."
 - "I need to think about it / talk to my spouse" → "Of course, take all the time you need. Would you like me to send you a quick summary you can look over together?"
-- Angry / upset / rude → "I'm so sorry to have caught you at a bad time — I'll let you go. Have a good day." Then stop.
+- Angry / upset / rude → "I'm so sorry to have caught you at a bad time — I'll let you go. Have a good day!" Then stop. (Call ends automatically.)
+- Wrong number → "Oh, my apologies for the mix-up! Have a good one." Then stop. (Call ends automatically.)
 - "Are you a robot / AI?" → Be honest and warm: "I'm an AI assistant calling on behalf of ${campaignName}, but I'm here to help — would you still like to chat for a moment?"
 - "Who are you / where are you calling from?" → Answer directly and briefly: "${agentName} from ${campaignName}" and give a one-line reason for calling.
 - ${transferLine}
@@ -280,6 +283,8 @@ const lastAiResponse            = new Map<string, string>();          // callCon
 const aiSpeakEndedAt            = new Map<string, number>();          // callControlId → timestamp AI finished speaking
 const lastProcessedText         = new Map<string, { text: string; ts: number }>(); // dedup window
 const pendingTransferAfterPlay  = new Set<string>();                  // callControlId → execute transfer after next playback.ended
+const pendingHangupAfterPlay    = new Set<string>();                  // callControlId → polite hangup after next playback.ended (AI said goodbye)
+const objectionAttempts         = new Map<string, number>();          // callControlId → how many times AI has tried to recover an objection
 const pendingVmDropHangup       = new Set<string>();                  // callControlId → hang up after VM drop message finishes playing
 const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
 const awaitingFirstResponse     = new Set<string>();                  // callControlId → outbound call waiting for first caller word (silence guard)
@@ -559,6 +564,31 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
     ts: Date.now(),
   });
 
+  // ── Detect "polite goodbye" — auto-hangup after the line finishes playing ──
+  // The AI is taught to end its turn with a short, warm sign-off when the
+  // caller has clearly declined twice or asked to be removed. We catch those
+  // phrases and queue a hangup that fires once playback completes.
+  const HANGUP_TRIGGERS = [
+    "have a wonderful day",
+    "have a great day",
+    "have a good day",
+    "have a good one",
+    "have a wonderful one",
+    "take care",
+    "you too — bye",
+    "wish you the best",
+    "take you off the list",
+    "won't bother you again",
+    "won't keep you any longer",
+    "sorry to have bothered",
+    "appreciate your time",  // common closer
+    "thank you so much for your time",
+  ];
+  const aiLowerForHangup = aiText.toLowerCase();
+  const wantsHangup =
+    !bridge.pendingTransfer &&
+    HANGUP_TRIGGERS.some((p) => aiLowerForHangup.includes(p));
+
   // Detect transfer phrase — broader match to catch all variants
   const TRANSFER_TRIGGERS = [
     "connect you with",
@@ -604,6 +634,12 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
       await telnyxAction(callControlId, "transcription_stop", {}).catch(() => {});
     }
     return;
+  }
+
+  // If the AI is wrapping up, queue a polite hangup that fires after playback.
+  if (wantsHangup) {
+    pendingHangupAfterPlay.add(callControlId);
+    logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "Polite goodbye detected — will hang up after playback");
   }
 
   // Generate TTS (multi-provider with fallback) and play via playback_start.
@@ -1400,6 +1436,19 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       aiSpeaking.delete(callControlId);
       aiSpeakEndedAt.set(callControlId, Date.now()); // start cooldown window
 
+      // ── If a polite goodbye is pending, hang up now that TTS has finished ──
+      if (pendingHangupAfterPlay.has(callControlId)) {
+        pendingHangupAfterPlay.delete(callControlId);
+        logger.info({ callControlId }, "Polite goodbye played — hanging up gracefully");
+        // Small delay so the last word doesn't get clipped on the caller's end
+        setTimeout(async () => {
+          try { await telnyxAction(callControlId, "transcription_stop", {}); } catch { /* ignore */ }
+          try { await telnyxAction(callControlId, "playback_stop", {}); } catch { /* ignore */ }
+          try { await telnyxAction(callControlId, "hangup", {}); } catch { /* already gone */ }
+        }, 600);
+        return;
+      }
+
       // ── If a transfer is pending, execute it now that TTS has finished ──────
       if (pendingTransferAfterPlay.has(callControlId)) {
         pendingTransferAfterPlay.delete(callControlId);
@@ -1713,6 +1762,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       lastProcessedText.delete(callControlId);
       processingTurn.delete(callControlId);
       pendingTransferAfterPlay.delete(callControlId);
+      pendingHangupAfterPlay.delete(callControlId);
+      objectionAttempts.delete(callControlId);
       pendingInboundGreet.delete(callControlId);
       return;
     }
