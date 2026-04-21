@@ -577,18 +577,36 @@ export default function LiveMonitorPage() {
     }
   }, [activeCalls.size, events.length]);
 
-  // Fetch initial live calls snapshot
+  // Fetch + periodically re-sync live calls snapshot from the server.
+  // The server is the source of truth (filters out stale rows >2min old). If a
+  // socket event was missed (network blip, abnormal call end, id mismatch),
+  // this 10s poll wipes any orphaned ghost rows from the local map.
   useEffect(() => {
-    customFetch<{ id: number; status: string; campaignId?: number; leadId?: number; providerUsed?: string; selectedNumber?: string }[]>("/api/calls/live").then(data => {
-      if (!Array.isArray(data)) return;
-      const map = new Map<number, LiveCall>();
-      data.forEach(c => {
-        if (c.status === "initiated" || c.status === "in_progress") {
-          map.set(c.id, { ...c, _localStart: Date.now() });
-        }
-      });
-      setActiveCalls(map);
-    }).catch(() => {});
+    const refresh = () => {
+      customFetch<{ id: number; status: string; campaignId?: number; leadId?: number; providerUsed?: string; selectedNumber?: string }[]>("/api/calls/live").then(data => {
+        if (!Array.isArray(data)) return;
+        const serverIds = new Set<number>();
+        const incoming: Array<{ id: number; status: string; campaignId?: number; leadId?: number; providerUsed?: string; selectedNumber?: string }> = [];
+        data.forEach(c => {
+          if (c.status === "initiated" || c.status === "in_progress") {
+            serverIds.add(c.id);
+            incoming.push(c);
+          }
+        });
+        setActiveCalls(prev => {
+          const next = new Map<number, LiveCall>();
+          // Keep server-confirmed rows, preserving any local _localStart timestamps
+          incoming.forEach(c => {
+            const existing = prev.get(c.id);
+            next.set(c.id, existing ? { ...existing, ...c } : { ...c, _localStart: Date.now() });
+          });
+          return next;
+        });
+      }).catch(() => {});
+    };
+
+    refresh();
+    const intv = setInterval(refresh, 10_000);
 
     customFetch<{ total: number; completed: number }>("/api/calls/stats/today").then(data => {
       if (data && typeof data === "object") {
@@ -596,6 +614,8 @@ export default function LiveMonitorPage() {
         setCompletedToday((data as { completed?: number }).completed ?? 0);
       }
     }).catch(() => {});
+
+    return () => clearInterval(intv);
   }, []);
 
   // Socket.IO connection
