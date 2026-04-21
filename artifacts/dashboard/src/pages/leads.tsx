@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useListLeads,
   useListCampaigns,
@@ -14,7 +14,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, X, Filter, Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ClipboardList } from "lucide-react";
+import { Plus, X, Filter, Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ClipboardList, Trash2, FolderInput } from "lucide-react";
+
+type LeadList = { id: number; name: string; description: string | null; campaignId: number | null; active: boolean; campaignName: string | null; leadsCount: number };
 
 // ── Single-lead modal ──────────────────────────────────────────────────────────
 function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
@@ -388,6 +390,55 @@ function PasteModal({ onClose, campaigns }: { onClose: () => void; campaigns: { 
   );
 }
 
+// ── Assign-to-list modal ─────────────────────────────────────────────────────
+function AssignListModal({ ids, onClose, lists }: { ids: number[]; onClose: () => void; lists: LeadList[] }) {
+  const [listId, setListId] = useState<string>("");
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const mut = useMutation({
+    mutationFn: async () => customFetch("/api/leads/bulk-assign-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, listId: listId === "__none__" ? null : parseInt(listId) }),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      qc.invalidateQueries({ queryKey: ["/api/lists"] });
+      toast({ title: `${ids.length} lead${ids.length !== 1 ? "s" : ""} assigned` });
+      onClose();
+    },
+    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+  });
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-md">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <p className="text-xs font-mono uppercase tracking-widest">Assign {ids.length} Lead{ids.length !== 1 ? "s" : ""} to List</p>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-4 space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">List</Label>
+            <Select value={listId} onValueChange={setListId}>
+              <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="Select a list" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— Remove from list —</SelectItem>
+                {lists.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1 font-mono text-xs uppercase" onClick={onClose}>Cancel</Button>
+            <Button className="flex-1 font-mono text-xs uppercase" disabled={!listId || mut.isPending} onClick={() => mut.mutate()}>
+              {mut.isPending ? "Saving…" : "Assign"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function LeadsPage() {
   const [filterCampaign, setFilterCampaign] = useState("__all__");
@@ -400,14 +451,53 @@ export default function LeadsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [showPaste, setShowPaste] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [showAssign, setShowAssign] = useState(false);
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  const { data: lists = [] } = useQuery<LeadList[]>({
+    queryKey: ["/api/lists"],
+    queryFn: () => customFetch<LeadList[]>("/api/lists"),
+  });
 
   const campaignMap = Object.fromEntries((campaigns ?? []).map((c: { id: number; name: string }) => [c.id, c.name]));
+  const listMap = Object.fromEntries(lists.map(l => [l.id, l.name]));
+  const visibleLeads = leads ?? [];
+  const allChecked = visibleLeads.length > 0 && visibleLeads.every((l: { id: number }) => selected.has(l.id));
+
+  const toggleAll = () => {
+    if (allChecked) setSelected(new Set());
+    else setSelected(new Set(visibleLeads.map((l: { id: number }) => l.id)));
+  };
+  const toggleOne = (id: number) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelected(next);
+  };
+
+  const bulkDelete = useMutation({
+    mutationFn: async () => customFetch("/api/leads/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: Array.from(selected) }),
+    }),
+    onSuccess: () => {
+      const count = selected.size;
+      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      qc.invalidateQueries({ queryKey: ["/api/lists"] });
+      setSelected(new Set());
+      toast({ title: `${count} lead${count !== 1 ? "s" : ""} deleted` });
+    },
+    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+  });
 
   return (
     <Layout>
       {showCreate && <CreateModal onClose={() => setShowCreate(false)} campaigns={campaigns ?? []} />}
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} campaigns={campaigns ?? []} />}
       {showPaste && <PasteModal onClose={() => setShowPaste(false)} campaigns={campaigns ?? []} />}
+      {showAssign && <AssignListModal ids={Array.from(selected)} onClose={() => setShowAssign(false)} lists={lists} />}
 
       <PageHeader
         title="Leads"
@@ -440,6 +530,29 @@ export default function LeadsPage() {
           </div>
         }
       />
+
+      {selected.size > 0 && (
+        <div className="px-6 py-2 border-b border-border bg-primary/5 flex items-center gap-3">
+          <span className="text-xs font-mono text-foreground">{selected.size} selected</span>
+          <Button size="sm" variant="outline" className="font-mono text-xs uppercase tracking-wider h-7 px-3" onClick={() => setShowAssign(true)}>
+            <FolderInput className="w-3 h-3 mr-1.5" /> Assign to List
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="font-mono text-xs uppercase tracking-wider h-7 px-3 border-destructive/40 text-destructive hover:bg-destructive/10"
+            disabled={bulkDelete.isPending}
+            onClick={() => {
+              if (confirm(`Delete ${selected.size} lead${selected.size !== 1 ? "s" : ""}? This cannot be undone.`)) bulkDelete.mutate();
+            }}
+          >
+            <Trash2 className="w-3 h-3 mr-1.5" /> {bulkDelete.isPending ? "Deleting…" : "Delete"}
+          </Button>
+          <Button size="sm" variant="ghost" className="font-mono text-xs uppercase tracking-wider h-7 px-3 ml-auto" onClick={() => setSelected(new Set())}>
+            Clear
+          </Button>
+        </div>
+      )}
 
       <div className="px-6 py-3 border-b border-border flex items-center gap-3">
         <Filter className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
@@ -474,10 +587,19 @@ export default function LeadsPage() {
           <table className="w-full text-xs font-mono">
             <thead>
               <tr className="border-b border-border">
+                <th className="px-4 py-2.5 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allChecked}
+                    onChange={toggleAll}
+                    className="w-3.5 h-3.5 cursor-pointer accent-primary"
+                  />
+                </th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">ID</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Name</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Phone</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Campaign</th>
+                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">List</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
               </tr>
             </thead>
@@ -485,26 +607,32 @@ export default function LeadsPage() {
               {isLoading ? (
                 [...Array(6)].map((_, i) => (
                   <tr key={i}>
-                    {[...Array(5)].map((_, j) => (
+                    {[...Array(7)].map((_, j) => (
                       <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>
                     ))}
                   </tr>
                 ))
-              ) : (leads ?? []).length === 0 ? (
+              ) : visibleLeads.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
                     No leads yet. Use <span className="text-primary">Upload CSV</span> to import in bulk or <span className="text-primary">Add Lead</span> to add one at a time.
                   </td>
                 </tr>
-              ) : (leads ?? []).map((l: { id: number; name: string; phone?: string; phone_number?: string; campaignId?: number; campaign_id?: number; status: string; email?: string | null }) => {
+              ) : visibleLeads.map((l: { id: number; name: string; phone?: string; phone_number?: string; campaignId?: number; campaign_id?: number; listId?: number | null; list_id?: number | null; status: string; email?: string | null }) => {
                 const phone = l.phone || l.phone_number || "-";
                 const cid = l.campaignId ?? l.campaign_id;
+                const lid = l.listId ?? l.list_id ?? null;
+                const isSel = selected.has(l.id);
                 return (
-                  <tr key={l.id} className="border-b border-border/30 hover:bg-white/2 transition-colors">
+                  <tr key={l.id} className={`border-b border-border/30 hover:bg-white/2 transition-colors ${isSel ? "bg-primary/5" : ""}`}>
+                    <td className="px-4 py-3">
+                      <input type="checkbox" checked={isSel} onChange={() => toggleOne(l.id)} className="w-3.5 h-3.5 cursor-pointer accent-primary" />
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground">#{l.id}</td>
                     <td className="px-4 py-3 text-foreground font-medium">{l.name}</td>
                     <td className="px-4 py-3 text-muted-foreground">{phone}</td>
                     <td className="px-4 py-3 text-muted-foreground">{cid ? campaignMap[cid] ?? `#${cid}` : "-"}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{lid ? listMap[lid] ?? `#${lid}` : "-"}</td>
                     <td className="px-4 py-3"><StatusBadge status={l.status} /></td>
                   </tr>
                 );

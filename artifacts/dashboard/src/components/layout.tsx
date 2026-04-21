@@ -30,7 +30,8 @@ import {
 const ADMIN_NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
-  { href: "/leads", label: "Lead Lists", icon: List },
+  { href: "/leads", label: "Leads", icon: List },
+  { href: "/lists", label: "Lists", icon: Layers },
   { href: "/dnc", label: "DNC List", icon: ShieldX },
   { href: "/agents", label: "AI Agents", icon: Bot },
   { href: "/voices", label: "Voices", icon: Mic2 },

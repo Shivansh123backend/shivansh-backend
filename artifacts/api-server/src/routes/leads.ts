@@ -4,7 +4,7 @@ import { parse as csvParse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
 import axios from "axios";
 import { db } from "@workspace/db";
-import { leadsTable, campaignsTable, dncListTable } from "@workspace/db";
+import { leadsTable, campaignsTable, dncListTable, leadListsTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { logger } from "../lib/logger.js";
@@ -506,6 +506,36 @@ router.patch("/leads/:id", authenticate, async (req, res): Promise<void> => {
   });
 });
 
+// ── POST /leads/bulk-delete — delete leads by IDs ─────────────────────────────
+const bulkDeleteSchema = z.object({ ids: z.array(z.number().int().positive()).min(1).max(5000) });
+router.post("/leads/bulk-delete", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const parsed = bulkDeleteSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" }); return; }
+  const deleted = await db.delete(leadsTable).where(inArray(leadsTable.id, parsed.data.ids)).returning({ id: leadsTable.id });
+  logger.info({ count: deleted.length }, "Bulk-deleted leads");
+  res.json({ success: true, deleted: deleted.length });
+});
+
+// ── POST /leads/bulk-assign-list — assign leads to a list (or null = un-list) ─
+const bulkAssignSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(5000),
+  listId: z.number().int().positive().nullable(),
+});
+router.post("/leads/bulk-assign-list", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const parsed = bulkAssignSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" }); return; }
+  if (parsed.data.listId !== null) {
+    const [list] = await db.select({ id: leadListsTable.id }).from(leadListsTable).where(eq(leadListsTable.id, parsed.data.listId)).limit(1);
+    if (!list) { res.status(404).json({ error: "List not found" }); return; }
+  }
+  const updated = await db.update(leadsTable)
+    .set({ listId: parsed.data.listId })
+    .where(inArray(leadsTable.id, parsed.data.ids))
+    .returning({ id: leadsTable.id });
+  logger.info({ count: updated.length, listId: parsed.data.listId }, "Bulk-assigned leads to list");
+  res.json({ success: true, updated: updated.length, listId: parsed.data.listId });
+});
+
 // ── DELETE /leads/:id ─────────────────────────────────────────────────────────
 router.delete("/leads/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id as string, 10);
@@ -604,6 +634,8 @@ router.get("/leads", authenticate, async (req, res): Promise<void> => {
     email: l.email,
     campaignId: l.campaignId,
     campaign_id: l.campaignId,
+    listId: l.listId,
+    list_id: l.listId,
     source: l.source,
     status: l.status,
     createdAt: l.createdAt,

@@ -9,6 +9,7 @@ import DashboardPage from "@/pages/dashboard";
 import CampaignsPage from "@/pages/campaigns";
 import AgentsPage from "@/pages/agents";
 import LeadsPage from "@/pages/leads";
+import ListsPage from "@/pages/lists";
 import DispositionsPage from "@/pages/dispositions";
 import UsersPage from "@/pages/users";
 import QueuesPage from "@/pages/queues";
@@ -88,6 +89,9 @@ function Router() {
       </Route>
       <Route path="/leads">
         <ProtectedRoute component={LeadsPage} adminOnly />
+      </Route>
+      <Route path="/lists">
+        <ProtectedRoute component={ListsPage} adminOnly />
       </Route>
       <Route path="/dispositions">
         <ProtectedRoute component={DispositionsPage} adminOnly />

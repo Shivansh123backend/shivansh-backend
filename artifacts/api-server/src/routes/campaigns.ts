@@ -4,6 +4,7 @@ import {
   campaignsTable,
   campaignAgentsTable,
   leadsTable,
+  leadListsTable,
   callLogsTable,
   usersTable,
   aiAgentsTable,
@@ -11,7 +12,7 @@ import {
   phoneNumbersTable,
   dncListTable,
 } from "@workspace/db";
-import { eq, and, inArray, sql, asc, desc } from "drizzle-orm";
+import { eq, and, inArray, sql, asc, desc, or } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { emitToSupervisors } from "../websocket/index.js";
@@ -237,20 +238,31 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
     return;
   }
 
-  // For outbound/both campaigns, ensure there are callable leads
+  // For outbound/both campaigns, ensure there are callable leads.
+  // Source = leads directly attached to the campaign UNION leads from any
+  // active list assigned to this campaign.
   if (campaign.type !== "inbound") {
+    const startAssignedListIds = (await db
+      .select({ id: leadListsTable.id })
+      .from(leadListsTable)
+      .where(and(eq(leadListsTable.campaignId, id), eq(leadListsTable.active, true)))
+    ).map(r => r.id);
+    const startSourceFilter = startAssignedListIds.length > 0
+      ? or(eq(leadsTable.campaignId, id), inArray(leadsTable.listId, startAssignedListIds))
+      : eq(leadsTable.campaignId, id);
+
     const [pendingRow] = await db
       .select({ count: db.$count(leadsTable) })
       .from(leadsTable)
-      .where(and(eq(leadsTable.campaignId, id), eq(leadsTable.status, "pending")));
+      .where(and(startSourceFilter, eq(leadsTable.status, "pending")));
     const pendingCount = Number(pendingRow?.count ?? 0);
 
     if (pendingCount === 0) {
-      // Check if there are any leads at all
+      // Check if there are any leads at all (across direct + assigned lists)
       const [totalRow] = await db
         .select({ count: db.$count(leadsTable) })
         .from(leadsTable)
-        .where(eq(leadsTable.campaignId, id));
+        .where(startSourceFilter);
       const totalCount = Number(totalRow?.count ?? 0);
 
       if (totalCount === 0) {
@@ -263,7 +275,7 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
         .update(leadsTable)
         .set({ status: "pending", retryCount: 0 })
         .where(and(
-          eq(leadsTable.campaignId, id),
+          startSourceFilter,
           inArray(leadsTable.status, ["called", "completed"]),
         ));
     }
@@ -558,12 +570,24 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
   // Build DNC set once for the entire run
   const dncSet = await buildDncSet();
 
-  // Fetch dialable leads: pending + called (called = previously attempted, retry allowed)
+  // Fetch dialable leads: pending + called (called = previously attempted, retry allowed).
+  // Includes leads directly attached to the campaign AND leads belonging to any
+  // active list assigned to this campaign.
+  const assignedListIds = (await db
+    .select({ id: leadListsTable.id })
+    .from(leadListsTable)
+    .where(and(eq(leadListsTable.campaignId, campaignId), eq(leadListsTable.active, true)))
+  ).map(r => r.id);
+
+  const sourceFilter = assignedListIds.length > 0
+    ? or(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.listId, assignedListIds))
+    : eq(leadsTable.campaignId, campaignId);
+
   let pendingLeads = await db
     .select()
     .from(leadsTable)
     .where(and(
-      eq(leadsTable.campaignId, campaignId),
+      sourceFilter,
       inArray(leadsTable.status, ["pending", "called"]),
     ));
 
@@ -831,10 +855,20 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
 
   // Check if there are still pending leads in the DB that weren't in our initial snapshot
   // (e.g. retry leads that got reset after the batch was taken)
+  // Re-derive the same source filter so retry pickup includes list-sourced leads.
+  const remainAssignedListIds = (await db
+    .select({ id: leadListsTable.id })
+    .from(leadListsTable)
+    .where(and(eq(leadListsTable.campaignId, campaignId), eq(leadListsTable.active, true)))
+  ).map(r => r.id);
+  const remainSourceFilter = remainAssignedListIds.length > 0
+    ? or(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.listId, remainAssignedListIds))
+    : eq(leadsTable.campaignId, campaignId);
+
   const [remaining] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(leadsTable)
-    .where(and(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.status, ["pending"])));
+    .where(and(remainSourceFilter, inArray(leadsTable.status, ["pending"])));
 
   const remainingCount = remaining?.count ?? 0;
 
