@@ -202,11 +202,7 @@ async function speakText(
       body: JSON.stringify({
         model_id: CARTESIA_MODEL,
         transcript: clean,
-        voice: {
-          mode: "id",
-          id: state.cartesiaVoiceId,
-          __experimental_controls: { speed: "slow" },   // slower, more deliberate pace
-        },
+        voice: { mode: "id", id: state.cartesiaVoiceId },
         output_format: {
           container: "raw",
           encoding: "pcm_mulaw",  // Telnyx-native, zero conversion needed
