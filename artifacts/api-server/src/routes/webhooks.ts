@@ -1402,11 +1402,12 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       }
 
       // First message — warm, natural opening that confirms identity before the pitch.
-      // Format: "Hi this is <agent> calling from <campaign>. Am I speaking with <firstName>?"
-      // If we don't have a name, ask politely who we've reached.
+      // With a lead name we ask for them by first name. Without a name we keep
+      // it generic and friendly — just "Hi this is <agent> from <campaign>,
+      // how are you today?" — and let the rest of the script confirm identity.
       const firstMessage = firstName
         ? `Hi, this is ${agentName} calling from ${outboundCtx.campaignName}. Am I speaking with ${firstName}?`
-        : `Hi, this is ${agentName} calling from ${outboundCtx.campaignName}. May I know who I'm speaking with?`;
+        : `Hi, this is ${agentName} calling from ${outboundCtx.campaignName}. How are you today?`;
 
       logger.info(
         { callControlId, campaignId, phone: outboundCtx.phone, leadName, agentName, voiceId: callVoiceId, backgroundSound: outboundCtx.backgroundSound },
