@@ -357,6 +357,7 @@ const pendingVmDropHangup       = new Set<string>();                  // callCon
 const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
 const pendingAmdGreet           = new Map<string, NodeJS.Timeout>();   // callControlId → fallback timer; bridge initialized but greeting deferred until AMD says "human"
 const greetStarted              = new Set<string>();                   // callControlId that have already been greeted — prevents double-greet from AMD + speech-trigger races
+const greetingInProgress        = new Set<string>();                   // callControlId whose opening greeting is still playing — caller speech must NOT barge-in or stop playback during this window
 const transcriptionStarted      = new Set<string>();                   // callControlId where Telnyx transcription_start has been issued — prevents duplicate starts
 const awaitingFirstResponse     = new Set<string>();                  // callControlId → outbound call waiting for first caller word (silence guard)
 const initialSilenceTimer       = new Map<string, ReturnType<typeof setTimeout>>(); // callControlId → 30s start-silence timeout
@@ -469,6 +470,7 @@ async function startTranscriptionAndGreet(callControlId: string): Promise<void> 
 
   // Speak the greeting via ElevenLabs TTS
   aiSpeaking.add(callControlId);
+  greetingInProgress.add(callControlId); // lock against barge-in until first playback.ended
   try {
     const audioUrl = await generateTTSWithFallback(bridge.firstMessage, bridge.voiceId, (bridge.voiceProvider ?? "elevenlabs") as VoiceProvider);
     await playWithFallback(callControlId, audioUrl, bridge.firstMessage);
@@ -595,6 +597,17 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
 
   // Caller interrupted AI — stop playback immediately (barge-in) and queue for replay
   if (aiSpeaking.has(callControlId)) {
+    // EXCEPTION: the very first greeting must finish cleanly. If the caller's
+    // "Hello?" or background noise comes in during the opening, just buffer it
+    // — do NOT stop playback. The lock clears on the first call.playback.ended.
+    if (greetingInProgress.has(callControlId)) {
+      const prev = missedTranscription.get(callControlId) ?? "";
+      if (clean.length > prev.trim().length) {
+        missedTranscription.set(callControlId, clean);
+      }
+      logger.info({ callControlId, callerText }, "Caller spoke during greeting — buffering, NOT interrupting opening");
+      return;
+    }
     const prev = missedTranscription.get(callControlId) ?? "";
     if (clean.length > prev.trim().length) {
       missedTranscription.set(callControlId, clean);
@@ -1706,6 +1719,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       logger.info({ callControlId, eventType }, "AI speech finished");
       aiSpeaking.delete(callControlId);
       aiSpeakEndedAt.set(callControlId, Date.now()); // start cooldown window
+      // Greeting just finished — caller may now barge-in normally on subsequent turns
+      if (greetingInProgress.delete(callControlId)) {
+        logger.info({ callControlId }, "Opening greeting finished — barge-in re-enabled");
+      }
 
       // ── If a polite goodbye is pending, hang up now that TTS has finished ──
       if (pendingHangupAfterPlay.has(callControlId)) {
