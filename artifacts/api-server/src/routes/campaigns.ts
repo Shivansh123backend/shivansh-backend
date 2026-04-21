@@ -645,12 +645,27 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
 
     totalCalls++;
 
+    // Re-read the campaign's CURRENT voice + provider from DB on every dial.
+    // The campaign-level resolved values (voiceName / voiceProvider) are computed
+    // ONCE when the run starts, so without this re-read, edits made while the
+    // campaign is running wouldn't take effect until the next run. This makes
+    // voice changes apply to the very next call.
+    const [liveCampaign] = await db
+      .select({ voice: campaignsTable.voice, voiceProvider: campaignsTable.voiceProvider })
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, campaignId))
+      .limit(1);
+    const liveVoice = liveCampaign?.voice && liveCampaign.voice !== "default"
+      ? liveCampaign.voice
+      : voiceName;
+    const liveVoiceProvider = liveCampaign?.voiceProvider ?? voiceProvider;
+
     const result = await enqueueCall({
       phone: normPhone,
       from_number: callFromNumber,
       agent_prompt: script,
-      voice: voiceName,
-      voice_provider: voiceProvider,
+      voice: liveVoice,
+      voice_provider: liveVoiceProvider,
       transfer_number: transferNumber,
       campaign_id: String(campaignId),
       campaign_name: campaign.name,
