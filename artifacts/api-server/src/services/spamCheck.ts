@@ -152,8 +152,12 @@ export async function getSpamProfile(
   const fresh = existing?.lastCheckedAt
     && (Date.now() - new Date(existing.lastCheckedAt).getTime()) < CACHE_TTL_MS;
 
-  // Manual DNC entries (autoBlocked=false) ALWAYS win — never auto-refresh them
-  if (existing && !existing.autoBlocked) {
+  // Manual DNC entries ALWAYS win — never auto-refresh them.
+  // A row counts as a manual block iff autoBlocked=false AND reason IS NOT NULL.
+  // (autoBlocked=false + reason=null is a non-blocking score-cache row written
+  // by *this* service to memoize Telnyx lookups — it must not be treated as a
+  // block, otherwise every benign number we ever scanned becomes "blocked".)
+  if (existing && !existing.autoBlocked && existing.reason !== null) {
     return {
       phoneNumber: normalised,
       onDnc: true,
@@ -161,7 +165,7 @@ export async function getSpamProfile(
       lineType: existing.lineType,
       carrierName: existing.carrierName,
       blocked: true,
-      reason: existing.reason ?? "On manual DNC list",
+      reason: existing.reason,
       cached: true,
     };
   }
