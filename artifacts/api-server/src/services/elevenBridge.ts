@@ -265,6 +265,9 @@ async function connectToElevenLabs(
             model_id: "custom",
             custom_llm_url: `${backendUrl}/api/llm`,
           },
+          // Don't let background noise / "hello?" cut off the opening greeting.
+          // The greeting must finish cleanly so the prospect knows who's calling.
+          first_message_interruption_enabled: false,
         },
         tts: {
           voice_id: bridge.voiceId,
