@@ -40,7 +40,7 @@ async function startListenFork(callControlId: string): Promise<void> {
   try {
     await axios.post(
       `${TELNYX_API}/calls/${callControlId}/actions/fork_start`,
-      { stream_url, stream_track: "both_tracks", stream_bidirectional_mode: "rtp" },
+      { stream_url, stream_track: "both_tracks" },
       { headers: { Authorization: `Bearer ${apiKey}` }, timeout: 8_000 },
     );
     activeListenForks.add(callControlId);

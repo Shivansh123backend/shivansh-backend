@@ -294,6 +294,8 @@ interface ConvMessage { role: "system" | "user" | "assistant"; content: string; 
 const callMessages              = new Map<string, ConvMessage[]>();   // callControlId → chat history
 const aiSpeaking                = new Set<string>();                  // callControlId → AI currently speaking
 const processingTurn            = new Set<string>();                  // callControlId → turn processing in-flight (race guard)
+const inflightLlmAbort          = new Map<string, AbortController>(); // callControlId → AbortController for the LLM call currently being awaited
+const llmRestartFlag            = new Set<string>();                  // callControlId → set when we abort the LLM intentionally so a fresher caller turn can take over
 const callOwnNumber             = new Map<string, string>();          // callControlId → our campaign phone #
 const missedTranscription       = new Map<string, string>();          // callControlId → transcript spoken during AI speech
 const callTurnCount             = new Map<string, number>();          // callControlId → # of completed caller turns
@@ -449,6 +451,20 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     if (callerText.trim().length > prev.trim().length) {
       missedTranscription.set(callControlId, callerText.trim());
     }
+    // If the LLM is still generating (not yet speaking), abort it so a fresher
+    // caller utterance takes over. This stops the AI from speaking a stale
+    // response based on the caller's first word when they've already said
+    // a whole sentence. The previous turn's catch block sees llmRestartFlag
+    // and exits cleanly without speaking calm filler — the wrapper below then
+    // replays the buffered text immediately for a fresh LLM call.
+    if (!aiSpeaking.has(callControlId)) {
+      const ctrl = inflightLlmAbort.get(callControlId);
+      if (ctrl) {
+        llmRestartFlag.add(callControlId);
+        try { ctrl.abort(); } catch { /* already done */ }
+        logger.info({ callControlId }, "Aborting in-flight LLM — caller spoke again, restarting with fresher text");
+      }
+    }
     return;
   }
   processingTurn.add(callControlId); // lock this call for the duration of the turn
@@ -457,6 +473,22 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     await _handleCallerTurnInner(callControlId, callerText);
   } finally {
     processingTurn.delete(callControlId); // always release the lock
+    inflightLlmAbort.delete(callControlId);
+  }
+
+  // If caller speech arrived during this turn (buffered) AND nothing is
+  // currently playing, immediately replay it as a fresh turn. This handles
+  // both the "LLM-aborted-by-barge-in" case and any other race where the
+  // playback.ended replay path didn't fire (e.g. LLM aborted before TTS).
+  if (!aiSpeaking.has(callControlId)) {
+    const missed = missedTranscription.get(callControlId);
+    if (missed) {
+      missedTranscription.delete(callControlId);
+      logger.info({ callControlId, missed: missed.slice(0, 80) }, "Replaying buffered caller speech (post-turn)");
+      handleCallerTurn(callControlId, missed).catch((err) =>
+        logger.error({ err: String(err), callControlId }, "handleCallerTurn (post-turn replay) error"),
+      );
+    }
   }
 }
 
@@ -544,21 +576,40 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
   // OpenAI doesn't leave the call hanging silently.
   let aiText: string;
   const llmAbort = new AbortController();
+  inflightLlmAbort.set(callControlId, llmAbort);
   const llmTimer = setTimeout(() => llmAbort.abort(), 8000);
   try {
     const completion = await openai.chat.completions.create({
       model: AI_MODEL,
-      max_tokens: 160,
+      // Keep replies short and conversational. 90 tokens ≈ 1-2 sentences,
+      // ~6-10 seconds of TTS — short enough that the caller doesn't want to
+      // interrupt, long enough to convey one clear point. Previously 160
+      // produced 30-60 second monologues that callers barged in on repeatedly.
+      max_tokens: 90,
       temperature: 0.75,
       frequency_penalty: 0.7,
       presence_penalty: 0.5,
       messages: messagesForLLM as Parameters<typeof openai.chat.completions.create>[0]["messages"],
     }, { signal: llmAbort.signal });
     clearTimeout(llmTimer);
+    // If the caller barged in mid-generation we set llmRestartFlag and
+    // aborted; bail out cleanly so the wrapper can replay the buffered text.
+    if (llmRestartFlag.has(callControlId)) {
+      llmRestartFlag.delete(callControlId);
+      logger.info({ callControlId }, "LLM completed but restart was requested — discarding stale response");
+      return;
+    }
     aiText = stripMarkdownForTTS((completion.choices[0]?.message?.content ?? "").trim());
     logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "OpenAI response received");
   } catch (err) {
     clearTimeout(llmTimer);
+    // Intentional abort triggered by a fresher caller barge-in: don't speak
+    // calm filler — exit cleanly so the wrapper replays the buffered text.
+    if (llmRestartFlag.has(callControlId)) {
+      llmRestartFlag.delete(callControlId);
+      logger.info({ callControlId }, "LLM aborted by barge-in — wrapper will replay newer caller text");
+      return;
+    }
     const detail = axios.isAxiosError(err) && err.response
       ? JSON.stringify(err.response.data).slice(0, 400)
       : String(err);
