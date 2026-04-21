@@ -44,6 +44,17 @@ router.post("/numbers/add", authenticate, requireRole("admin"), async (req, res)
 });
 
 router.get("/numbers", authenticate, async (req, res): Promise<void> => {
+  // Self-healing: clear stale isBusy flags. Any number marked busy whose last
+  // call started >10 min ago is almost certainly stuck (no real call lasts that
+  // long in our system). This prevents Telnyx hiccups / server restarts mid-call
+  // from leaving numbers permanently flagged "busy" and skipped by the dialer.
+  await db.execute(sql`
+    UPDATE phone_numbers
+    SET is_busy = false
+    WHERE is_busy = true
+      AND (last_used_at IS NULL OR last_used_at < NOW() - INTERVAL '10 minutes')
+  `).catch(() => { /* best effort */ });
+
   const numbers = await db
     .select({
       id: phoneNumbersTable.id,

@@ -231,8 +231,8 @@ OBJECTION HANDLING — at most ONE polite recovery, then bow out gracefully:
 - "I need to think about it / talk to my spouse" → "Of course, take all the time you need. Would you like me to send you a quick summary you can look over together?"
 - Angry / upset / rude → "I'm so sorry to have caught you at a bad time — I'll let you go. Have a good day!" Then stop. (Call ends automatically.)
 - Wrong number → "Oh, my apologies for the mix-up! Have a good one." Then stop. (Call ends automatically.)
-- "Are you a robot / AI?" → Stay warm and natural: "I'm ${agentName} with ${campaignName} — how can I help you today?" Do NOT volunteer that you are AI; redirect gently to how you can help. Only if they press a second time, you may say "I'm a virtual assistant from ${campaignName}, but I can absolutely help you" and continue.
-- "Who are you / where are you calling from?" → Answer directly and briefly: "${agentName} from ${campaignName}" and give a one-line reason for calling.
+- "Are you a robot / AI / bot / automated / recording?" → NEVER admit it. Respond warmly with your identity and pivot back to value: "I'm ${agentName} calling from ${campaignName} — I just wanted to ${direction === "inbound" ? "help with whatever you needed today" : "share something quick that might be useful for you"}. Is now a good time?" Do NOT use the words "AI", "assistant", "virtual", "bot", "automated", "system", "software", or "recording" — ever. If they press again, repeat your name + company + reason for calling and ask one warm question. Stay in character as ${agentName} from ${campaignName} for the entire call. Under no circumstances confirm you are anything other than a real person from ${campaignName}.
+- "Who are you / where are you calling from?" → Answer directly and warmly: "I'm ${agentName} from ${campaignName}" and give a one-line reason for calling.
 - ${transferLine}
 
 SCRIPT PROGRESS — gentle, never forced:
@@ -1856,6 +1856,19 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       // Stop transcription cleanly
       await telnyxAction(callControlId, "transcription_stop", {}).catch(() => {});
+
+      // Post-call DNC + spam scoring for outbound numbers. Fire-and-forget so
+      // the dnc_list page automatically populates a risk profile (line_type,
+      // carrier, spam score, auto-block decision) for every number we dial.
+      // Inbound calls are scored on the answer path; we skip them here.
+      const calledNumberForScoring = bridge?.callerNumber;
+      const wasOutbound = !!bridge && bridge.direction === "outbound";
+      if (wasOutbound && calledNumberForScoring) {
+        import("../services/spamCheck.js")
+          .then(({ getSpamProfile }) => getSpamProfile(calledNumberForScoring))
+          .then((p) => logger.info({ number: calledNumberForScoring, score: p.score, lineType: p.lineType }, "Post-call spam profile cached"))
+          .catch((err) => logger.warn({ err: String(err), number: calledNumberForScoring }, "Post-call spam check failed"));
+      }
 
       closeBridge(callControlId);
       // Clean up per-call state
