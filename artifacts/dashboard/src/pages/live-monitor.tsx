@@ -680,7 +680,20 @@ export default function LiveMonitorPage() {
 
     socket.on("call:ended", (data: { id?: number; callId?: number; callControlId?: string; disposition?: string; duration?: number }) => {
       const id = data.id ?? data.callId ?? 0;
-      setActiveCalls(prev => { const m = new Map(prev); m.delete(id); return m; });
+      setActiveCalls(prev => {
+        const m = new Map(prev);
+        // Prefer numeric id when present, otherwise fall back to scanning by
+        // callControlId so events that only carry the control id (e.g. stale
+        // bridge cleanups) still prune the row instantly.
+        if (id) {
+          m.delete(id);
+        } else if (data.callControlId) {
+          for (const [k, v] of m) {
+            if (v.callControlId === data.callControlId) m.delete(k);
+          }
+        }
+        return m;
+      });
       // Clear transcripts + stop listening + destroy audio player for this call
       if (data.callControlId) {
         setLiveTranscripts(prev => { const m = new Map(prev); m.delete(data.callControlId!); return m; });
@@ -690,7 +703,7 @@ export default function LiveMonitorPage() {
         destroyPlayer(data.callControlId);
       }
       setCompletedToday(n => n + 1);
-      addEvent(makeEvent("call:ended", `Call #${id} ended`, data.disposition ? `· ${data.disposition.replace(/_/g, " ")}` : data.duration ? `· ${data.duration}s` : undefined));
+      addEvent(makeEvent("call:ended", `Call #${id || "?"} ended`, data.disposition ? `· ${data.disposition.replace(/_/g, " ")}` : data.duration ? `· ${data.duration}s` : undefined));
     });
 
     // ── Live audio streaming ──────────────────────────────────────────────

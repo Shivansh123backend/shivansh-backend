@@ -10,6 +10,7 @@ import { ensureAdminUser, ensurePhoneNumbers, ensureElevenLabsVoices, ensureCata
 import { handleTelnyxMediaSocket, warmupElevenAgent } from "./services/elevenBridge.js";
 import { handleListenForkSocket } from "./websocket/listenFork.js";
 import { startCallbackScheduler } from "./routes/callbacks.js";
+import { startStaleCallSweeper } from "./services/staleCallSweeper.js";
 import { startScriptOptimizer } from "./services/scriptOptimizer.js";
 
 const rawPort = process.env["PORT"];
@@ -87,6 +88,8 @@ ensurePhoneNumbers().catch((err) => {
 warmupElevenAgent().catch((err) => {
   logger.warn({ err: String(err) }, "ElevenLabs agent warmup failed — will retry on first call");
 });
+
+startStaleCallSweeper();
 
 startCallbackScheduler().catch((err) => {
   logger.warn({ err: String(err) }, "Callback scheduler failed to start");
