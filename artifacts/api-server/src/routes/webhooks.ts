@@ -894,7 +894,18 @@ async function getCampaignByNumber(toNumber: string) {
     effectiveTransferNumber = campaign.transferNumber ?? null;
   }
 
-  return { campaign, agentName, systemPrompt, voiceId: resolvedVoiceId, voiceProvider: resolvedVoiceProvider, holdMusicUrl, effectiveTransferNumber };
+  return {
+    campaign,
+    agentName,
+    systemPrompt,
+    voiceId: resolvedVoiceId,
+    voiceProvider: resolvedVoiceProvider,
+    holdMusicUrl,
+    effectiveTransferNumber,
+    // Pass through campaign-level audio enhancements so inbound calls match outbound quality
+    backgroundSound: (campaign.backgroundSound && campaign.backgroundSound !== "none") ? campaign.backgroundSound : null,
+    humanLikeMode,
+  };
 }
 
 // ── Post-call summary & disposition (OpenAI on ElevenLabs transcript) ─────────
@@ -1296,7 +1307,16 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         return;
       }
 
-      const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId, voiceProvider: inboundVoiceProvider, holdMusicUrl: inboundHoldMusicUrl, effectiveTransferNumber } = result;
+      const {
+        campaign,
+        agentName,
+        systemPrompt,
+        voiceId: inboundVoiceId,
+        voiceProvider: inboundVoiceProvider,
+        holdMusicUrl: inboundHoldMusicUrl,
+        effectiveTransferNumber,
+        backgroundSound: inboundBackgroundSound,
+      } = result;
       const firstMessage = `Thank you for calling ${campaign.name}, this is ${agentName}. How may I help you today?`;
 
       logger.info(
@@ -1304,7 +1324,8 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         "Inbound call — starting ElevenLabs ConvAI bridge"
       );
 
-      // Register bridge state before answering
+      // Register bridge state before answering — mirror EVERY outbound feature
+      // so inbound conversation quality, recording, and ambient audio match.
       initBridge(callControlId, {
         campaignId: campaign.id,
         campaignName: campaign.name,
@@ -1314,6 +1335,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         startedAt: new Date(),
         transferNumber: effectiveTransferNumber ?? undefined,  // per-number override > campaign default
         holdMusicUrl: inboundHoldMusicUrl,
+        backgroundSound: inboundBackgroundSound ?? undefined,  // ← parity with outbound: ambient office noise / etc.
         voiceProvider: inboundVoiceProvider ?? campaign.voiceProvider ?? "elevenlabs",
         accent: campaign.accent ?? undefined,
         region: campaign.region ?? undefined,
@@ -1346,6 +1368,13 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       // starting transcription + greeting.
       callOwnNumber.set(callControlId, toNumber);
       pendingInboundGreet.add(callControlId);
+
+      // ── Recording parity with outbound — start as soon as we have the answer.
+      // Outbound starts recording at line 1240 right after initBridge. Inbound
+      // had no recording at all, which broke QA, playback, and dispute review.
+      startRecording(callControlId).catch((err) =>
+        logger.warn({ err: String(err), callControlId }, "Inbound recording start failed — continuing")
+      );
       logger.info({ callControlId }, "Inbound answered — waiting for call.answered to start greeting");
 
       // Live monitor: notify supervisors of inbound call
