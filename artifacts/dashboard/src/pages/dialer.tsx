@@ -92,18 +92,51 @@ export default function DialerPage() {
   const connect = useCallback(async () => {
     if (sipState === "connecting" || sipState === "connected") return;
     setSipState("connecting");
+
+    // Step 1: Request mic permission FIRST (mobile browsers need user gesture).
     try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Release the test stream — Telnyx SDK will request its own.
+      stream.getTracks().forEach(t => t.stop());
+    } catch (err: unknown) {
+      setSipState("error");
+      const msg = err instanceof Error ? err.message : "Microphone access denied";
+      toast({
+        title: "Microphone blocked",
+        description: msg.includes("Permission") || msg.includes("denied")
+          ? "Tap the lock icon → Site Settings → Microphone → Allow, then reload."
+          : msg,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      // Step 2: Get a fresh Telnyx JWT.
       const { token } = await customFetch("/api/calls/webrtc-token") as { token: string };
 
-      const client = new TelnyxRTC({ login_token: token });
+      // Step 3: Build SDK with mobile-friendly opts (UDP/RTC over wss only).
+      const client = new TelnyxRTC({
+        login_token: token,
+        ringtoneFile: undefined,
+        ringbackFile: undefined,
+      });
       clientRef.current = client;
 
-      client.on("telnyx.ready", () => setSipState("connected"));
+      client.on("telnyx.ready", () => {
+        console.info("[Telnyx] SIP ready");
+        setSipState("connected");
+      });
 
       client.on("telnyx.error", (err: unknown) => {
-        console.error("Telnyx error:", err);
+        console.error("[Telnyx] error:", err);
         setSipState("error");
-        toast({ title: "SIP Error", description: "WebRTC connection failed", variant: "destructive" });
+        const e = err as { error?: string; message?: string; cause?: string };
+        toast({
+          title: "SIP Error",
+          description: e?.cause ?? e?.message ?? e?.error ?? "WebRTC negotiation failed — check network/firewall.",
+          variant: "destructive",
+        });
       });
 
       client.on("telnyx.socket.close", () => {
@@ -158,9 +191,11 @@ export default function DialerPage() {
     }
   }, [sipState, toast]);
 
-  // Auto-connect on mount
+  // Auto-connect on desktop only — mobile browsers (iOS Safari, mobile Chrome)
+  // require a user gesture before getUserMedia / WebRTC, so we wait for tap.
   useEffect(() => {
-    connect();
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (!isMobile) connect();
     return () => {
       if (clientRef.current) {
         clientRef.current.disconnect();
