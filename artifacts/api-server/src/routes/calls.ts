@@ -10,7 +10,9 @@ import { findAvailableAgentForCampaign } from "../services/routingService.js";
 import { callWithFallback } from "../providers/registry.js";
 import { emitToSupervisors, emitToAgent } from "../websocket/index.js";
 import { createAuditLog } from "../lib/audit.js";
-import { getAllActiveBridges } from "../services/elevenBridge.js";
+import { getAllActiveBridges, closeBridge } from "../services/elevenBridge.js";
+import { removeActiveCall } from "../lib/redis.js";
+import { logger } from "../lib/logger.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -678,22 +680,93 @@ router.post("/calls/:callControlId/conference", authenticate, requireRole("admin
 
 // ── POST /calls/:callControlId/hangup ─────────────────────────────────────────
 // Force-end an in-progress call. Used by supervisors and the softphone.
-router.post("/calls/:callControlId/hangup", authenticate, async (req, res): Promise<void> => {
+// We aggressively clean up local state immediately so the dashboard reflects
+// the hangup within ~1s instead of waiting for Telnyx's webhook to arrive
+// (which sometimes drops on retries / network blips, leaving ghost rows).
+router.post("/calls/:callControlId/hangup", authenticate, requireRole("admin", "supervisor", "agent"), async (req, res): Promise<void> => {
   const { callControlId } = req.params as { callControlId: string };
   const apiKey = process.env.TELNYX_API_KEY;
   if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
 
+  // 1. Verify the callControlId matches a known call in our system. Without
+  //    this, an authenticated low-priv account could terminate arbitrary
+  //    Telnyx calls by guessing/replaying call_control_ids (IDOR).
+  const [callRow] = await db
+    .select({ id: callsTable.id, status: callsTable.status })
+    .from(callsTable)
+    .where(eq(callsTable.externalCallId, callControlId))
+    .limit(1);
+  const knownInBridge = !!getAllActiveBridges().find(b => b.callControlId === callControlId);
+  if (!callRow && !knownInBridge) {
+    res.status(404).json({ error: "Unknown callControlId" });
+    return;
+  }
+
+  // 2. Tell Telnyx to hang up. Treat 4xx (call already ended) as success and
+  //    do full cleanup. On 5xx / network errors the call may still be live —
+  //    skip terminal state changes so we don't desync from the provider.
+  let telnyxOk = false;
+  let telnyxFatal = false;
   try {
     await axios.post(
       `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/hangup`,
       {},
       { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
     );
-    res.json({ ok: true });
+    telnyxOk = true;
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    res.status(502).json({ error: "Hangup failed", detail: msg });
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status && status >= 400 && status < 500) {
+      // Call doesn't exist on Telnyx anymore (already ended). Safe to clean up.
+      telnyxOk = true;
+    } else {
+      // 5xx or network failure — provider state is unknown. Don't touch local
+      // state; the periodic webhook / 2-min ringing GC will reconcile.
+      telnyxFatal = true;
+      logger.warn({ callControlId, err: String(err) }, "Telnyx hangup failed (5xx/network) — leaving local state intact");
+    }
   }
+
+  if (telnyxFatal) {
+    res.status(502).json({ error: "Telnyx hangup failed — call may still be active" });
+    return;
+  }
+
+  // 3. Close the in-memory bridge so getAllActiveBridges() stops returning it.
+  try { closeBridge(callControlId); } catch { /* not active */ }
+
+  // 4. Mark the call row completed in DB so /supervisor/live-calls drops it
+  //    immediately. We also stamp ended_at so duration columns calculate sanely.
+  try {
+    await db
+      .update(callsTable)
+      .set({ status: "completed", endedAt: new Date() })
+      .where(eq(callsTable.externalCallId, callControlId));
+  } catch (err) {
+    logger.warn({ callControlId, err: String(err) }, "Hangup DB cleanup failed");
+  }
+
+  // 5. Drop from Redis active_calls so /dashboard/live-calls stops returning it.
+  try { await removeActiveCall(callControlId); } catch { /* non-fatal */ }
+
+  // 6. Notify all dashboards via WebSocket. We emit `call:ended` (which the
+  //    live-monitor uses to prune its local Map) with both the DB id and the
+  //    callControlId. We also emit `call_update` for legacy listeners.
+  try {
+    emitToSupervisors("call:ended", {
+      id: callRow?.id,
+      callControlId,
+      disposition: "manual_drop",
+    });
+    emitToSupervisors("call_update", {
+      callId: callRow?.id,
+      call_id: callControlId,
+      status: "completed",
+      is_terminal: true,
+    });
+  } catch { /* non-fatal */ }
+
+  res.json({ ok: true });
 });
 
 // ── POST /calls/:callControlId/hold ───────────────────────────────────────────

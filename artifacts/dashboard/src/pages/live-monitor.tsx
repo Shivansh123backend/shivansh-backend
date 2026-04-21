@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Activity, Phone, Bot, Megaphone, Zap, Wifi, WifiOff,
   CheckCircle2, XCircle, PhoneIncoming, PhoneMissed, ArrowRightLeft,
-  Clock, Users, TrendingUp, MessageSquare, Volume2, VolumeX, Headphones,
+  Clock, Users, TrendingUp, MessageSquare, Volume2, VolumeX, Headphones, PhoneOff,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -287,6 +287,7 @@ function LiveCallCard({
   isListening,
   onToggleListen,
   onBargeIn,
+  onDrop,
 }: {
   call: LiveCall;
   campaignMap: Record<number, string>;
@@ -294,6 +295,7 @@ function LiveCallCard({
   isListening: boolean;
   onToggleListen: () => void;
   onBargeIn: () => void;
+  onDrop: () => void;
 }) {
   useLiveClock();
   const elapsed = formatElapsed(call._localStart);
@@ -348,6 +350,17 @@ function LiveCallCard({
             >
               <Phone className="w-2.5 h-2.5" />
               Barge
+            </button>
+          )}
+          {/* Drop — force-end this call */}
+          {call.callControlId && (
+            <button
+              onClick={onDrop}
+              title="Drop: force-end this call now"
+              className="flex items-center gap-1 text-[9px] font-mono px-2 py-1 rounded border border-border/50 text-muted-foreground hover:text-red-400 hover:border-red-400/40 transition-all"
+            >
+              <PhoneOff className="w-2.5 h-2.5" />
+              Drop
             </button>
           )}
           <div className="text-right">
@@ -775,6 +788,28 @@ export default function LiveMonitorPage() {
     }
   }, []);
 
+  const dropCall = useCallback(async (callControlId: string) => {
+    if (!window.confirm("Drop this call now? The remote party will be hung up immediately.")) return;
+    try {
+      // Use customFetch so the Authorization Bearer header is added (raw fetch
+      // with `credentials: include` would fail because the API uses Bearer auth,
+      // not cookies).
+      await customFetch(`/api/calls/${encodeURIComponent(callControlId)}/hangup`, {
+        method: "POST",
+      });
+      // Optimistically prune from local map; the WS call:ended + 10s poll will reconcile
+      setActiveCalls(prev => {
+        const next = new Map(prev);
+        for (const [id, c] of next) {
+          if (c.callControlId === callControlId) next.delete(id);
+        }
+        return next;
+      });
+    } catch (e) {
+      alert(`Drop failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, []);
+
   const toggleListen = useCallback((callControlId: string) => {
     const socket = socketRef.current;
     if (!socket) return;
@@ -887,6 +922,7 @@ export default function LiveMonitorPage() {
                   isListening={!!c.callControlId && listeningCallControlId === c.callControlId}
                   onToggleListen={() => c.callControlId && toggleListen(c.callControlId)}
                   onBargeIn={() => c.callControlId && bargeIn(c.callControlId)}
+                  onDrop={() => c.callControlId && dropCall(c.callControlId)}
                 />
               ))}
             </div>
