@@ -36,3 +36,9 @@ id = "TzemsqcHy687CyMYgpsbQ"
 uri = "file://.local/lovable-agent-softphone-prompt.md"
 type = "text"
 title = "SHIVANSH Agent Softphone — Lovable Prompt (T007)"
+
+[[outputs]]
+id = "wyj5HF9ZMaC9kKocaavjp"
+uri = "file://.local/prompts/agent-softphone.md"
+type = "text"
+title = "SHIVANSH Agent Softphone — Final Lovable Prompt"
