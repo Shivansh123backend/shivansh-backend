@@ -1274,16 +1274,25 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
     // ── 1b. Inbound call arrives ──────────────────────────────────────────────
     if (eventType === "call.initiated" && direction === "incoming") {
-      const result = await getCampaignByNumber(toNumber);
+      // CRITICAL: Telnyx tears the call down within ~250ms if we don't answer
+      // fast enough. Fire `answer` IMMEDIATELY in parallel with the DB lookup
+      // so we never lose calls to a slow campaign-resolution query.
+      const answerPromise = answerCall(callControlId);
+      const lookupPromise = getCampaignByNumber(toNumber);
+
+      const [answered, result] = await Promise.all([answerPromise, lookupPromise]);
+
+      if (!answered) {
+        logger.info({ callControlId, toNumber, fromNumber }, "Inbound call torn down before we could answer — aborting");
+        return;
+      }
 
       if (!result) {
-        const answered = await answerCall(callControlId);
-        if (answered) {
-          await speak(
-            callControlId,
-            "Thank you for calling. We are unable to connect your call at this time. Goodbye."
-          );
-        }
+        logger.info({ toNumber, fromNumber }, "Inbound call but no campaign mapped to this number — playing fallback message");
+        await speak(
+          callControlId,
+          "Thank you for calling. We are unable to connect your call at this time. Goodbye."
+        );
         return;
       }
 
@@ -1332,18 +1341,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         },
       });
 
-      const answered = await answerCall(callControlId);
-      if (!answered) {
-        // Call already ended before we could answer — clean up bridge and bail
-        logger.info({ callControlId }, "Inbound call ended before answer — aborting bridge setup");
-        return;
-      }
-
-      // Store our campaign phone number (needed if transfer is requested)
+      // Call was already answered above (in parallel with the lookup). Now
+      // store the campaign number and wait for the call.answered webhook before
+      // starting transcription + greeting.
       callOwnNumber.set(callControlId, toNumber);
-
-      // Mark as waiting for call.answered before starting transcription + greeting.
-      // Telnyx must confirm the call is established before we can start STT/TTS.
       pendingInboundGreet.add(callControlId);
       logger.info({ callControlId }, "Inbound answered — waiting for call.answered to start greeting");
 
