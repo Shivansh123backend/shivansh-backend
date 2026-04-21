@@ -559,11 +559,26 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       return;
     }
 
-    // DNC check
+    // DNC check (manual list + per-lead flag)
     if (dncSet.has(normPhone) || lead.dncFlag) {
       logger.info({ leadId: lead.id, phone: lead.phone }, "Lead skipped — on DNC list");
       await db.update(leadsTable).set({ status: "do_not_call" }).where(eq(leadsTable.id, lead.id));
       return;
+    }
+
+    // Spam-score check — calls Telnyx Number Lookup, caches result for 30 days.
+    // Auto-blocks high-risk numbers (premium-rate scams, suspicious VoIP) and
+    // adds them to dnc_list so future runs skip them instantly via dncSet.
+    try {
+      const { isBlocked: isSpamBlocked } = await import("../services/spamCheck.js");
+      if (await isSpamBlocked(normPhone)) {
+        logger.info({ leadId: lead.id, phone: lead.phone }, "Lead skipped — spam-score block");
+        await db.update(leadsTable).set({ status: "do_not_call" }).where(eq(leadsTable.id, lead.id));
+        dncSet.add(normPhone);  // keep in-memory set in sync for the rest of the run
+        return;
+      }
+    } catch (err) {
+      logger.debug({ err: String(err), leadId: lead.id }, "Spam check errored — proceeding (fail-open)");
     }
 
     // Retry exhaustion check

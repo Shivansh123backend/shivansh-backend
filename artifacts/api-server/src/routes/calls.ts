@@ -64,6 +64,31 @@ router.post("/calls/initiate", authenticate, requireRole("admin"), async (req, r
     return;
   }
 
+  // ── DNC + spam check on the destination number ─────────────────────────────
+  // Mirrors the campaign-runner protection so direct softphone dials and one-off
+  // re-tries from the dashboard get the same TCPA / spam safety guarantees.
+  try {
+    const { getSpamProfile } = await import("../services/spamCheck.js");
+    const profile = await getSpamProfile(lead.phone);
+    if (profile.blocked) {
+      logger.warn(
+        { leadId, phone: lead.phone, spamScore: profile.spamScore, reason: profile.reason },
+        "Outbound /calls/initiate REFUSED — spam/DNC match",
+      );
+      // Mark lead so the campaign engine won't retry it either
+      await db.update(leadsTable).set({ status: "do_not_call", dncFlag: true }).where(eq(leadsTable.id, leadId));
+      res.status(409).json({
+        error: "Number blocked by DNC / spam policy",
+        spam_score: profile.spamScore,
+        line_type: profile.lineType,
+        reason: profile.reason,
+      });
+      return;
+    }
+  } catch (err) {
+    logger.debug({ err: String(err), leadId }, "Spam pre-check errored — proceeding (fail-open)");
+  }
+
   // Select voice
   let selectedVoice = "default";
   if (campaign.agentId) {

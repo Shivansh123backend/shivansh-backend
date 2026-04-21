@@ -1287,14 +1287,32 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     if (eventType === "call.initiated" && direction === "incoming") {
       // CRITICAL: Telnyx tears the call down within ~250ms if we don't answer
       // fast enough. Fire `answer` IMMEDIATELY in parallel with the DB lookup
-      // so we never lose calls to a slow campaign-resolution query.
+      // AND the spam check so we never lose calls to a slow lookup.
       const answerPromise = answerCall(callControlId);
       const lookupPromise = getCampaignByNumber(toNumber);
+      // Spam/DNC check on the CALLER (fromNumber) — runs in parallel with answer.
+      // If blocked, we still answered (already mid-air), then hang up cleanly.
+      const { getSpamProfile } = await import("../services/spamCheck.js");
+      const spamPromise = getSpamProfile(fromNumber).catch(() => null);
 
-      const [answered, result] = await Promise.all([answerPromise, lookupPromise]);
+      const [answered, result, spamProfile] = await Promise.all([answerPromise, lookupPromise, spamPromise]);
 
       if (!answered) {
         logger.info({ callControlId, toNumber, fromNumber }, "Inbound call torn down before we could answer — aborting");
+        return;
+      }
+
+      // Block known spammers / DNC entries — hang up before any TTS plays
+      if (spamProfile?.blocked) {
+        logger.warn(
+          { callControlId, fromNumber, toNumber, spamScore: spamProfile.spamScore, reason: spamProfile.reason, lineType: spamProfile.lineType },
+          "Inbound call BLOCKED — spam/DNC match",
+        );
+        try {
+          await telnyxAction(callControlId, "hangup", {});
+        } catch (err) {
+          logger.warn({ err: String(err), callControlId }, "Inbound block-hangup failed");
+        }
         return;
       }
 

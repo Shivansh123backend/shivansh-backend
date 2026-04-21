@@ -1,17 +1,28 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { dncListTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { dncListTable, leadsTable } from "@workspace/db";
+import { eq, and, desc } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { logger } from "../lib/logger.js";
 import { z } from "zod";
+import { getSpamProfile, scanNumbers, BLOCK_THRESHOLD } from "../services/spamCheck.js";
 
 const router: IRouter = Router();
 
 // ── GET /dnc ─────────────────────────────────────────────────────────────────
+// Returns ALL rows in dnc_list. Each row may be a manual block, an auto-block
+// (autoBlocked=true), or a non-blocking score cache (spamScore < threshold).
+// The UI renders manual + auto-blocked rows; cached-only rows are hidden.
 router.get("/dnc", authenticate, async (_req, res): Promise<void> => {
-  const list = await db.select().from(dncListTable).orderBy(dncListTable.createdAt);
-  res.json(list);
+  const list = await db
+    .select()
+    .from(dncListTable)
+    .orderBy(desc(dncListTable.createdAt));
+
+  // Hide pure score-cache rows (not blocking) from the list view — they're
+  // only there to speed up future lookups, not to surface to the user.
+  const visible = list.filter(r => !r.autoBlocked || (r.spamScore ?? 0) >= BLOCK_THRESHOLD || r.reason !== null);
+  res.json(visible);
 });
 
 // ── POST /dnc ─────────────────────────────────────────────────────────────────
@@ -81,13 +92,62 @@ router.delete("/dnc/:id", authenticate, requireRole("admin"), async (req, res): 
 });
 
 // ── GET /dnc/check/:number ────────────────────────────────────────────────────
+// Live DNC + spam check. Hits cache if fresh (<30 days), otherwise queries
+// Telnyx Number Lookup. Used by the dashboard "Preview" button before adding
+// a number, and by all 3 enforcement points internally.
 router.get("/dnc/check/:number", authenticate, async (req, res): Promise<void> => {
-  const normalised = req.params.number.replace(/[^\d+]/g, "");
-  const [entry] = await db
-    .select()
-    .from(dncListTable)
-    .where(eq(dncListTable.phoneNumber, normalised));
-  res.json({ on_dnc: !!entry, entry: entry ?? null });
+  try {
+    const profile = await getSpamProfile(req.params.number);
+    res.json({
+      on_dnc: profile.onDnc,
+      blocked: profile.blocked,
+      spam_score: profile.spamScore,
+      line_type: profile.lineType,
+      carrier_name: profile.carrierName,
+      reason: profile.reason,
+      cached: profile.cached,
+    });
+  } catch (err) {
+    logger.warn({ err: String(err), number: req.params.number }, "DNC check failed");
+    res.status(500).json({ error: "Spam check failed" });
+  }
+});
+
+// ── POST /dnc/scan/:number ───────────────────────────────────────────────────
+// Force a fresh Telnyx lookup (bypasses cache). Use this from the UI when the
+// user explicitly clicks "Re-check spam score".
+router.post("/dnc/scan/:number", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  try {
+    const profile = await getSpamProfile(req.params.number, { forceRefresh: true });
+    res.json(profile);
+  } catch (err) {
+    logger.warn({ err: String(err) }, "DNC force-scan failed");
+    res.status(500).json({ error: "Scan failed" });
+  }
+});
+
+// ── POST /dnc/scan-campaign/:campaignId ──────────────────────────────────────
+// Bulk-scan every lead in a campaign. Auto-blocks any lead whose spam score
+// crosses the threshold. Returns counts so the UI can show "X blocked, Y safe".
+router.post("/dnc/scan-campaign/:campaignId", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const campaignId = parseInt(req.params.campaignId, 10);
+  if (isNaN(campaignId)) {
+    res.status(400).json({ error: "Invalid campaignId" });
+    return;
+  }
+  const leads = await db
+    .select({ phone: leadsTable.phone })
+    .from(leadsTable)
+    .where(eq(leadsTable.campaignId, campaignId));
+  if (leads.length === 0) {
+    res.json({ scanned: 0, blocked: 0, results: [] });
+    return;
+  }
+  const numbers = Array.from(new Set(leads.map(l => l.phone).filter(Boolean)));
+  logger.info({ campaignId, count: numbers.length }, "DNC bulk scan starting");
+  const out = await scanNumbers(numbers);
+  logger.info({ campaignId, scanned: out.scanned, blocked: out.blocked }, "DNC bulk scan done");
+  res.json(out);
 });
 
 export default router;
