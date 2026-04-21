@@ -123,13 +123,21 @@ function substituteVars(
 }
 
 // ── System prompt builder ─────────────────────────────────────────────────────
+// Default human-sounding names used when an agent has no name configured.
+// Rotated per-call so multiple campaigns don't all introduce themselves the same way.
+const DEFAULT_HUMAN_NAMES = ["Riya", "Aanya", "Sarah", "Maya", "Priya", "Alex"] as const;
+function pickDefaultHumanName(): string {
+  return DEFAULT_HUMAN_NAMES[Math.floor(Math.random() * DEFAULT_HUMAN_NAMES.length)];
+}
+
 function buildSystemPrompt(
   rawPrompt: string,
   campaignName: string,
-  agentName = "AI Assistant",
+  agentName = "Riya",                                      // ← never "AI Assistant"
   leadName?: string,
   transferNumber?: string,
-  _humanLikeMode = true
+  _humanLikeMode = true,
+  direction: "inbound" | "outbound" = "outbound",         // ← new: changes opening + behavior
 ): string {
   const firstName = leadName?.split(" ")[0];
   const lastName  = leadName?.split(" ").slice(1).join(" ") || "";
@@ -180,7 +188,17 @@ function buildSystemPrompt(
     ? `\n\nDOMAIN KNOWLEDGE: The script above is a brief objective. Use your real knowledge to fill in the gaps — actual company names, real statistics, genuine rates and savings examples, common competitor weaknesses, real-world scenarios. Replace any bracketed placeholders with specific, accurate details. You are a knowledgeable expert in this field, not someone reading from a card.`
     : "";
 
-  return `You are ${agentName}, a real person making an outbound phone call${leadName ? ` to ${leadName}` : ""} for ${campaignName}.${firstName ? ` Call them ${firstName}.` : ""}
+  // Direction-specific opening + critical first-turn behavior. Inbound MUST
+  // wait for the caller to state their reason — we can't anticipate why they
+  // called, and any guessing makes the AI sound robotic and presumptuous.
+  const opening = direction === "inbound"
+    ? `You are ${agentName} from ${campaignName}. The caller dialed in to your line — you have just greeted them and now they will tell you why they called.
+
+CRITICAL — FIRST TURN:
+After your initial greeting ("How may I help you today?") you MUST be silent and wait for the caller to speak first. Do NOT guess why they called. Do NOT list services. Do NOT offer suggestions. Do NOT say things like "are you calling about X?" — let THEM tell you. If there is a long pause, just say a gentle "Take your time" or "Whenever you're ready" and wait again. NEVER fill silence with assumptions.`
+    : `You are ${agentName}, a real person making an outbound phone call${leadName ? ` to ${leadName}` : ""} for ${campaignName}.${firstName ? ` Call them ${firstName}.` : ""}`;
+
+  return `${opening}
 
 WHAT YOU'RE DOING:
 ${coreScript}${domainHint}
@@ -213,7 +231,7 @@ OBJECTION HANDLING — at most ONE polite recovery, then bow out gracefully:
 - "I need to think about it / talk to my spouse" → "Of course, take all the time you need. Would you like me to send you a quick summary you can look over together?"
 - Angry / upset / rude → "I'm so sorry to have caught you at a bad time — I'll let you go. Have a good day!" Then stop. (Call ends automatically.)
 - Wrong number → "Oh, my apologies for the mix-up! Have a good one." Then stop. (Call ends automatically.)
-- "Are you a robot / AI?" → Be honest and warm: "I'm an AI assistant calling on behalf of ${campaignName}, but I'm here to help — would you still like to chat for a moment?"
+- "Are you a robot / AI?" → Stay warm and natural: "I'm ${agentName} with ${campaignName} — how can I help you today?" Do NOT volunteer that you are AI; redirect gently to how you can help. Only if they press a second time, you may say "I'm a virtual assistant from ${campaignName}, but I can absolutely help you" and continue.
 - "Who are you / where are you calling from?" → Answer directly and briefly: "${agentName} from ${campaignName}" and give a one-line reason for calling.
 - ${transferLine}
 
@@ -785,7 +803,8 @@ async function getCampaignByNumber(toNumber: string) {
     return null;
   }
 
-  let agentName = "AI Assistant";
+  // Default to a real human-sounding name so the inbound greeting doesn't sound like a robot.
+  let agentName = pickDefaultHumanName();
   let agentPrompt: string = campaign.agentPrompt ?? "";
   let resolvedVoiceId: string = DEFAULT_ELEVEN_VOICE;
   let resolvedVoiceProvider: string = campaign.voiceProvider ?? "elevenlabs";
@@ -827,7 +846,8 @@ async function getCampaignByNumber(toNumber: string) {
     agentName,
     undefined,
     campaign.transferNumber ?? undefined,
-    humanLikeMode
+    humanLikeMode,
+    "inbound",                                             // ← inbound-specific prompt
   );
 
   const holdMusicUrl = resolveHoldMusicUrl(campaign.holdMusic);
