@@ -24,6 +24,15 @@ function formatTimestamp(ts?: string | null) {
   return new Date(ts).toLocaleString();
 }
 
+function formatDialedAt(ts?: string | null) {
+  if (!ts) return { date: "-", time: "" };
+  const d = new Date(ts);
+  return {
+    date: d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" }),
+    time: d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+  };
+}
+
 type Tab = "cdr" | "call-logs";
 
 const DISPOSITION_OPTIONS = [
@@ -346,7 +355,7 @@ export default function CallsPage() {
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Disposition</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Duration</th>
-                    <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Time</th>
+                    <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider whitespace-nowrap">Dialed At</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -390,7 +399,14 @@ export default function CallsPage() {
                         <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
                         <td className="px-4 py-3">{c.disposition ? <DispositionBadge disp={c.disposition} /> : <span className="text-muted-foreground">-</span>}</td>
                         <td className="px-4 py-3 text-muted-foreground">{formatDuration(c.duration)}</td>
-                        <td className="px-4 py-3 text-muted-foreground text-[10px]">{formatTimestamp(c.timestamp)}</td>
+                        <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                          {(() => { const d = formatDialedAt(c.timestamp); return (
+                            <div className="leading-tight">
+                              <div className="text-foreground/90 text-xs">{d.date}</div>
+                              <div className="text-[10px] text-muted-foreground">{d.time}</div>
+                            </div>
+                          ); })()}
+                        </td>
                       </tr>
                       {expandedId === c.id && (
                         <tr key={`${c.id}-expanded`} className="border-b border-border/30 bg-white/2">
@@ -481,7 +497,7 @@ export default function CallsPage() {
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Disposition</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Duration</th>
-                    <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Timestamp</th>
+                    <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider whitespace-nowrap">Dialed At</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -515,7 +531,14 @@ export default function CallsPage() {
                         <td className="px-4 py-3"><StatusPill status={log.status} /></td>
                         <td className="px-4 py-3">{log.disposition ? <DispositionBadge disp={log.disposition} /> : <span className="text-muted-foreground">-</span>}</td>
                         <td className="px-4 py-3 text-muted-foreground">{formatDuration(log.duration)}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{formatTimestamp(log.timestamp)}</td>
+                        <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                          {(() => { const d = formatDialedAt(log.timestamp); return (
+                            <div className="leading-tight">
+                              <div className="text-foreground/90 text-xs">{d.date}</div>
+                              <div className="text-[10px] text-muted-foreground">{d.time}</div>
+                            </div>
+                          ); })()}
+                        </td>
                       </tr>
                       {expandedLogId === log.id && (
                         <tr key={`log-${log.id}-expanded`} className="border-b border-border/30 bg-white/2">
