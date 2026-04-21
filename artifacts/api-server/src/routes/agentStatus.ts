@@ -1,9 +1,10 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { usersTable, callsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { emitToSupervisors } from "../websocket/index.js";
+import { getAllActiveBridges } from "../services/elevenBridge.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -44,13 +45,32 @@ router.post("/agent/status", authenticate, requireRole("agent", "admin"), async 
   });
 });
 
-// Get live calls for supervisor monitoring
+// Get live calls for supervisor monitoring.
+// Source of truth = active in-memory bridges (real Telnyx call-control state).
+// We then fetch the matching `calls` rows so the response keeps its original
+// shape. Without this cross-reference the endpoint returned every row stuck in
+// 'in_progress' (lost hangup webhooks, mid-call restarts, abnormal disconnects)
+// and the dashboard accumulated phantom calls forever — supports calls of any
+// duration without false negatives, since liveness is based on real bridge
+// presence rather than a creation-time cutoff.
 router.get("/supervisor/live-calls", authenticate, requireRole("admin", "supervisor"), async (req, res): Promise<void> => {
+  const activeCallControlIds = getAllActiveBridges()
+    .map(b => b.callControlId)
+    .filter((id): id is string => Boolean(id));
+
+  if (activeCallControlIds.length === 0) {
+    res.json([]);
+    return;
+  }
+
   const liveCalls = await db
     .select()
     .from(callsTable)
     .where(
-      eq(callsTable.status, "in_progress"),
+      and(
+        eq(callsTable.status, "in_progress"),
+        inArray(callsTable.externalCallId, activeCallControlIds),
+      ),
     );
 
   res.json(liveCalls);

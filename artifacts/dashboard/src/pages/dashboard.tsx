@@ -58,7 +58,11 @@ function LiveCallRow({ call }: { call: { id: number; leadId?: number; campaignId
 }
 
 export default function DashboardPage() {
-  const { data: liveCalls, isLoading: liveLoading } = useGetLiveCalls();
+  // refetch every 5 s so the "Live Calls" stat clears when calls actually end
+  // (without this, react-query caches the result forever and the count drifts).
+  const { data: liveCalls, isLoading: liveLoading } = useGetLiveCalls({
+    query: { refetchInterval: 5_000, refetchOnWindowFocus: true, staleTime: 0 },
+  });
   const { data: campaigns, isLoading: campLoading } = useListCampaigns();
   const { data: availableAgents, isLoading: agentLoading } = useGetAvailableAgents();
   const { data: calls, isLoading: callsLoading } = useListCalls();
