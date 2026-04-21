@@ -238,6 +238,14 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
   // The /recordings/:id/play endpoint already accepts that query param.
   const authHeader = req.headers.authorization ?? "";
   const callerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  // Build an ABSOLUTE URL so the recording works from frontends hosted on a
+  // different origin (e.g. the Lovable-hosted dashboard). Honors the proxy's
+  // forwarded headers, with PUBLIC_API_URL as an explicit override.
+  const proto = (req.headers["x-forwarded-proto"] as string)?.split(",")[0] ?? req.protocol ?? "https";
+  const host  = (req.headers["x-forwarded-host"]  as string)?.split(",")[0] ?? req.headers.host ?? "";
+  const apiBase = (process.env.PUBLIC_API_URL || (host ? `${proto}://${host}` : "")).replace(/\/$/, "");
+  const buildPlayUrl = (recId: string) =>
+    `${apiBase}/api/recordings/${recId}/play${callerToken ? `?token=${encodeURIComponent(callerToken)}` : ""}`;
   const campaignIdRaw = req.query.campaignId;
   const directionRaw  = req.query.direction as string | undefined;
   const limitRaw      = req.query.limit;
@@ -322,9 +330,7 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
       // Prefer the fresh-URL proxy when we have a recording_id; fall back to the
       // raw (likely-expired) S3 URL only for legacy rows captured before we
       // started persisting recording_id.
-      recordingUrl: r.recordingId
-        ? `/api/recordings/${r.recordingId}/play${callerToken ? `?token=${encodeURIComponent(callerToken)}` : ""}`
-        : (r.recordingUrl ?? null),
+      recordingUrl: r.recordingId ? buildPlayUrl(r.recordingId) : (r.recordingUrl ?? null),
       transcript: r.transcript ?? null,
       summary: r.summary ?? null,
       timestamp: (r.createdAt ?? new Date()).toISOString(),
@@ -340,9 +346,7 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
       status: r.status,
       disposition: r.disposition ?? null,
       duration: r.duration ?? null,
-      recordingUrl: r.recordingId
-        ? `/api/recordings/${r.recordingId}/play${callerToken ? `?token=${encodeURIComponent(callerToken)}` : ""}`
-        : (r.recordingUrl ?? null),
+      recordingUrl: r.recordingId ? buildPlayUrl(r.recordingId) : (r.recordingUrl ?? null),
       transcript: r.transcript ?? null,
       summary: r.summary ?? null,
       timestamp: (r.timestamp ?? new Date()).toISOString(),
