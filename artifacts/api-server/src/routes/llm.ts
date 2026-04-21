@@ -70,7 +70,9 @@ router.post("/llm/chat/completions", async (req, res) => {
       model: "gpt-4o-mini",          // ~3x faster TTFT than gpt-4o (150ms vs 500ms+) — critical for phone-call latency
       messages,
       max_completion_tokens: 90,     // 1-2 sentences ≈ 6-10s of TTS — short, conversational, low chance of barge-in
-      temperature: 0.85,
+      temperature: 0.95,             // higher = more varied phrasing, fewer canned/repeated responses (sounds more human)
+      frequency_penalty: 0.6,        // discourage repeating the same phrases / openers across turns
+      presence_penalty: 0.4,         // encourage introducing fresh wording
       stream: true,
     });
 
