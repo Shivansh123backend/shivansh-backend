@@ -275,12 +275,11 @@ async function connectToElevenLabs(
           // 0=off 1=light 2=medium 3=max
           optimize_streaming_latency: 3,   // MAX latency optimization — start streaming audio ASAP
           voice_settings: {
-            stability: 0.50,               // calmer, steadier delivery — less erratic energy spikes
-            similarity_boost: 0.80,        // in-character but not over-acted
-            style: 0.30,                   // gentle warmth — polite, not theatrical
+            stability: 0.32,               // LOWER = more emotional variation & natural prosody (was 0.50, sounded monotone/robotic)
+            similarity_boost: 0.82,        // in-character but not over-acted
+            style: 0.45,                   // more warmth + expressiveness (was 0.30 — too flat)
             use_speaker_boost: true,
-            speed: 0.87,                   // distinctly slower than default — unhurried, human pacing
-                                           // (0.95 still felt rushed on phone calls per user feedback)
+            speed: 0.92,                   // natural conversational pace (0.87 felt sluggish, 1.0 felt rushed)
           },
           // Make numbers, abbreviations, and symbols read naturally ("$50" → "fifty dollars",
           // "Dr." → "doctor"). Without this the AI says "dollar sign five zero" — VERY robotic.
