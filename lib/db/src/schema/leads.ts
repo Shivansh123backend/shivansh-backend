@@ -1,6 +1,7 @@
 import { pgTable, text, serial, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { leadListsTable } from "./lead_lists";
 
 export const leadStatusEnum = pgEnum("lead_status", ["pending", "called", "callback", "do_not_call", "completed"]);
 export const leadSourceEnum = pgEnum("lead_source", ["manual", "csv", "sheet"]);
@@ -11,6 +12,7 @@ export const leadsTable = pgTable("leads", {
   phone: text("phone").notNull(),
   email: text("email"),
   campaignId: integer("campaign_id").notNull(),
+  listId: integer("list_id").references(() => leadListsTable.id, { onDelete: "set null" }),
   source: leadSourceEnum("source").notNull().default("manual"),
   status: leadStatusEnum("status").notNull().default("pending"),
   metadata: text("metadata"),

@@ -4,6 +4,7 @@ export * from "./ai_agents";
 export * from "./campaigns";
 export * from "./phone_numbers";
 export * from "./leads";
+export * from "./lead_lists";
 export * from "./calls";
 export * from "./call_logs";
 export * from "./human_agents";
