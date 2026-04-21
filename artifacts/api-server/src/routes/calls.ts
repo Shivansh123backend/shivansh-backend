@@ -232,6 +232,12 @@ router.get("/recordings/:id/play", async (req, res): Promise<void> => {
 
 // ── GET /calls/cdr — unified CDR: outbound calls + inbound call_logs ──────────
 router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
+  // The dashboard plays recordings via plain <audio src="..."> tags which
+  // cannot send Authorization headers. To make playback work, we append the
+  // caller's existing Bearer token to every recording proxy URL as ?token=.
+  // The /recordings/:id/play endpoint already accepts that query param.
+  const authHeader = req.headers.authorization ?? "";
+  const callerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
   const campaignIdRaw = req.query.campaignId;
   const directionRaw  = req.query.direction as string | undefined;
   const limitRaw      = req.query.limit;
@@ -316,7 +322,9 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
       // Prefer the fresh-URL proxy when we have a recording_id; fall back to the
       // raw (likely-expired) S3 URL only for legacy rows captured before we
       // started persisting recording_id.
-      recordingUrl: r.recordingId ? `/api/recordings/${r.recordingId}/play` : (r.recordingUrl ?? null),
+      recordingUrl: r.recordingId
+        ? `/api/recordings/${r.recordingId}/play${callerToken ? `?token=${encodeURIComponent(callerToken)}` : ""}`
+        : (r.recordingUrl ?? null),
       transcript: r.transcript ?? null,
       summary: r.summary ?? null,
       timestamp: (r.createdAt ?? new Date()).toISOString(),
@@ -332,7 +340,9 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
       status: r.status,
       disposition: r.disposition ?? null,
       duration: r.duration ?? null,
-      recordingUrl: r.recordingId ? `/api/recordings/${r.recordingId}/play` : (r.recordingUrl ?? null),
+      recordingUrl: r.recordingId
+        ? `/api/recordings/${r.recordingId}/play${callerToken ? `?token=${encodeURIComponent(callerToken)}` : ""}`
+        : (r.recordingUrl ?? null),
       transcript: r.transcript ?? null,
       summary: r.summary ?? null,
       timestamp: (r.timestamp ?? new Date()).toISOString(),
