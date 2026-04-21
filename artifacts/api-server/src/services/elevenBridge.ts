@@ -275,11 +275,12 @@ async function connectToElevenLabs(
           // 0=off 1=light 2=medium 3=max
           optimize_streaming_latency: 3,   // MAX latency optimization — start streaming audio ASAP
           voice_settings: {
-            stability: 0.45,               // calmer, steadier delivery — less erratic energy spikes
+            stability: 0.50,               // calmer, steadier delivery — less erratic energy spikes
             similarity_boost: 0.80,        // in-character but not over-acted
-            style: 0.35,                   // gentle warmth — polite, not theatrical
+            style: 0.30,                   // gentle warmth — polite, not theatrical
             use_speaker_boost: true,
-            speed: 0.95,                   // a touch slower than default — relaxed, never rushing
+            speed: 0.88,                   // distinctly slower than default — unhurried, human pacing
+                                           // (0.95 still felt rushed on phone calls per user feedback)
           },
           // Make numbers, abbreviations, and symbols read naturally ("$50" → "fifty dollars",
           // "Dr." → "doctor"). Without this the AI says "dollar sign five zero" — VERY robotic.
@@ -295,7 +296,9 @@ async function connectToElevenLabs(
           turn_timeout: 15,                // seconds of total silence before AI speaks again
           silence_end_call_timeout: 35,
           mode: "silence",                 // explicit silence-based VAD (more predictable than default)
-          endpointing_ms: 250,             // 250ms silence wait — total reply lag ≈ 500ms (250 + ~150 LLM + ~75 TTS)
+          endpointing_ms: 200,             // 200ms silence wait — total reply lag ≈ 450ms (200 + ~150 LLM + ~75 TTS)
+                                           // Was 250 (user said too slow); 150 risked clipping natural mid-sentence
+                                           // pauses. 200ms is the sweet spot for phone-call turn-taking.
         },
       },
     }));
