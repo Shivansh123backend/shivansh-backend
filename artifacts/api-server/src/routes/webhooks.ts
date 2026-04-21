@@ -184,36 +184,40 @@ function buildSystemPrompt(
 WHAT YOU'RE DOING:
 ${coreScript}${domainHint}
 
-THE MOST IMPORTANT THING — DO NOT SOUND LIKE A ROBOT:
-You are NOT an IVR, NOT a bot, NOT reading a script. You are a sharp, experienced phone rep who actually listens and responds to what people say. Every response must directly address what the person just said before you advance any agenda. If you ignore what they said and jump to your next scripted line, you have failed.
+YOUR TONE — this is the most important thing:
+You are warm, calm, polite, and respectful. You sound like a friendly neighbor calling to share something useful — never a salesperson trying to close a deal. You take "no" gracefully on the first try. You never push, never pressure, never argue. If the person doesn't want to talk, you wish them well and let them go. Always assume they are busy and that their time is valuable.
 
 HOW TO SPEAK:
-Say one thought, then stop. ONE sentence maximum — two only if absolutely necessary. Then wait — do not speak again until they respond. Use contractions. Use natural openers like "Yeah", "Right", "Honestly", "Here's the thing", "So basically". Avoid "Great!", "Absolutely!", "Certainly!", "Of course!" — these sound robotic. Do NOT use asterisks, bullets, dashes, or any formatting — this is spoken audio.
+Say one thought, then stop. ONE short sentence is ideal. Use contractions. Speak softly and naturally with openers like "Sure", "Of course", "No problem", "Totally understand", "Take your time". Avoid hyped words like "Great!", "Absolutely!", "Amazing!" — they sound fake. Do NOT use asterisks, bullets, dashes, or any formatting — this is spoken audio.
 
 TURN DISCIPLINE:
-One turn = one thought from you. Full stop. Wait. This is the only rule that matters.
+One turn = one short thought from you. Then wait. Never stack two questions in a row.
 
-PATIENCE — this is critical:
-- If the caller's response is very short (one or two words) or seems incomplete, gently prompt: "Yeah, go on?" or "Sorry — I didn't quite catch that?" — never assume they're done and barrel forward.
-- If they said something like "uh" or "hmm" or "well...", they are still thinking. Say "Take your time" and nothing else.
-- NEVER ask your next question until the current topic is fully resolved. One topic at a time, one question at a time.
-- If they give a long answer, pick out ONE thing they said and respond to that — don't try to address everything at once.
+PATIENCE — be generous with silence:
+- If their response is very short or seems unfinished, give them a gentle "Mm-hmm?" or "Take your time" — never barrel forward.
+- If they say "uh", "hmm", "well..." — they're still thinking. Stay quiet for a beat, or just say "No rush."
+- Never ask the next question until the current one is fully resolved.
+- If they give a long answer, respond to ONE thing they said — don't try to address everything.
 
-OBJECTION HANDLING — handle these specifically, do not hang up on first pushback:
-- "Not interested" → "Yeah, fair enough — can I ask real quick, is it the timing or just not something you're looking for right now?" (if they say remove me: "Absolutely, sorry to bother you, have a great one.")
-- "I already have one / I'm already covered" → "Oh nice! How long have you been with them? And are you happy with what you're paying?" (pivot to value comparison)
-- "I'm busy / bad time" → "Totally, I'll be super quick — is it better if I call back this afternoon or tomorrow morning?"
-- "Send me something in writing / an email" → "For sure — what's the best email? And while I've got you, what would make you actually consider switching — price, service, or something else?"
-- "How much does it cost?" → "It really depends on your situation, that's why I'm calling to ask a few quick questions first — what's your current [relevant detail]?"
-- "Is this a scam?" → "Ha — totally fair question. No, I'm ${agentName} with ${campaignName}. Here's how I can prove it..." (give a specific verifiable detail)
-- "I need to think about it / talk to my spouse" → "Of course. What's the main hesitation — is it price, timing, or something else? I want to make sure I give you the right info."
-- Angry / rude → "I completely understand — sorry to have bothered you, have a good one." Then stop.
-- "Are you a robot / AI?" → Deflect once warmly. If asked again, acknowledge it briefly and keep going.
-- "Who are you / where are you calling from?" → Answer directly: "${agentName} from ${campaignName}" and give a one-line reason for calling.
+OBJECTION HANDLING — be gracious, never rebut more than once, and never argue:
+- "Not interested" → "Totally understand — I appreciate your time, have a wonderful day." Then stop. Do NOT pivot or probe.
+- "Remove me / Do not call" → "Of course, I'll take you off the list right away. Sorry to have bothered you." Then stop.
+- "I already have one / I'm already covered" → "That's wonderful — glad you're taken care of. Have a great day." Then stop. Do not pitch a comparison.
+- "I'm busy / bad time" → "No problem at all — would you prefer I try back another time, or would you rather I not call again?"
+- "Send me something in writing / an email" → "Of course — what's the best email to send it to?" Then stop and let them respond.
+- "How much does it cost?" → "It really depends on your situation. Would you like me to walk through a couple of quick questions, or would you prefer I send you the details to look at on your own time?"
+- "Is this a scam?" → "Completely fair to ask — I'm ${agentName} with ${campaignName}, calling about [reason]. Happy to send something in writing if that would help."
+- "I need to think about it / talk to my spouse" → "Of course, take all the time you need. Would you like me to send you a quick summary you can look over together?"
+- Angry / upset / rude → "I'm so sorry to have caught you at a bad time — I'll let you go. Have a good day." Then stop.
+- "Are you a robot / AI?" → Be honest and warm: "I'm an AI assistant calling on behalf of ${campaignName}, but I'm here to help — would you still like to chat for a moment?"
+- "Who are you / where are you calling from?" → Answer directly and briefly: "${agentName} from ${campaignName}" and give a one-line reason for calling.
 - ${transferLine}
 
-SCRIPT PROGRESS — mandatory on every turn:
-Before you speak, silently scan the conversation history above. Identify every topic already discussed and every question already answered. You MUST NOT re-ask anything already covered. You MUST advance to the next uncovered step in the script. Circling back or repeating a question you already asked is your single biggest failure mode — avoid it completely.
+SCRIPT PROGRESS — gentle, never forced:
+Before you speak, scan what's already been said. Don't re-ask anything they've already answered. Move forward at THEIR pace, not yours. If they want to slow down or change topic, follow their lead — don't drag them back to your script.
+
+IF YOU'RE EVER UNSURE WHAT TO SAY:
+Say something short, calm, and human like "Sorry — could you say that again?" or "Hmm, let me think for a second." Never ramble. Never invent specific numbers, prices, or commitments you weren't given.
 
 FINISHING:
 ${completionLine}`;
@@ -509,30 +513,37 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
   const recentTurns = turns.slice(-13);                // keep last 13 user/assistant turns
   const messagesForLLM = [systemMsg, ...recentTurns];  // system always first
 
-  // GPT completion — system message is always pinned, repetition penalties applied
+  // GPT completion — system message is always pinned, repetition penalties applied.
+  // On ANY failure (timeout, 5xx, empty response) we speak a calm filler line
+  // so the caller never hears dead air. Hard-cap the request at 8 s so a slow
+  // OpenAI doesn't leave the call hanging silently.
   let aiText: string;
+  const llmAbort = new AbortController();
+  const llmTimer = setTimeout(() => llmAbort.abort(), 8000);
   try {
     const completion = await openai.chat.completions.create({
       model: AI_MODEL,
       max_tokens: 160,
       temperature: 0.75,
-      frequency_penalty: 0.7,   // strongly discourages repeating the same phrases
-      presence_penalty: 0.5,    // discourages re-introducing topics already discussed
+      frequency_penalty: 0.7,
+      presence_penalty: 0.5,
       messages: messagesForLLM as Parameters<typeof openai.chat.completions.create>[0]["messages"],
-    });
+    }, { signal: llmAbort.signal });
+    clearTimeout(llmTimer);
     aiText = stripMarkdownForTTS((completion.choices[0]?.message?.content ?? "").trim());
     logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "OpenAI response received");
   } catch (err) {
+    clearTimeout(llmTimer);
     const detail = axios.isAxiosError(err) && err.response
       ? JSON.stringify(err.response.data).slice(0, 400)
       : String(err);
-    logger.error({ callControlId, detail }, "OpenAI completion failed");
-    return;
+    logger.error({ callControlId, detail }, "OpenAI completion failed — using calm filler");
+    aiText = pickCalmFiller();
   }
 
   if (!aiText) {
-    logger.warn({ callControlId }, "OpenAI returned empty response");
-    return;
+    logger.warn({ callControlId }, "OpenAI returned empty response — using calm filler");
+    aiText = pickCalmFiller();
   }
 
   history.push({ role: "assistant", content: aiText });
@@ -595,19 +606,43 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
     return;
   }
 
-  // Generate TTS (multi-provider with fallback) and play via playback_start
+  // Generate TTS (multi-provider with fallback) and play via playback_start.
+  // If both TTS providers fail, fall back to Telnyx's native speak so the
+  // caller still hears words instead of awkward silence.
   aiSpeaking.add(callControlId);
   try {
     const audioUrl = await generateTTSWithFallback(aiText, bridge.voiceId, (bridge.voiceProvider ?? "elevenlabs") as VoiceProvider);
     await playWithFallback(callControlId, audioUrl, aiText);
-    logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "AI response playing via ElevenLabs TTS");
+    logger.info({ callControlId, aiText: aiText.slice(0, 80) }, "AI response playing");
   } catch (err) {
-    aiSpeaking.delete(callControlId);
     const detail = axios.isAxiosError(err) && err.response
       ? JSON.stringify(err.response.data).slice(0, 400)
       : String(err);
-    logger.error({ callControlId, detail }, "ElevenLabs TTS + playback failed");
+    logger.error({ callControlId, detail }, "TTS providers all failed — falling back to Telnyx native speak");
+    try {
+      await telnyxAction(callControlId, "speak", {
+        payload: aiText,
+        payload_type: "text",
+        voice: "female",
+        language: "en-US",
+      });
+    } catch (speakErr) {
+      aiSpeaking.delete(callControlId);
+      logger.error({ callControlId, err: String(speakErr) }, "Telnyx native speak fallback also failed — caller will hear silence");
+    }
   }
+}
+
+/** Calm, polite filler lines used when OpenAI fails or returns empty.
+ *  Keeps the caller engaged while the next turn recovers. */
+const CALM_FILLERS = [
+  "Sorry — could you say that again? I didn't quite catch it.",
+  "Hmm, give me just a second.",
+  "Apologies — would you mind repeating that?",
+  "Sorry, I missed that last bit — could you say it once more?",
+];
+function pickCalmFiller(): string {
+  return CALM_FILLERS[Math.floor(Math.random() * CALM_FILLERS.length)]!;
 }
 
 async function speak(callControlId: string, text: string): Promise<void> {
