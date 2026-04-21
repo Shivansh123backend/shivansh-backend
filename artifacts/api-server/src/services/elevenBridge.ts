@@ -292,7 +292,7 @@ async function connectToElevenLabs(
           turn_timeout: 15,                // seconds of total silence before AI speaks again
           silence_end_call_timeout: 35,
           mode: "silence",                 // explicit silence-based VAD (more predictable than default)
-          endpointing_ms: 350,             // 350ms = how fast humans actually take turns (was 800 = slow/awkward)
+          endpointing_ms: 250,             // 250ms silence wait — total reply lag ≈ 500ms (250 + ~150 LLM + ~75 TTS)
         },
       },
     }));
