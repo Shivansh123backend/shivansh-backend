@@ -606,9 +606,36 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
 
   try {
     await _runCampaignCalls(campaignId, campaign);
+  } catch (err) {
+    const e = err as Error;
+    logger.error(
+      {
+        campaignId,
+        errMessage: e?.message,
+        errStack: e?.stack,
+        errStage: (e as { __stage?: string })?.__stage ?? "unknown",
+      },
+      "_runCampaignCalls crashed",
+    );
+    throw err;
   } finally {
     activeCampaignRuns.delete(campaignId);
     logger.info({ campaignId }, "Campaign run lock released");
+  }
+}
+
+// Wrap an await with a stage label so a crash inside is reported with its origin.
+async function stage<T>(stageName: string, campaignId: number, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const e = err as Error & { __stage?: string };
+    if (!e.__stage) e.__stage = stageName;
+    logger.error(
+      { campaignId, stage: stageName, errMessage: e?.message, errStack: e?.stack },
+      `Campaign stage failed: ${stageName}`,
+    );
+    throw err;
   }
 }
 
@@ -664,7 +691,8 @@ async function allocateNumber(campaignId: number, fallbackNumber: string): Promi
 }
 
 async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
-  const { script, voiceName, voiceProvider, fromNumber, transferNumber, backgroundSound, holdMusicUrl } = await resolveCampaignAssets(campaignId, campaign);
+  const { script, voiceName, voiceProvider, fromNumber, transferNumber, backgroundSound, holdMusicUrl } =
+    await stage("resolveCampaignAssets", campaignId, () => resolveCampaignAssets(campaignId, campaign));
 
   const retryAttempts = campaign.retryAttempts ?? 2;
   const retryIntervalMs = (campaign.retryIntervalMinutes ?? 60) * 60 * 1000;
@@ -673,7 +701,7 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
   let msPerCall = Math.floor(60_000 / dialingSpeed);
 
   // Build DNC set once for the entire run
-  const dncSet = await buildDncSet();
+  const dncSet = await stage("buildDncSet", campaignId, () => buildDncSet());
 
   // Fetch dialable leads: pending + called (called = previously attempted, retry allowed).
   // Includes leads directly attached to the campaign AND leads belonging to any
