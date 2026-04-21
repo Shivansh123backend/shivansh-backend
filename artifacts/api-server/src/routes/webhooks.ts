@@ -1154,12 +1154,16 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       logger.info({ callControlId, result }, "AMD result");
 
       // ── Human detected: cancel deferred-greet timer and start the conversation ──
-      if (result === "human") {
+      // Telnyx Premium AMD returns granular results: "human", "human_residence",
+      // "human_business" — all of these are humans. Match the prefix, not just
+      // the literal "human" (the previous strict check missed _residence and
+      // _business, leaving the AI silent for 5+ seconds until the caller spoke).
+      if (result.startsWith("human")) {
         const t = pendingAmdGreet.get(callControlId);
         if (t) {
           clearTimeout(t);
           pendingAmdGreet.delete(callControlId);
-          logger.info({ callControlId }, "AMD confirmed human — starting transcription + greeting");
+          logger.info({ callControlId, result }, "AMD confirmed human — starting transcription + greeting");
           await startTranscriptionAndGreet(callControlId).catch((err) =>
             logger.error({ err: String(err), callControlId }, "AMD-gated greet failed")
           );
