@@ -566,6 +566,17 @@ export default function LiveMonitorPage() {
     setEvents(prev => [...prev.slice(-199), ev]); // keep last 200
   }, []);
 
+  // Clear the event stream when no calls are active. This keeps the panel
+  // clean — historical noise from yesterday's runs or completed calls doesn't
+  // linger once the system goes idle. Events repopulate as soon as a new call
+  // starts. We delay 5s so the "Call ended" event stays visible briefly.
+  useEffect(() => {
+    if (activeCalls.size === 0 && events.length > 0) {
+      const t = setTimeout(() => setEvents([]), 5_000);
+      return () => clearTimeout(t);
+    }
+  }, [activeCalls.size, events.length]);
+
   // Fetch initial live calls snapshot
   useEffect(() => {
     customFetch<{ id: number; status: string; campaignId?: number; leadId?: number; providerUsed?: string; selectedNumber?: string }[]>("/api/calls/live").then(data => {
