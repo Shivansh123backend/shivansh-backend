@@ -301,7 +301,11 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
     recordingUrl: string | null;
     transcript: string | null;
     summary: string | null;
+    // We expose the same ISO string under multiple keys so any frontend wins:
+    // `timestamp` (legacy), `dialedAt` (CDR convention), `createdAt` (Drizzle name).
     timestamp: string;
+    dialedAt: string;
+    createdAt: string;
   };
 
   // Dedupe: webhook handler mirrors finalized state from call_logs into calls,
@@ -334,6 +338,8 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
       transcript: r.transcript ?? null,
       summary: r.summary ?? null,
       timestamp: (r.createdAt ?? new Date()).toISOString(),
+      dialedAt:  (r.createdAt ?? new Date()).toISOString(),
+      createdAt: (r.createdAt ?? new Date()).toISOString(),
     })),
     ...logRows.map(r => ({
       id: `l-${r.id}`,
@@ -350,6 +356,8 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
       transcript: r.transcript ?? null,
       summary: r.summary ?? null,
       timestamp: (r.timestamp ?? new Date()).toISOString(),
+      dialedAt:  (r.timestamp ?? new Date()).toISOString(),
+      createdAt: (r.timestamp ?? new Date()).toISOString(),
     })),
   ];
 
