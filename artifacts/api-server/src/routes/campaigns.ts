@@ -86,6 +86,82 @@ router.post("/campaigns/create", authenticate, requireRole("admin"), async (req,
   res.status(201).json(campaign);
 });
 
+// ── DRAFT campaign system ─────────────────────────────────────────────────────
+// Lenient create — only `name` is required. Everything else can be filled in
+// later via PATCH /campaigns/:id. The campaign is forced to status="draft" so
+// the dialer never picks it up until the user explicitly launches it.
+//
+// Frontend usage:
+//   POST /campaigns/draft  { name?: "Untitled draft", ...partial fields }
+//     → returns { id, ...row }  — store the id in component state and use
+//       PATCH /campaigns/:id for every subsequent autosave
+//   GET  /campaigns/drafts → list everything where status='draft' (so the user
+//       can resume an in-progress draft from the campaigns list)
+const draftCampaignSchema = z.object({
+  name: z.string().min(1).default("Untitled draft"),
+  agentId: z.number().nullish(),
+  type: z.enum(["outbound", "inbound", "both"]).optional(),
+  routingType: z.enum(["ai", "human", "ai_then_human"]).optional(),
+  agentPrompt: z.string().nullish(),
+  knowledgeBase: z.string().nullish(),
+  recordingNotes: z.string().nullish(),
+  voice: z.string().nullish(),
+  voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).nullish(),
+  fromNumber: z.string().nullish(),
+  transferNumber: z.string().nullish(),
+  transferRules: z.string().nullish(),
+  maxConcurrentCalls: z.number().min(1).max(100).optional(),
+  backgroundSound: z.enum(["none", "office", "typing", "cafe"]).optional(),
+  holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).optional(),
+  humanLike: z.string().optional(),
+  dialingMode: z.enum(["manual", "progressive", "predictive", "preview"]).optional(),
+  dialingRatio: z.number().min(1).max(20).nullish(),
+  dialingSpeed: z.number().min(1).max(120).nullish(),
+  dropRateLimit: z.number().min(1).max(50).nullish(),
+  retryAttempts: z.number().min(0).max(10).nullish(),
+  retryIntervalMinutes: z.number().min(1).max(1440).nullish(),
+  workingHoursStart: z.string().nullish(),
+  workingHoursEnd: z.string().nullish(),
+  workingHoursTimezone: z.string().nullish(),
+  amdEnabled: z.boolean().optional(),
+  tcpaEnabled: z.boolean().optional(),
+  vmDropMessage: z.string().nullish(),
+  region: z.enum(["US", "UK", "CA", "AU", "IN", "OTHER"]).nullish(),
+  accent: z.enum(["US", "UK", "neutral"]).nullish(),
+  voiceProfile: z.string().nullish(),
+});
+
+router.post("/campaigns/draft", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const parsed = draftCampaignSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const [campaign] = await db
+    .insert(campaignsTable)
+    .values({ ...parsed.data, status: "draft" })
+    .returning();
+
+  await createAuditLog({
+    userId: req.user?.userId,
+    action: "create_draft",
+    resource: "campaign",
+    resourceId: campaign.id,
+  });
+
+  res.status(201).json(campaign);
+});
+
+router.get("/campaigns/drafts", authenticate, async (_req, res): Promise<void> => {
+  const drafts = await db
+    .select()
+    .from(campaignsTable)
+    .where(eq(campaignsTable.status, "draft"))
+    .orderBy(desc(campaignsTable.updatedAt));
+  res.json(drafts);
+});
+
 router.get("/campaigns", authenticate, async (req, res): Promise<void> => {
   const campaigns = await db.select().from(campaignsTable);
   res.json(campaigns);
