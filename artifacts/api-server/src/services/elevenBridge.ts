@@ -604,7 +604,13 @@ export function initBridge(
   info: Omit<BridgeInfo, "transcript" | "pendingTransfer" | "callControlId">
 ): void {
   const sessionToken = makeSessionToken();
-  const useCustomBridge = isCustomBridgeAvailable();
+  // Route by selected voice provider:
+  //   - elevenlabs → ElevenLabs ConvAI path (so all 9 ElevenLabs voices actually swap)
+  //   - cartesia / deepgram / unset → custom Deepgram+GPT+Cartesia bridge
+  // Without this gate, every campaign was forced through Cartesia, so
+  // changing the ElevenLabs voice in the dashboard had no audible effect.
+  const useCustomBridge =
+    isCustomBridgeAvailable() && info.voiceProvider !== "elevenlabs";
   activeBridges.set(callControlId, {
     ...info,
     callControlId,
