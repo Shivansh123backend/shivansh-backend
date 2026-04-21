@@ -97,7 +97,26 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
     // AMD is always-on (premium) for outbound calls. The AI greeting is gated
     // on the webhook's `call.machine.premium.detection.ended` result so the
     // bot never speaks until a real human is on the line.
-    body.answering_machine_detection = payload.amd_enabled === "false" ? "disabled" : "premium";
+    if (payload.amd_enabled !== "false") {
+      body.answering_machine_detection = "premium";
+      // Tune for faster human/machine decision (Vapi-style ~1.5-2s):
+      // - cap total analysis time so AMD never delays us past 2.5s
+      // - shorter "after greeting silence" makes "Hello?" trigger human faster
+      body.answering_machine_detection_config = {
+        total_analysis_time_millis: 2500,
+        after_greeting_silence_millis: 600,
+        between_words_silence_millis: 50,
+        greeting_duration_millis: 2500,
+        initial_silence_millis: 2500,
+        maximum_number_of_words: 5,
+        maximum_word_length_millis: 2500,
+        silence_threshold: 256,
+        greeting_total_analysis_time_millis: 2500,
+        greeting_silence_duration_millis: 1200,
+      };
+    } else {
+      body.answering_machine_detection = "disabled";
+    }
 
     const response = await axios.post(`${TELNYX_API_BASE}/calls`, body, {
       headers: {

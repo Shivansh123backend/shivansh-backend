@@ -1689,6 +1689,79 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       logger.info({ callControlId, transcript: transcript.slice(0, 100) }, "Final transcription accepted");
 
+      // ── VM DETECTION FALLBACK (Vapi-style) ──────────────────────────────────
+      // Telnyx AMD misses ~10-20% of voicemails (especially modern carrier VMs).
+      // Catch them here by scanning transcription for unmistakable VM phrases.
+      // If we haven't greeted yet (greetStarted flag), it's safe to drop a VM
+      // message rather than launching into a sales pitch on someone's machine.
+      if (!greetStarted.has(callControlId)) {
+        const tLow = transcript.toLowerCase();
+        const VM_PATTERNS = [
+          /leave (a |your )?(message|name|number)/,
+          /after (the |a )?(beep|tone)/,
+          /at the tone/,
+          /please record/,
+          /not available (right now|to take|to answer)/,
+          /(can'?t|cannot) (come to|answer|take)/,
+          /your call has been forwarded/,
+          /voice ?mail/,
+          /press (1|one|pound|the pound key) (to|for)/,
+          /reached the voicemail/,
+          /is unavailable/,
+          /please (try (your call )?again|hang up)/,
+          /the (person|number|subscriber) you (have |are )?(dialed|called|trying)/,
+          /no longer in service/,
+          /thank you for calling.{0,40}(please|leave|hold)/,
+        ];
+        if (VM_PATTERNS.some((re) => re.test(tLow))) {
+          logger.info({ callControlId, transcript: transcript.slice(0, 120) }, "VM detected via transcription — switching to VM drop flow");
+          // Cancel any pending greet; mark greeted so the fast-path doesn't re-fire
+          const tmr = pendingAmdGreet.get(callControlId);
+          if (tmr) { clearTimeout(tmr); pendingAmdGreet.delete(callControlId); }
+          greetStarted.add(callControlId);
+
+          const bridge = getBridgeInfo(callControlId);
+          if (bridge?.campaignId) {
+            const [camp] = await db
+              .select({ vmDropMessage: campaignsTable.vmDropMessage })
+              .from(campaignsTable)
+              .where(eq(campaignsTable.id, bridge.campaignId));
+            const defaultVm =
+              `Hi, this is ${bridge.agentName ?? "your agent"} calling from ${bridge.campaignName ?? "our team"}. ` +
+              `I tried to reach you to check in on your requirements. ` +
+              `If there's anything you need, please give us a call back whenever you're available. Thank you.`;
+            const vmMessage = (camp?.vmDropMessage && camp.vmDropMessage.trim()) || defaultVm;
+            try {
+              const voiceId = bridge.voiceId ?? DEFAULT_ELEVEN_VOICE;
+              const audioUrl = await generateTTSWithFallback(vmMessage, voiceId, (bridge.voiceProvider ?? "elevenlabs") as VoiceProvider);
+              // Wait ~1.5s so we land after the VM beep (heuristic — beep usually within 1-2s of VM phrase)
+              setTimeout(async () => {
+                try {
+                  await telnyxAction(callControlId, "playback_start", {
+                    audio_url: audioUrl,
+                    overlay: false,
+                    stop_condition: "detecting_silence",
+                  });
+                  pendingVmDropHangup.add(callControlId);
+                  bridge.transcript.push(`AI Agent (VM Drop via transcription): ${vmMessage}`);
+                  logger.info({ callControlId }, "VM drop (transcription path) playing — will hang up on playback.ended");
+                } catch (e) {
+                  logger.warn({ callControlId, err: String(e) }, "VM drop playback failed — hanging up");
+                  try { await telnyxAction(callControlId, "hangup", {}); } catch { /* ignore */ }
+                }
+              }, 1500);
+            } catch (err) {
+              logger.warn({ err: String(err), callControlId }, "VM drop TTS failed — hanging up");
+              try { await telnyxAction(callControlId, "hangup", {}); } catch { /* ignore */ }
+            }
+            return;
+          }
+          // No campaign context — just hang up
+          try { await telnyxAction(callControlId, "hangup", {}); } catch { /* ignore */ }
+          return;
+        }
+      }
+
       // ── FAST-PATH: caller spoke before AMD finished — fire greeting NOW ─────────
       // If we're still waiting for AMD to complete, the caller's voice is
       // definitive proof they're a human (voicemails don't say "Hello?" and
