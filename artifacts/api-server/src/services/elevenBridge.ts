@@ -501,10 +501,18 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
       }
 
       if (bridge.useCustomBridge) {
-        // Deepgram + GPT-4o + Cartesia (Vapi-level quality)
+        // Deepgram + GPT-4o + Cartesia (Vapi-level quality).
+        // CRITICAL: pass through the campaign-selected voiceId so voice changes
+        // in the dashboard actually take effect. Without this, the custom bridge
+        // silently falls back to the global default Cartesia voice and every
+        // call sounds the same regardless of what the user picks.
         connectCustomBridge(callControlId, {
           systemPrompt: bridge.systemPrompt,
           firstMessage: bridge.firstMessage,
+          // Only forward voiceId if it's actually a Cartesia voice — passing an
+          // ElevenLabs ID into Cartesia rejects the stream. Falls back to the
+          // bridge's built-in default Cartesia voice when provider mismatches.
+          cartesiaVoiceId: bridge.voiceProvider === "cartesia" ? bridge.voiceId : undefined,
           telnyxWs: ws,
           accent: bridge.accent,
           region: bridge.region,
