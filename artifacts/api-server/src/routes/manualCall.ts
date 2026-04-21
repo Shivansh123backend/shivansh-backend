@@ -4,6 +4,7 @@ import { campaignsTable, aiAgentsTable, voicesTable, phoneNumbersTable } from "@
 import { eq, and, asc, desc } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { triggerCall } from "../services/workerService.js";
+import { normalisePhone } from "../lib/phone.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -43,7 +44,15 @@ async function handleManualCall(req: import("express").Request, res: import("exp
     return;
   }
 
-  const { phone, campaign_id, fromOverride } = parsed.data;
+  const { phone: rawPhone, campaign_id, fromOverride } = parsed.data;
+
+  // Normalise the dialed number to E.164 so Telnyx accepts any common
+  // user-entered format (e.g. "813-872-4841", "8138724841", "(813) 872-4841").
+  const phone = normalisePhone(rawPhone);
+  if (!phone) {
+    res.status(400).json({ error: "Invalid phone number — must contain 10–15 digits" });
+    return;
+  }
 
   // Defaults for ad-hoc / agent-initiated dials (no campaign attached)
   let script = DEFAULT_AGENT_SCRIPT;
