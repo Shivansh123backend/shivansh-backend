@@ -276,7 +276,7 @@ async function connectToElevenLabs(
             similarity_boost: 0.85,        // expressive, in-character voice
             style: 0.55,                   // strong expressiveness — emotion, warmth, natural pitch contour
             use_speaker_boost: true,
-            speed: 1.0,                    // natural conversational pace
+            speed: 0.9,                    // slightly slower, more deliberate pace
           },
           // Make numbers, abbreviations, and symbols read naturally ("$50" → "fifty dollars",
           // "Dr." → "doctor"). Without this the AI says "dollar sign five zero" — VERY robotic.
