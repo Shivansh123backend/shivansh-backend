@@ -1297,7 +1297,7 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       }
 
       const { campaign, agentName, systemPrompt, voiceId: inboundVoiceId, voiceProvider: inboundVoiceProvider, holdMusicUrl: inboundHoldMusicUrl, effectiveTransferNumber } = result;
-      const firstMessage = `Hey... thanks for calling ${campaign.name}. I'm ${agentName} — how can I help you today?`;
+      const firstMessage = `Thank you for calling ${campaign.name}, this is ${agentName}. How may I help you today?`;
 
       logger.info(
         { callControlId, campaignId: campaign.id, agentName, voiceId: inboundVoiceId, effectiveTransferNumber },

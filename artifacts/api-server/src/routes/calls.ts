@@ -561,7 +561,7 @@ router.post("/calls/:callControlId/conference", authenticate, requireRole("admin
 
   const apiKey       = process.env.TELNYX_API_KEY;
   const connectionId = process.env.TELNYX_CONNECTION_ID ?? "2935188068224730263";
-  const webhookUrl   = `${process.env.WEBHOOK_BASE_URL ?? "https://shivanshbackend.replit.app"}/api/webhooks/telnyx`;
+  const webhookUrl   = `${process.env.WEBHOOK_BASE_URL ?? "https://api.shivanshagent.cloudisoft.com"}/api/webhooks/telnyx`;
 
   if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
 
@@ -603,6 +603,97 @@ router.post("/calls/:callControlId/conference", authenticate, requireRole("admin
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(502).json({ error: "Conference dial failed", detail: msg });
+  }
+});
+
+// ── POST /calls/:callControlId/hangup ─────────────────────────────────────────
+// Force-end an in-progress call. Used by supervisors and the softphone.
+router.post("/calls/:callControlId/hangup", authenticate, async (req, res): Promise<void> => {
+  const { callControlId } = req.params as { callControlId: string };
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
+
+  try {
+    await axios.post(
+      `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/hangup`,
+      {},
+      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
+    );
+    res.json({ ok: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: "Hangup failed", detail: msg });
+  }
+});
+
+// ── POST /calls/:callControlId/hold ───────────────────────────────────────────
+// Place the remote leg on hold (silence + optional hold music).
+router.post("/calls/:callControlId/hold", authenticate, async (req, res): Promise<void> => {
+  const { callControlId } = req.params as { callControlId: string };
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
+
+  // Telnyx doesn't have a native "hold" — we simulate by muting both directions
+  // via stop_audio + a no-op. Concretely: stop any playing audio and start a
+  // looped tone (or silence). We use playback_stop + playback_start with a 1s
+  // silent payload looped indefinitely.
+  try {
+    await axios.post(
+      `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/playback_start`,
+      {
+        audio_url: "https://api.shivanshagent.cloudisoft.com/static/hold-music.mp3",
+        loop: "infinity",
+        target_legs: "self",
+      },
+      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
+    );
+    res.json({ ok: true, held: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: "Hold failed", detail: msg });
+  }
+});
+
+// ── POST /calls/:callControlId/unhold ─────────────────────────────────────────
+router.post("/calls/:callControlId/unhold", authenticate, async (req, res): Promise<void> => {
+  const { callControlId } = req.params as { callControlId: string };
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
+
+  try {
+    await axios.post(
+      `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/playback_stop`,
+      {},
+      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
+    );
+    res.json({ ok: true, held: false });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: "Unhold failed", detail: msg });
+  }
+});
+
+// ── POST /calls/:callControlId/transfer ───────────────────────────────────────
+// Blind transfer: move the caller to a new destination (E.164) and drop the AI.
+const transferToSchema = z.object({ to: z.string().regex(E164_RE, "to must be E.164") });
+router.post("/calls/:callControlId/transfer", authenticate, async (req, res): Promise<void> => {
+  const { callControlId } = req.params as { callControlId: string };
+  const parsed = transferToSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.issues[0]?.message }); return; }
+
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
+
+  try {
+    await axios.post(
+      `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/transfer`,
+      { to: parsed.data.to },
+      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
+    );
+    res.json({ ok: true, transferredTo: parsed.data.to });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: "Transfer failed", detail: msg });
   }
 });
 
