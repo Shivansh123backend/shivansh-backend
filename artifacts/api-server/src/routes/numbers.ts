@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { phoneNumbersTable, campaignsTable } from "@workspace/db";
-import { eq, notInArray, isNull, or } from "drizzle-orm";
+import { eq, notInArray, isNull, or, sql } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { z } from "zod";
 import axios from "axios";
