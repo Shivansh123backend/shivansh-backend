@@ -157,27 +157,35 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
 
   const campaignId = campaignIdRaw ? parseInt(String(campaignIdRaw), 10) : null;
 
-  // Outbound records — from calls table
-  let outboundRows: typeof callsTable.$inferSelect[] = [];
+  // Outbound records — historically split between `calls` and `call_logs`. The
+  // active outbound writer (webhooks.ts) writes finalized rows to `call_logs`,
+  // so we read from both and merge to be safe across legacy + current data.
+  let outboundFromCalls: typeof callsTable.$inferSelect[] = [];
   if (!directionRaw || directionRaw === "outbound") {
-    const q = db.select().from(callsTable).orderBy(desc(callsTable.createdAt)).limit(limit);
     if (campaignId && !isNaN(campaignId)) {
-      outboundRows = await db.select().from(callsTable)
+      outboundFromCalls = await db.select().from(callsTable)
         .where(eq(callsTable.campaignId, campaignId))
         .orderBy(desc(callsTable.createdAt)).limit(limit);
     } else {
-      outboundRows = await q;
+      outboundFromCalls = await db.select().from(callsTable)
+        .orderBy(desc(callsTable.createdAt)).limit(limit);
     }
   }
 
-  // Inbound records — from call_logs table where direction = 'inbound'
-  let inboundRows: typeof callLogsTable.$inferSelect[] = [];
-  if (!directionRaw || directionRaw === "inbound") {
-    const baseWhere = campaignId && !isNaN(campaignId)
-      ? and(eq(callLogsTable.direction, "inbound"), eq(callLogsTable.campaignId, campaignId))
-      : eq(callLogsTable.direction, "inbound");
-    inboundRows = await db.select().from(callLogsTable)
-      .where(baseWhere)
+  // ALL rows from call_logs (both inbound and outbound) — filtered by the
+  // requested direction (or unfiltered if `directionRaw` is empty).
+  let logRows: typeof callLogsTable.$inferSelect[] = [];
+  {
+    const conds = [];
+    if (directionRaw === "inbound" || directionRaw === "outbound") {
+      conds.push(eq(callLogsTable.direction, directionRaw));
+    }
+    if (campaignId && !isNaN(campaignId)) {
+      conds.push(eq(callLogsTable.campaignId, campaignId));
+    }
+    const whereClause = conds.length > 1 ? and(...conds) : conds[0];
+    const baseQuery = db.select().from(callLogsTable);
+    logRows = await (whereClause ? baseQuery.where(whereClause) : baseQuery)
       .orderBy(desc(callLogsTable.timestamp))
       .limit(limit);
   }
@@ -200,12 +208,23 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
     timestamp: string;
   };
 
+  // Dedupe: webhook handler mirrors finalized state from call_logs into calls,
+  // so the same physical call can exist in both. call_logs has the more complete
+  // post-call data, so drop any `calls` row whose externalCallId matches a
+  // call_logs row's callControlId.
+  const logCallControlIds = new Set(
+    logRows.map(r => r.callControlId).filter((x): x is string => !!x),
+  );
+  const dedupedOutbound = outboundFromCalls.filter(
+    r => !r.externalCallId || !logCallControlIds.has(r.externalCallId),
+  );
+
   const unified: CdrRow[] = [
-    ...outboundRows.map(r => ({
+    ...dedupedOutbound.map(r => ({
       id: `c-${r.id}`,
       source: "calls" as const,
       direction: "outbound" as const,
-      phoneNumber: r.phoneNumber ?? null,
+      phoneNumber: null,                 // calls table joins via leadId; phone resolved client-side
       campaignId: r.campaignId ?? null,
       leadId: r.leadId ?? null,
       providerUsed: r.providerUsed ?? null,
@@ -217,10 +236,10 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
       summary: r.summary ?? null,
       timestamp: (r.createdAt ?? new Date()).toISOString(),
     })),
-    ...inboundRows.map(r => ({
+    ...logRows.map(r => ({
       id: `l-${r.id}`,
       source: "call_logs" as const,
-      direction: "inbound" as const,
+      direction: (r.direction === "inbound" ? "inbound" : "outbound") as "inbound" | "outbound",
       phoneNumber: r.phoneNumber ?? null,
       campaignId: r.campaignId ?? null,
       leadId: null,
