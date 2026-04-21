@@ -497,9 +497,25 @@ async function triggerCampaignCalls(campaignId: number, campaign: typeof campaig
 
 /** Pick an available number from the global pool for a campaign.
  *  Priority: not busy, not blocked, spamScore < 70, lowest usageCount first.
- *  Falls back to the campaign's configured fromNumber if no pool number is free. */
+ *  Falls back to the campaign's configured fromNumber if no pool number is free.
+ *
+ *  Selected-number contract: if the user has explicitly assigned ≥1 number to
+ *  this campaign (via /campaigns/:id/numbers), we ONLY rotate through those
+ *  numbers. We never silently fall back to unassigned floating numbers — that
+ *  would let calls go out from numbers the user didn't pick. Only when the
+ *  campaign has zero assigned numbers do we use the unassigned pool. */
 async function allocateNumber(campaignId: number, fallbackNumber: string): Promise<string> {
-  // Try pool numbers assigned to this campaign first, then any active pool number
+  // Are there any numbers explicitly assigned to this campaign?
+  const [assignedRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(phoneNumbersTable)
+    .where(eq(phoneNumbersTable.campaignId, campaignId));
+  const hasAssigned = (assignedRow?.count ?? 0) > 0;
+
+  const scopeFilter = hasAssigned
+    ? eq(phoneNumbersTable.campaignId, campaignId)
+    : sql`${phoneNumbersTable.campaignId} IS NULL`;
+
   const [poolRow] = await db
     .select({ phoneNumber: phoneNumbersTable.phoneNumber })
     .from(phoneNumbersTable)
@@ -510,7 +526,7 @@ async function allocateNumber(campaignId: number, fallbackNumber: string): Promi
         eq(phoneNumbersTable.isBlocked, false),
         sql`${phoneNumbersTable.spamScore} < 70`,
         sql`${phoneNumbersTable.direction} IN ('outbound', 'both')`,
-        sql`(${phoneNumbersTable.campaignId} = ${campaignId} OR ${phoneNumbersTable.campaignId} IS NULL)`
+        scopeFilter,
       )
     )
     .orderBy(asc(phoneNumbersTable.usageCount), asc(phoneNumbersTable.spamScore))

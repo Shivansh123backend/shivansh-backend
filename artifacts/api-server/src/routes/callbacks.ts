@@ -231,6 +231,16 @@ export async function startCallbackScheduler(): Promise<void> {
         // active outbound number from the pool. NEVER drop the callback silently.
         let fromNumber = campaign.fromNumber;
         if (!fromNumber) {
+          // Mirror allocateNumber's selected-number contract: prefer numbers
+          // explicitly assigned to the campaign, otherwise fall back to the
+          // unassigned pool. Never mix the two.
+          const [assignedRow] = await db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(phoneNumbersTable)
+            .where(eq(phoneNumbersTable.campaignId, campaign.id));
+          const scopeFilter = (assignedRow?.count ?? 0) > 0
+            ? eq(phoneNumbersTable.campaignId, campaign.id)
+            : sql`${phoneNumbersTable.campaignId} IS NULL`;
           const [poolRow] = await db
             .select({ phoneNumber: phoneNumbersTable.phoneNumber })
             .from(phoneNumbersTable)
@@ -239,7 +249,7 @@ export async function startCallbackScheduler(): Promise<void> {
                 eq(phoneNumbersTable.status, "active"),
                 eq(phoneNumbersTable.isBlocked, false),
                 sql`${phoneNumbersTable.direction} IN ('outbound', 'both')`,
-                sql`(${phoneNumbersTable.campaignId} = ${campaign.id} OR ${phoneNumbersTable.campaignId} IS NULL)`
+                scopeFilter,
               )
             )
             .orderBy(asc(phoneNumbersTable.usageCount))
