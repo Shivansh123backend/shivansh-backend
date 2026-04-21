@@ -21,7 +21,8 @@ router.get("/dnc", authenticate, async (_req, res): Promise<void> => {
 
   // Hide pure score-cache rows (not blocking) from the list view — they're
   // only there to speed up future lookups, not to surface to the user.
-  const visible = list.filter(r => !r.autoBlocked || (r.spamScore ?? 0) >= BLOCK_THRESHOLD || r.reason !== null);
+  // A row is a real block iff it was auto-blocked OR has a manual reason.
+  const visible = list.filter(r => r.autoBlocked || r.reason !== null);
   res.json(visible);
 });
 
@@ -38,13 +39,21 @@ router.post("/dnc", authenticate, requireRole("admin"), async (req, res): Promis
   }
   const { phone_number, reason } = parsed.data;
   const normalised = phone_number.replace(/[^\d+]/g, "");
+  // A row only counts as "blocking" when reason IS NOT NULL or autoBlocked=true.
+  // Callers often submit a blank reason — default to "Manual block" so the entry
+  // actually blocks. Upsert (not onConflictDoNothing) so an existing non-blocking
+  // score-cache row gets promoted to a real block instead of silently ignored.
+  const effectiveReason = (reason && reason.trim().length > 0) ? reason.trim() : "Manual block";
   try {
     const [entry] = await db
       .insert(dncListTable)
-      .values({ phoneNumber: normalised, reason })
-      .onConflictDoNothing()
+      .values({ phoneNumber: normalised, reason: effectiveReason })
+      .onConflictDoUpdate({
+        target: dncListTable.phoneNumber,
+        set: { reason: effectiveReason },
+      })
       .returning();
-    res.status(201).json(entry ?? { message: "Already exists" });
+    res.status(201).json(entry);
   } catch (err) {
     logger.warn({ err }, "DNC insert failed");
     res.status(400).json({ error: "Could not add to DNC list" });
@@ -60,20 +69,25 @@ router.post("/dnc/import", authenticate, requireRole("admin"), async (req, res):
     res.status(400).json({ error: "Provide an array of phone numbers in 'numbers'" });
     return;
   }
+  // Each row needs a non-null reason to actually block (see POST /dnc for the rule).
   const normalised = parsed.data.numbers
     .map(n => n.replace(/[^\d+]/g, ""))
     .filter(n => n.length >= 7)
-    .map(phoneNumber => ({ phoneNumber }));
+    .map(phoneNumber => ({ phoneNumber, reason: "Bulk import" }));
 
   if (normalised.length === 0) {
     res.status(400).json({ error: "No valid numbers found" });
     return;
   }
 
+  // Upsert so existing non-blocking score-cache rows get promoted to blocks.
   const inserted = await db
     .insert(dncListTable)
     .values(normalised)
-    .onConflictDoNothing()
+    .onConflictDoUpdate({
+      target: dncListTable.phoneNumber,
+      set: { reason: "Bulk import" },
+    })
     .returning();
 
   logger.info({ count: inserted.length }, "DNC bulk import");

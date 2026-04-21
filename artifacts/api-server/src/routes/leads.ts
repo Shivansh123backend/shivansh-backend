@@ -38,10 +38,18 @@ function normalisePhone(raw: string | undefined | null): string | null {
   return s.startsWith("+") ? s : digits;
 }
 
-/** Build a normalised set of all DNC phone numbers for fast O(1) lookup. */
+/** Build a normalised set of all DNC phone numbers for fast O(1) lookup.
+ *  Skips non-blocking score-cache rows (autoBlocked=false, reason=null) that
+ *  the spam-check service writes purely to memoize Telnyx lookups. */
 async function fetchDncSet(): Promise<Set<string>> {
-  const rows = await db.select({ phone: dncListTable.phoneNumber }).from(dncListTable);
-  return new Set(rows.map(r => r.phone.replace(/[^\d+]/g, "")));
+  const rows = await db
+    .select({ phone: dncListTable.phoneNumber, autoBlocked: dncListTable.autoBlocked, reason: dncListTable.reason })
+    .from(dncListTable);
+  return new Set(
+    rows
+      .filter(r => r.autoBlocked || r.reason !== null)
+      .map(r => r.phone.replace(/[^\d+]/g, "")),
+  );
 }
 
 /** Insert rows in batches of BATCH_SIZE with BATCH_DELAY_MS between each batch. */

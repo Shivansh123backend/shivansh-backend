@@ -467,9 +467,16 @@ function isWithinWorkingHours(campaign: typeof campaignsTable.$inferSelect): boo
 }
 
 // ── DNC lookup (cached in-memory for the duration of a campaign run) ──────────
+// IMPORTANT: dnc_list also contains NON-BLOCKING score-cache rows (autoBlocked=false,
+// reason=null) written by the spam-check service just to memoize Telnyx lookups.
+// Those must NOT be treated as DNC blocks. A row is a real block only if
+// autoBlocked=true (spam auto-block) OR reason is set (manual POST /dnc entry).
 async function buildDncSet(): Promise<Set<string>> {
-  const rows = await db.select({ phone: dncListTable.phoneNumber }).from(dncListTable);
-  return new Set(rows.map(r => r.phone.replace(/[^\d+]/g, "")));
+  const rows = await db
+    .select({ phone: dncListTable.phoneNumber, autoBlocked: dncListTable.autoBlocked, reason: dncListTable.reason })
+    .from(dncListTable);
+  const blockingRows = rows.filter(r => r.autoBlocked || r.reason !== null);
+  return new Set(blockingRows.map(r => r.phone.replace(/[^\d+]/g, "")));
 }
 
 async function triggerCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
