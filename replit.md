@@ -198,6 +198,16 @@ Deployed to 2-VPS Hostinger setup (Ubuntu 22.04, Node 20 LTS, PM2):
 - **Worker process intentionally removed** from PM2 (no `worker` script in api-server package.json — schedulers run inside the api process). Re-add when a real worker entrypoint exists + Redis is provisioned.
 - Optional env not yet set: `TELNYX_PUBLIC_KEY` (webhook signature verify), `CARTESIA_VOICE_ID`, `REDIS_*`, `RESEND_API_KEY`/`SENDGRID_API_KEY`
 
+## Greeting Dead-Air Bug Fix (2026-04-21)
+
+Caller experience: AI greeted, caller said "Hello" overlapping the greeting → 7s of dead air → AI re-greeted. Root cause was a feedback loop in `routes/webhooks.ts`:
+1. Buffered "Hello" replayed correctly when greeting ended → LLM started generating
+2. LLM took ~3s → caller said "Yes" filling silence → "Yes" aborted in-flight LLM and restarted (another 3s) → 7s total silence
+
+**Fix 1**: Narrow `PICKUP_GREETINGS_ONLY` set (hello/hi/hey/yo/hiya only — NOT yes/ok) discarded as a no-op when it's the caller's first turn, since our greeting already opened the conversation. "Yes"/"ok" deliberately excluded so they remain valid answers to "Am I speaking with <name>?".
+
+**Fix 2**: In `handleCallerTurn` buffering branch, do NOT abort an in-flight LLM if the new caller text is a short filler (`yes/ok/uh-huh/hello/...` or <4 chars) — let the original reply finish instead of restarting from scratch.
+
 ## VICIdial Feature Gaps Closed (2026-04-21)
 
 All 6 gaps now live in production at `https://api.shivanshagent.cloudisoft.com`:

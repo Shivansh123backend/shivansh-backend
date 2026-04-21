@@ -540,6 +540,21 @@ async function handleCallerTurn(callControlId: string, callerText: string): Prom
     // and exits cleanly without speaking calm filler — the wrapper below then
     // replays the buffered text immediately for a fresh LLM call.
     if (!aiSpeaking.has(callControlId)) {
+      // Don't abort the in-flight LLM if the new caller text is just a short
+      // backchannel/filler word ("yes", "ok", "hello", "uh huh"). These are
+      // usually the caller filling silence while waiting for our reply — if
+      // we abort and restart on every "yes", the LLM never finishes and the
+      // caller hears 7+ seconds of dead air.
+      const newNorm = callerText.trim().toLowerCase().replace(/[.,!?]+$/g, "").trim();
+      const SHORT_FILLERS = new Set([
+        "yeah", "yes", "yep", "yup", "ok", "okay", "k", "mhm", "mm", "mmhm",
+        "uh huh", "uhhuh", "uh-huh", "huh", "hmm", "hm", "right", "sure",
+        "oh", "ah", "alright", "hello", "hi", "hey",
+      ]);
+      if (SHORT_FILLERS.has(newNorm) || newNorm.length < 4) {
+        logger.info({ callControlId, newText: newNorm }, "Short filler during LLM generation — letting in-flight reply finish");
+        return;
+      }
       const ctrl = inflightLlmAbort.get(callControlId);
       if (ctrl) {
         llmRestartFlag.add(callControlId);
@@ -605,10 +620,34 @@ async function _handleCallerTurnInner(callControlId: string, callerText: string)
     "uh huh", "uhhuh", "uh-huh", "huh", "hmm", "hm", "right", "sure",
     "so", "well", "and", "but", "oh", "ah", "ha", "alright", "got it",
     "gotcha", "i see", "i hear you", "for sure", "true", "exactly",
+    // Pickup greetings — caller's natural "hello/hi" when answering the phone.
+    // These add no information to the conversation and must NEVER trigger a
+    // fresh LLM turn (which would just produce a redundant "Hi, this is Alex…"
+    // response on top of the greeting that already played).
+    "hello", "hi", "hey", "yo", "hiya", "hellooo", "hii",
   ]);
   const normalized = clean.toLowerCase().replace(/[.,!?]+$/g, "").trim();
   if (aiSpeaking.has(callControlId) && BACKCHANNELS.has(normalized)) {
     logger.info({ callControlId, callerText: clean }, "Backchannel during AI speech — ignoring (not a real interruption)");
+    return;
+  }
+  // ── Discard pickup-greeting buffer after our greeting ends ───────────────
+  // If the only thing the caller said during our opening greeting was a pure
+  // "hello"-type acknowledgement (NOT a confirmation like "yes"/"ok"), do not
+  // replay it as a turn. Our greeting already opened with an identity question
+  // — responding to "hello" would just produce a duplicate intro and waste 3 s
+  // of LLM time, during which the caller hears dead air and starts talking
+  // again, which then aborts/restarts the LLM and creates the 7-second silence
+  // that callers complained about.
+  // IMPORTANT: keep this set NARROW — it must NEVER include "yes"/"ok"/"sure"
+  // because those are valid answers to "Am I speaking with <name>?".
+  const PICKUP_GREETINGS_ONLY = new Set([
+    "hello", "hi", "hey", "yo", "hiya", "hellooo", "hii", "hallo", "halo",
+  ]);
+  const isFirstCallerTurn = bridge.transcript.filter(t => t.startsWith("Caller:")).length === 0;
+  if (PICKUP_GREETINGS_ONLY.has(normalized) && isFirstCallerTurn) {
+    logger.info({ callControlId, callerText: clean }, "Pickup-greeting only — discarding (no LLM turn needed)");
+    bridge.transcript.push(`Caller: ${clean}`);
     return;
   }
 
