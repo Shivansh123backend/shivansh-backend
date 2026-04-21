@@ -52,7 +52,7 @@ const createCampaignSchema = z.object({
   retryIntervalMinutes: z.number().min(1).max(1440).default(60),
   workingHoursStart: z.string().nullish(),
   workingHoursEnd: z.string().nullish(),
-  workingHoursTimezone: z.string().default("UTC"),
+  workingHoursTimezone: z.string().nullish().transform(v => v ?? "UTC"),
   amdEnabled: z.boolean().default(false),
   tcpaEnabled: z.boolean().default(false),
   voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).default("elevenlabs").nullish(),
