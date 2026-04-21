@@ -584,12 +584,48 @@ const conferenceSchema = z.object({
   from: z.string().regex(E164_RE).optional(),
 });
 
+// Disallowed prefixes for outbound conference dialing — protects against the
+// most common toll-fraud destinations (premium-rate, satellite, audio-text).
+// Add country codes / N11 patterns as needed.
+const CONFERENCE_BLOCKED_PREFIXES = [
+  "+1900", "+1976",       // US premium rate
+  "+881", "+882", "+883", // Global / inmarsat satellite
+  "+979",                  // Intl premium rate
+  "+808",                  // Intl shared cost — high abuse rate
+];
+
 router.post("/calls/:callControlId/conference", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const { callControlId } = req.params as { callControlId: string };
 
   const parsed = conferenceSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" });
+    return;
+  }
+
+  // ── Toll-fraud guard ──────────────────────────────────────────────────────
+  const to = parsed.data.to;
+  if (CONFERENCE_BLOCKED_PREFIXES.some((p) => to.startsWith(p))) {
+    res.status(403).json({ error: "Destination prefix is not permitted for conference dial-out" });
+    return;
+  }
+
+  // ── Ownership/active-call check ───────────────────────────────────────────
+  // Only allow bridging into a callControlId that we actually originated and
+  // that is still in flight. Prevents using a leaked/guessed callControlId
+  // to mint outbound legs on our Telnyx account.
+  const [callRow] = await db
+    .select({ id: callsTable.id, status: callsTable.status })
+    .from(callsTable)
+    .where(eq(callsTable.externalCallId, callControlId))
+    .limit(1);
+  if (!callRow) {
+    res.status(404).json({ error: "Unknown callControlId — no matching call found" });
+    return;
+  }
+  const liveStatuses = ["queued", "initiated", "ringing", "in_progress"];
+  if (!liveStatuses.includes(callRow.status)) {
+    res.status(409).json({ error: `Call is not active (status=${callRow.status})` });
     return;
   }
 

@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { humanAgentsTable, callsTable } from "@workspace/db";
-import { eq, gte, and } from "drizzle-orm";
+import { eq, gte, and, sql, isNotNull } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { getAgentStatus, setAgentStatus } from "../lib/redis.js";
 import { emitToSupervisors } from "../websocket/index.js";
@@ -108,34 +108,48 @@ router.get("/agents/stats", authenticate, async (_req, res): Promise<void> => {
   const startOfDay = new Date();
   startOfDay.setUTCHours(0, 0, 0, 0);
 
+  // ── Single-query aggregation (no N+1) ───────────────────────────────────────
+  // Pull every today-call for every agent in one round-trip and group in JS.
+  // Trades one transient larger result set for many small queries that scale
+  // linearly with agent count.
+  const todayCalls = agents.length === 0 ? [] : await db
+    .select({
+      humanAgentId: callsTable.humanAgentId,
+      duration:     callsTable.duration,
+      disposition:  callsTable.disposition,
+    })
+    .from(callsTable)
+    .where(
+      and(
+        isNotNull(callsTable.humanAgentId),
+        gte(callsTable.createdAt, startOfDay),
+      )
+    );
+
+  // Group rows by agent id once.
+  const byAgent = new Map<number, { calls: number; total: number; dispositions: Record<string, number> }>();
+  for (const c of todayCalls) {
+    if (c.humanAgentId == null) continue;
+    let bucket = byAgent.get(c.humanAgentId);
+    if (!bucket) {
+      bucket = { calls: 0, total: 0, dispositions: {} };
+      byAgent.set(c.humanAgentId, bucket);
+    }
+    bucket.calls++;
+    bucket.total += c.duration ?? 0;
+    if (c.disposition) {
+      bucket.dispositions[c.disposition] = (bucket.dispositions[c.disposition] ?? 0) + 1;
+    }
+  }
+
+  // Redis presence is per-agent and intentionally kept parallel — these are
+  // small in-memory lookups, not DB calls, so this stays O(N) cheaply.
   const results = await Promise.all(
     agents.map(async (agent) => {
       const redisStatus = await getAgentStatus(agent.id);
-
-      // Calls today where this human agent was assigned
-      const todayCalls = await db
-        .select({
-          duration:    callsTable.duration,
-          disposition: callsTable.disposition,
-        })
-        .from(callsTable)
-        .where(
-          and(
-            eq(callsTable.humanAgentId, agent.id),
-            gte(callsTable.createdAt, startOfDay)
-          )
-        );
-
-      const callsToday = todayCalls.length;
-      const totalDuration = todayCalls.reduce((sum, c) => sum + (c.duration ?? 0), 0);
-      const avgDuration = callsToday > 0 ? Math.round(totalDuration / callsToday) : 0;
-
-      const dispositions: Record<string, number> = {};
-      for (const c of todayCalls) {
-        if (c.disposition) {
-          dispositions[c.disposition] = (dispositions[c.disposition] ?? 0) + 1;
-        }
-      }
+      const bucket      = byAgent.get(agent.id);
+      const callsToday  = bucket?.calls ?? 0;
+      const avgDuration = callsToday > 0 ? Math.round((bucket!.total) / callsToday) : 0;
 
       return {
         id:           agent.id,
@@ -146,7 +160,7 @@ router.get("/agents/stats", authenticate, async (_req, res): Promise<void> => {
         stats: {
           callsToday,
           avgDuration,
-          dispositions,
+          dispositions: bucket?.dispositions ?? {},
         },
       };
     })

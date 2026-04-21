@@ -415,10 +415,19 @@ function getLeadTimezone(phone: string): string | null {
   return AREA_CODE_TZ[areaCode] ?? null;
 }
 
-/** TCPA: returns true if it's currently a legal calling time for this lead (8am–9pm local). */
+/** TCPA: returns true if it's currently a legal calling time for this lead (8am–9pm local).
+ *  Fail-CLOSED for unknown US area codes and any timezone-formatting errors:
+ *  the only way to be safe under TCPA is to skip the call when we cannot prove
+ *  the local time. The lead is re-queued and tried again at the next tick. */
 function isTcpaCallable(phone: string): boolean {
+  // Non-US numbers (no leading +1, length != 11 with leading 1, or length != 10):
+  // fall back to the campaign's working-hours window — TCPA only applies to US.
+  const digits = phone.replace(/\D/g, "");
+  const isUs = (digits.length === 10) || (digits.length === 11 && digits.startsWith("1"));
+  if (!isUs) return true;
+
   const tz = getLeadTimezone(phone);
-  if (!tz) return true; // Non-US or unknown — defer to campaign working hours
+  if (!tz) return false; // Unknown US area code → safer to skip than risk a 3 AM call
 
   try {
     const formatter = new Intl.DateTimeFormat("en-US", {
@@ -430,7 +439,7 @@ function isTcpaCallable(phone: string): boolean {
     const nowMins = h * 60 + m;
     return nowMins >= 480 && nowMins <= 1260; // 8:00 AM – 9:00 PM
   } catch {
-    return true;
+    return false;
   }
 }
 

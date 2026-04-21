@@ -218,9 +218,10 @@ export async function startCallbackScheduler(): Promise<void> {
         // Campaign paused/draft → revert lead back to callback for next tick.
         // Do NOT mutate callbackAt — preserve the user's originally scheduled time.
         if (!campaign || campaign.status !== "active") {
-          logger.warn({ leadId: lead.id, campaignId: lead.campaignId, status: campaign?.status }, "Callback skipped — campaign not active; restoring");
+          logger.warn({ leadId: lead.id, campaignId: lead.campaignId, status: campaign?.status }, "Callback skipped — campaign not active; restoring with 5-minute backoff");
+          // Backoff to prevent a hot-loop while the campaign stays paused.
           await db.update(leadsTable)
-            .set({ status: "callback", callbackAt: now })   // re-arm so next tick re-tries
+            .set({ status: "callback", callbackAt: new Date(now.getTime() + 5 * 60_000) })
             .where(eq(leadsTable.id, lead.id))
             .catch(() => {});
           continue;

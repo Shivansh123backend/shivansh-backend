@@ -197,3 +197,14 @@ Deployed to 2-VPS Hostinger setup (Ubuntu 22.04, Node 20 LTS, PM2):
 - Lovable frontend stays at `shivanshagent.cloudisoft.com` and calls the API at `api.shivanshagent.cloudisoft.com`. CORS is currently `*` (open).
 - **Worker process intentionally removed** from PM2 (no `worker` script in api-server package.json — schedulers run inside the api process). Re-add when a real worker entrypoint exists + Redis is provisioned.
 - Optional env not yet set: `TELNYX_PUBLIC_KEY` (webhook signature verify), `CARTESIA_VOICE_ID`, `REDIS_*`, `RESEND_API_KEY`/`SENDGRID_API_KEY`
+
+## VICIdial Feature Gaps Closed (2026-04-21)
+
+All 6 gaps now live in production at `https://api.shivanshagent.cloudisoft.com`:
+
+1. **TCPA per-lead timezone scrubbing** — `routes/campaigns.ts` `getLeadTimezone()` (NPA→IANA tz map for all 50 US states) + `isTcpaCallable()` enforces 8am–9pm in lead's local time. **Fail-closed** for unknown US area codes (better to skip than risk a 3am call). Enforced inside `processLead` when `campaign.tcpaEnabled = true`.
+2. **Voicemail drop** — `campaigns.vmDropMessage` text column. `routes/webhooks.ts` AMD `machine_end_beep` handler plays the campaign's TTS message (or a default), then hangs up via `pendingVmDropHangup` on `playback.ended`.
+3. **Scheduled callbacks** — `leads.callbackAt` timestamp + `POST /api/callbacks/schedule` + `startCallbackScheduler()` (60s poll, atomic claim via `UPDATE…RETURNING`). Failed enqueue / paused campaign → 5-minute backoff, never re-arms to `now` (avoids hot-loop).
+4. **Conference 3-way** — `POST /api/calls/:callControlId/conference { to }` (admin-only). Telnyx dials third party with `client_state` encoding `conference_bridge`; webhook on `call.answered` issues a `bridge` to link the legs. Toll-fraud guards: blocked premium-rate prefixes (`+1900/+1976/+881-3/+979/+808`) + ownership check (caller must be a known active call in our DB).
+5. **Per-agent stats** — `GET /api/agents/stats` returns `{ id, name, status, current_call, stats: { callsToday, avgDuration, dispositions } }`. Single grouped query (no N+1).
+6. **Agent softphone (Lovable)** — Prompt at `.local/lovable-prompt-agent-softphone.md`. Browser-based softphone using `@telnyx/webrtc`, JWT from `/calls/webrtc-token`, screen-pop via lead lookup, wrap-up modal that PATCHes disposition + optionally schedules a callback.
