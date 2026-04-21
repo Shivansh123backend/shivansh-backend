@@ -279,7 +279,7 @@ async function connectToElevenLabs(
             similarity_boost: 0.80,        // in-character but not over-acted
             style: 0.30,                   // gentle warmth — polite, not theatrical
             use_speaker_boost: true,
-            speed: 0.88,                   // distinctly slower than default — unhurried, human pacing
+            speed: 0.87,                   // distinctly slower than default — unhurried, human pacing
                                            // (0.95 still felt rushed on phone calls per user feedback)
           },
           // Make numbers, abbreviations, and symbols read naturally ("$50" → "fifty dollars",
