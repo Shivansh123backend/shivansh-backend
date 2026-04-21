@@ -94,9 +94,10 @@ async function telnyxDirectCall(payload: EnqueueCallPayload): Promise<TriggerCal
       webhook_api_version: "2",
       client_state: clientState,
     };
-    if (payload.amd_enabled === "true") {
-      body.answering_machine_detection = "premium";
-    }
+    // AMD is always-on (premium) for outbound calls. The AI greeting is gated
+    // on the webhook's `call.machine.premium.detection.ended` result so the
+    // bot never speaks until a real human is on the line.
+    body.answering_machine_detection = payload.amd_enabled === "false" ? "disabled" : "premium";
 
     const response = await axios.post(`${TELNYX_API_BASE}/calls`, body, {
       headers: {

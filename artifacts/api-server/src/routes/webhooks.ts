@@ -288,6 +288,7 @@ const pendingHangupAfterPlay    = new Set<string>();                  // callCon
 const objectionAttempts         = new Map<string, number>();          // callControlId → how many times AI has tried to recover an objection
 const pendingVmDropHangup       = new Set<string>();                  // callControlId → hang up after VM drop message finishes playing
 const pendingInboundGreet       = new Set<string>();                  // callControlId → awaiting call.answered to start inbound greeting
+const pendingAmdGreet           = new Map<string, NodeJS.Timeout>();   // callControlId → fallback timer; bridge initialized but greeting deferred until AMD says "human"
 const awaitingFirstResponse     = new Set<string>();                  // callControlId → outbound call waiting for first caller word (silence guard)
 const initialSilenceTimer       = new Map<string, ReturnType<typeof setTimeout>>(); // callControlId → 30s start-silence timeout
 const AI_SPEAK_COOLDOWN_MS      = 420;                                // ignore transcriptions this many ms after AI speaks (snappy turn-taking)
@@ -990,11 +991,29 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       const result: string = payload.result ?? "";
       logger.info({ callControlId, result }, "AMD result");
 
+      // ── Human detected: cancel deferred-greet timer and start the conversation ──
+      if (result === "human") {
+        const t = pendingAmdGreet.get(callControlId);
+        if (t) {
+          clearTimeout(t);
+          pendingAmdGreet.delete(callControlId);
+          logger.info({ callControlId }, "AMD confirmed human — starting transcription + greeting");
+          await startTranscriptionAndGreet(callControlId).catch((err) =>
+            logger.error({ err: String(err), callControlId }, "AMD-gated greet failed")
+          );
+        }
+        return;
+      }
+
       if (
         result === "machine_start" ||
         result === "machine_end_beep" ||
         result === "machine_end_silence"
       ) {
+        // Cancel any pending deferred-greet so we don't accidentally start AI
+        // mid-VM-drop or after we've decided to hang up.
+        const t = pendingAmdGreet.get(callControlId);
+        if (t) { clearTimeout(t); pendingAmdGreet.delete(callControlId); }
         const bridge = getBridgeInfo(callControlId);
 
         // Voicemail drop: on beep, leave a TTS message — campaign-specific or default template.
@@ -1222,8 +1241,22 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         logger.warn({ err: String(err), callControlId }, "Recording start failed — continuing")
       );
 
-      // Start transcription + play ElevenLabs greeting
-      await startTranscriptionAndGreet(callControlId);
+      // ── Defer greeting until AMD confirms a real human ───────────────────────
+      // Telnyx fires `call.machine.premium.detection.ended` 1-4s after answer.
+      // We do NOT start transcription/greeting here — that happens in the AMD
+      // handler when result === "human". This guarantees the AI never speaks
+      // into a voicemail beep or before the callee is actually listening.
+      // Safety net: if AMD never returns within 8s (rare carrier edge case),
+      // start anyway so we never silently drop a live call.
+      const fallback = setTimeout(() => {
+        if (!pendingAmdGreet.has(callControlId)) return;
+        pendingAmdGreet.delete(callControlId);
+        logger.warn({ callControlId }, "AMD timeout (8s) — starting greeting without AMD result");
+        startTranscriptionAndGreet(callControlId).catch((err) =>
+          logger.error({ err: String(err), callControlId }, "Fallback greet failed")
+        );
+      }, 8_000);
+      pendingAmdGreet.set(callControlId, fallback);
 
       // Live monitor: announce active call to supervisors
       emitToSupervisors("call:started", {
