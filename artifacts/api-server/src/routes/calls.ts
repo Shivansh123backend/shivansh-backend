@@ -312,11 +312,14 @@ router.get("/calls/live", authenticate, async (req, res): Promise<void> => {
     };
   });
 
-  // DB-queued calls not yet answered (ringing / queued)
+  // DB-queued calls not yet answered (ringing / queued).
+  // Cap at 2 minutes old so the dashboard never shows ghost rows from calls
+  // whose hangup webhook was missed (Telnyx retry, restart, etc.). A call
+  // that's been "ringing" for >2 min is dead — let the dashboard auto-clear.
   const queuedCalls = await db
     .select()
     .from(callsTable)
-    .where(sql`status IN ('queued', 'ringing', 'initiated')`)
+    .where(sql`status IN ('queued', 'ringing', 'initiated') AND created_at > NOW() - INTERVAL '2 minutes'`)
     .orderBy(desc(callsTable.createdAt))
     .limit(50);
 

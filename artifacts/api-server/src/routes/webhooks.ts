@@ -1419,18 +1419,20 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       // The greeting is deferred until EITHER:
       //   (a) AMD returns "human"          — primary path (also handles silence)
       //   (b) the caller says ANYTHING     — fast path; their voice = proof-of-human
-      //   (c) 8s safety-net fallback fires — rare carrier edge case
+      //   (c) 2s safety-net fallback fires — if neither AMD nor caller speak,
+      //       AI proactively kicks off the script ("Hi this is Alex calling
+      //       from …") instead of leaving dead air. User-requested behaviour.
       // This guarantees the AI never speaks into a voicemail beep or before the
       // callee is actually listening, but also that the AI starts talking the
       // moment the human says "Hello" rather than after AMD's analysis pause.
       const fallback = setTimeout(() => {
         if (!pendingAmdGreet.has(callControlId)) return;
         pendingAmdGreet.delete(callControlId);
-        logger.warn({ callControlId }, "AMD timeout (8s) — starting greeting without AMD result");
+        logger.warn({ callControlId }, "AMD timeout (2s) — starting greeting without AMD result");
         startTranscriptionAndGreet(callControlId).catch((err) =>
           logger.error({ err: String(err), callControlId }, "Fallback greet failed")
         );
-      }, 8_000);
+      }, 2_000);
       pendingAmdGreet.set(callControlId, fallback);
 
       // Live monitor: announce active call to supervisors
@@ -1774,6 +1776,23 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
           .set({ status: "completed", disposition })
           .where(eq(callLogsTable.callControlId, callControlId))
           .catch((err) => logger.warn({ err: String(err), callControlId }, "Failed to update unanswered call log"));
+
+        // ── Mirror onto callsTable too — otherwise /calls/live keeps showing
+        // these as "ringing/initiated" forever, polluting the live monitor with
+        // ghost calls. Without this, every no-answer leaves a stale dashboard row.
+        await db
+          .update(callsTable)
+          .set({ status: "completed", disposition: "no_answer", endedAt: new Date() })
+          .where(eq(callsTable.externalCallId, callControlId))
+          .catch((err) => logger.debug({ err: String(err), callControlId }, "callsTable no-answer mirror update skipped"));
+
+        // Notify the dashboard so any stale row disappears immediately.
+        emitToSupervisors("call:ended", {
+          id: syntheticId(callControlId),
+          callControlId,
+          disposition,
+          duration: 0,
+        });
 
         // Release the Telnyx number from busy
         const ownNum = callOwnNumber.get(callControlId);
