@@ -169,9 +169,23 @@ router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, r
 
   const parsed = updateCampaignSchema.safeParse(req.body);
   if (!parsed.success) {
+    logger.warn({ campaignId: id, body: req.body, errors: parsed.error.message }, "PATCH /campaigns rejected by schema");
     res.status(400).json({ error: parsed.error.message });
     return;
   }
+
+  // Temporary diagnostics — voice change debugging.
+  logger.info(
+    {
+      campaignId: id,
+      bodyKeys: Object.keys(req.body ?? {}),
+      bodyVoice: (req.body as Record<string, unknown>)?.voice,
+      bodyVoiceProvider: (req.body as Record<string, unknown>)?.voiceProvider,
+      parsedVoice: parsed.data.voice,
+      parsedVoiceProvider: parsed.data.voiceProvider,
+    },
+    "PATCH /campaigns — incoming voice fields",
+  );
 
   const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, id));
   if (!campaign) {
