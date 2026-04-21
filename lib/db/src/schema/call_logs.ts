@@ -11,6 +11,7 @@ export const callLogsTable = pgTable("call_logs", {
   direction: text("direction").notNull().default("outbound"),
   duration: integer("duration"),
   recordingUrl: text("recording_url"),
+  recordingId: text("recording_id"),
   transcript: text("transcript"),
   summary: text("summary"),
   callControlId: text("call_control_id"),

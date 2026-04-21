@@ -178,6 +178,58 @@ router.get("/calls", authenticate, async (req, res): Promise<void> => {
   res.json(calls);
 });
 
+// ── GET /recordings/:id/play — fetch a fresh signed Telnyx URL and 302 redirect
+// Telnyx-hosted recording URLs are pre-signed S3 links that expire after 10
+// minutes, so the URL captured in the `call.recording.saved` webhook is dead by
+// the time anyone clicks Play in the dashboard. This endpoint fetches a fresh
+// signed URL on demand using the stored Telnyx recording_id.
+//
+// Auth: same Bearer token the dashboard already sends. We support both header
+// auth and a `?token=` query param so plain <audio src="..."> tags work too.
+router.get("/recordings/:id/play", async (req, res): Promise<void> => {
+  // Allow the JWT in either header or query (audio elements can't set headers)
+  const queryToken = typeof req.query.token === "string" ? req.query.token : null;
+  if (queryToken && !req.headers.authorization) {
+    req.headers.authorization = `Bearer ${queryToken}`;
+  }
+  // Re-run the auth middleware inline
+  await new Promise<void>((resolve) => authenticate(req, res, () => resolve()));
+  if (res.headersSent) return;
+
+  const recordingId = req.params.id;
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) {
+    res.status(500).json({ error: "TELNYX_API_KEY not configured" });
+    return;
+  }
+
+  try {
+    const tx = await axios.get(
+      `https://api.telnyx.com/v2/recordings/${encodeURIComponent(recordingId)}`,
+      { headers: { Authorization: `Bearer ${apiKey}` }, timeout: 8000 },
+    );
+    const data = tx.data?.data ?? {};
+    const url: string | undefined =
+      data.download_urls?.mp3 ??
+      data.download_urls?.wav ??
+      data.recording_urls?.mp3 ??
+      data.public_recording_urls?.mp3;
+    if (!url) {
+      res.status(404).json({ error: "Recording has no playable URL", detail: data });
+      return;
+    }
+    res.redirect(302, url);
+  } catch (err: unknown) {
+    const status = (err as { response?: { status?: number } })?.response?.status ?? 502;
+    const detail = (err as { response?: { data?: unknown } })?.response?.data ?? String(err);
+    logger.warn({ recordingId, status, detail }, "Failed to fetch fresh Telnyx recording URL");
+    res.status(status === 404 ? 404 : 502).json({
+      error: status === 404 ? "Recording not found on Telnyx" : "Telnyx recording API failed",
+      detail,
+    });
+  }
+});
+
 // ── GET /calls/cdr — unified CDR: outbound calls + inbound call_logs ──────────
 router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
   const campaignIdRaw = req.query.campaignId;
@@ -261,7 +313,10 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
       status: r.status,
       disposition: r.disposition ?? null,
       duration: r.duration ?? null,
-      recordingUrl: r.recordingUrl ?? null,
+      // Prefer the fresh-URL proxy when we have a recording_id; fall back to the
+      // raw (likely-expired) S3 URL only for legacy rows captured before we
+      // started persisting recording_id.
+      recordingUrl: r.recordingId ? `/api/recordings/${r.recordingId}/play` : (r.recordingUrl ?? null),
       transcript: r.transcript ?? null,
       summary: r.summary ?? null,
       timestamp: (r.createdAt ?? new Date()).toISOString(),
@@ -277,7 +332,7 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
       status: r.status,
       disposition: r.disposition ?? null,
       duration: r.duration ?? null,
-      recordingUrl: r.recordingUrl ?? null,
+      recordingUrl: r.recordingId ? `/api/recordings/${r.recordingId}/play` : (r.recordingUrl ?? null),
       transcript: r.transcript ?? null,
       summary: r.summary ?? null,
       timestamp: (r.timestamp ?? new Date()).toISOString(),

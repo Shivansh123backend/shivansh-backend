@@ -1671,10 +1671,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
     if (eventType === "call.recording.saved") {
       const recordingUrl: string =
         payload.recording_urls?.mp3 ?? payload.public_recording_urls?.mp3 ?? "";
-      logger.info({ callControlId, recordingUrl }, "Recording saved");
+      // Telnyx supplies a stable recording_id we can use to fetch a fresh
+      // signed URL on demand (the URLs above expire in 10 min).
+      const recordingId: string | null =
+        payload.recording_id ?? payload.id ?? null;
+      logger.info({ callControlId, recordingUrl, recordingId }, "Recording saved");
 
-      if (recordingUrl) {
-        setRecordingUrl(callControlId, recordingUrl);
+      if (recordingUrl || recordingId) {
+        if (recordingUrl) setRecordingUrl(callControlId, recordingUrl);
 
         const [existing] = await db
           .select({ id: callLogsTable.id })
@@ -1685,9 +1689,12 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         if (existing) {
           await db
             .update(callLogsTable)
-            .set({ recordingUrl })
+            .set({
+              ...(recordingUrl ? { recordingUrl } : {}),
+              ...(recordingId ? { recordingId } : {}),
+            })
             .where(eq(callLogsTable.id, existing.id));
-          logger.info({ callControlId }, "Recording URL saved to DB");
+          logger.info({ callControlId, recordingId }, "Recording URL + id saved to DB");
         }
       }
       return;

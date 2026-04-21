@@ -20,6 +20,7 @@ export const callsTable = pgTable("calls", {
   disposition: callDispositionEnum("disposition"),
   duration: integer("duration"),
   recordingUrl: text("recording_url"),
+  recordingId: text("recording_id"),
   transcript: text("transcript"),
   summary: text("summary"),
   transferStatus: transferStatusEnum("transfer_status"),
