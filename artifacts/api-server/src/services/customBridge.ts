@@ -45,6 +45,7 @@ import {
   createObjectionMemory,
   type ObjectionMemory,
 } from "./objectionEngine.js";
+import { warmBackchannelCache, maybePlayBackchannel } from "./backchannelEngine.js";
 
 const DEEPGRAM_API_KEY  = process.env.DEEPGRAM_API_KEY ?? "";
 const CARTESIA_API_KEY  = process.env.CARTESIA_API_KEY ?? "";
@@ -113,6 +114,10 @@ interface BridgeState {
   silenceTimer: NodeJS.Timeout | null;
   supervisorMemory: SupervisorMemory;
   pendingIntervention: InterventionPlan | null;
+  // Backchannel state — masks the silence between caller-done and AI-reply
+  lastBackchannelAt: number;
+  lastBackchannelPhrase: string | null;
+  userTurnCount: number;            // increments on every accepted user transcript
   transcriptCallback?: (text: string) => void;
   onTransferRequested?: () => void;  // called when AI says transfer phrase
 }
@@ -627,6 +632,10 @@ function connectDeepgram(state: BridgeState): void {
 
       if (state.isAiSpeaking) triggerBargeIn(state);
 
+      // Count this user turn — used to suppress backchannel on the very first
+      // response (caller is answering the greeting, "mm-hmm" feels off there).
+      state.userTurnCount += 1;
+
       // ── STEP 2: Fast-response cache (bypass LLM) ─────────────────────────
       const fast = getFastResponse(transcript);
       if (fast) {
@@ -653,6 +662,24 @@ function connectDeepgram(state: BridgeState): void {
           if (objection.endCall) endBridge(state);
         });
         return;
+      }
+
+      // ── Backchannel — play "mm-hmm" / "right" the instant the caller is
+      // done, masking the ~400-700ms LLM+TTS round-trip. Pre-cached audio
+      // chunks are written synchronously to the WS, so they queue ahead of
+      // the main reply audio with no risk of overlap.
+      const bc = maybePlayBackchannel({
+        voiceId: state.cartesiaVoiceId,
+        send: (payload) => injectAudio(state, payload),
+        isClosed: state.isClosed,
+        isAiSpeaking: state.isAiSpeaking,
+        lastBackchannelAt: state.lastBackchannelAt,
+        lastBackchannelPhrase: state.lastBackchannelPhrase,
+        userTurnCount: state.userTurnCount,
+      }, transcript);
+      if (bc) {
+        state.lastBackchannelAt = bc.playedAt;
+        state.lastBackchannelPhrase = bc.phrase;
       }
 
       generateAndSpeak(state, transcript).catch((err) => {
@@ -732,6 +759,9 @@ export function connectCustomBridge(
     silenceTimer: null,
     supervisorMemory: createSupervisorMemory(),
     pendingIntervention: null,
+    lastBackchannelAt: 0,
+    lastBackchannelPhrase: null,
+    userTurnCount: 0,
     transcriptCallback: opts.transcriptCallback,
     onTransferRequested: opts.onTransferRequested,
   };
@@ -739,6 +769,10 @@ export function connectCustomBridge(
   bridges.set(callControlId, state);
   connectDeepgram(state);
   startSilenceWatchdog(state);
+
+  // Pre-warm backchannel ("mm-hmm" / "right" / "okay" …) for this voice so the
+  // first user turn already has a cached audio buffer ready to fire instantly.
+  warmBackchannelCache(state.cartesiaVoiceId);
 
   logger.info({ callControlId }, "Custom bridge started (Deepgram + GPT-4o + Cartesia)");
 }
