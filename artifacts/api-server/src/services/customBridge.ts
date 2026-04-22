@@ -376,12 +376,12 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
     ];
 
     const stream = await openai.chat.completions.create({
-      model: "gpt-4o-mini",     // ~3x faster TTFT than gpt-4o (150ms vs 500ms+) — critical for phone-call latency
+      model: "gpt-4o-mini",       // ~3x faster TTFT than gpt-4o (150ms vs 500ms+) — critical for phone-call latency
       messages: msgsForLLM,
-      max_completion_tokens: 90, // 1-2 sentences ≈ 6-10s of TTS — short, conversational, low chance of barge-in
-      temperature: 0.95,         // higher = more varied phrasing, less canned/robotic
-      frequency_penalty: 0.7,    // discourages repeating exact phrases
-      presence_penalty: 0.5,     // discourages re-raising already-covered topics
+      max_completion_tokens: 120, // up from 90: 90 sometimes clipped mid-thought
+      temperature: 0.6,           // down from 0.95: high temp produced creative tangents / irrelevant answers
+      frequency_penalty: 0.2,     // down from 0.7: aggressive penalty forced unnatural rephrasing
+      presence_penalty: 0.15,     // down from 0.5: was pushing model to introduce off-topic concepts
       stream: true,
     });
 

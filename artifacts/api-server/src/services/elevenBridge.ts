@@ -292,8 +292,10 @@ async function connectToElevenLabs(
           keywords: [],
         },
         turn: {
-          turn_timeout: 15,                // seconds of total silence before AI speaks again
-          silence_end_call_timeout: 35,
+          turn_timeout: 25,                // up from 15: AI was volunteering fillers ("you there?", "take your time")
+                                           // every 15s of silence even when the caller was just thinking. 25s gives
+                                           // the human real space to think before the AI re-engages.
+          silence_end_call_timeout: 45,    // up from 35 to match — don't kill calls during natural long pauses.
           mode: "silence",                 // explicit silence-based VAD (more predictable than default)
           endpointing_ms: 200,             // 200ms silence wait — total reply lag ≈ 450ms (200 + ~150 LLM + ~75 TTS)
                                            // Was 250 (user said too slow); 150 risked clipping natural mid-sentence

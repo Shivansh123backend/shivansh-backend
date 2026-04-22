@@ -226,3 +226,9 @@ All 6 gaps now live in production at `https://api.shivanshagent.cloudisoft.com`:
 - **Dashboard fix** (`artifacts/dashboard/src/pages/campaigns.tsx`): `useState(campaign.voice || "default")` so an empty stored voice cleanly initializes to the "default" option instead of an unhighlighted blank.
 - **Verified live** against prod with 3 PATCH calls on campaign 9 — provider correctly resolved from DB; wrong client-supplied provider correctly overridden; empty voice correctly preserves prior value.
 - **Known limitation** (pre-existing): no way to clear a non-default voice back to NULL via the API — dashboard always omits the field for "default". Not in scope.
+
+## Conversation quality fixes (2026-04-22)
+
+- **LLM tuning** (`api-server/src/routes/llm.ts`): temperature 0.95→0.6, frequency_penalty 0.6→0.2, presence_penalty 0.4→0.15, max_tokens 90→120. Old values were too aggressive — they pushed gpt-4o-mini into creative tangents and forced unnatural rephrasing to dodge the penalties, causing the "irrelevant answers" reports.
+- **Turn timing** (`api-server/src/services/elevenBridge.ts`): turn_timeout 15→25s, silence_end_call_timeout 35→45s. Was the main cause of "AI talks during silence" — every 15s of natural thinking pause, ElevenLabs would prompt the AI to fill the gap.
+- **Prompt rewrite** (`api-server/src/routes/webhooks.ts`): the PATIENCE block previously instructed the model to volunteer "Mm-hm?", "Take your time", "No rush" — directly producing the chatty-during-silence behavior. Replaced with hard rule: stay silent, only re-engage on long pauses, and only with one short check-in. Same fix applied to inbound first-turn instructions.

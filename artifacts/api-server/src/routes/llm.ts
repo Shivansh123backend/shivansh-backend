@@ -52,8 +52,8 @@ router.post("/llm/chat/completions", async (req, res) => {
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages,
-        max_completion_tokens: 90,
-        temperature: 0.85,
+        max_completion_tokens: 120,
+        temperature: 0.6,
       });
       res.json(completion);
       return;
@@ -69,10 +69,10 @@ router.post("/llm/chat/completions", async (req, res) => {
     const streamResponse = await openai.chat.completions.create({
       model: "gpt-4o-mini",          // ~3x faster TTFT than gpt-4o (150ms vs 500ms+) — critical for phone-call latency
       messages,
-      max_completion_tokens: 90,     // 1-2 sentences ≈ 6-10s of TTS — short, conversational, low chance of barge-in
-      temperature: 0.95,             // higher = more varied phrasing, fewer canned/repeated responses (sounds more human)
-      frequency_penalty: 0.6,        // discourage repeating the same phrases / openers across turns
-      presence_penalty: 0.4,         // encourage introducing fresh wording
+      max_completion_tokens: 120,    // up from 90: 90 sometimes clipped mid-thought ("Sure, I can help wi—"). 120 ≈ 8-12s TTS, still safely interruptible.
+      temperature: 0.6,              // down from 0.95: high temp was generating creative tangents and irrelevant answers. 0.6 keeps it warm + on-topic.
+      frequency_penalty: 0.2,        // down from 0.6: aggressive penalty was forcing the model to dodge natural repetition (e.g. saying the lead's name twice in a call) which made replies feel forced.
+      presence_penalty: 0.15,        // down from 0.4: was pushing model to introduce off-topic concepts to "stay fresh".
       stream: true,
     });
 
