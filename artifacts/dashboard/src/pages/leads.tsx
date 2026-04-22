@@ -660,25 +660,31 @@ export default function LeadsPage() {
 function LeadActionsMenu({ leadId, leadName }: { leadId: number; leadName: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [showReassign, setShowReassign] = useState(false);
+  const { data: campaigns } = useListCampaigns();
+
+  const patchLead = (body: Record<string, unknown>, successMsg: string) =>
+    customFetch(`/api/leads/${leadId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(() => {
+      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      toast({ title: successMsg });
+    }).catch((err: Error) => toast({ title: err.message, variant: "destructive" }));
 
   const callBack = useMutation({
-    mutationFn: async () =>
-      customFetch(`/api/leads/${leadId}/callback`, { method: "POST" }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
-      toast({ title: `Callback queued for ${leadName || `#${leadId}`}` });
-    },
-    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+    mutationFn: async () => patchLead({ status: "callback" }, `Marked ${leadName || `#${leadId}`} for callback`),
   });
 
   const block = useMutation({
-    mutationFn: async () =>
-      customFetch(`/api/leads/${leadId}/block`, { method: "POST" }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
-      toast({ title: `${leadName || `#${leadId}`} added to DNC` });
-    },
-    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+    mutationFn: async () => patchLead({ status: "do_not_call" }, `${leadName || `#${leadId}`} added to DNC`),
+  });
+
+  const reassign = useMutation({
+    mutationFn: async (campaignId: number) =>
+      patchLead({ campaignId }, `Reassigned ${leadName || `#${leadId}`}`),
+    onSuccess: () => setShowReassign(false),
   });
 
   const del = useMutation({
@@ -692,35 +698,104 @@ function LeadActionsMenu({ leadId, leadName }: { leadId: number; leadName: strin
   });
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button className="p-1.5 rounded hover:bg-muted/60 transition-colors">
-          <MoreVertical className="w-4 h-4 text-muted-foreground" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem onClick={() => callBack.mutate()}>
-          <Phone className="w-3.5 h-3.5 mr-2" /> Call Back
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled>
-          <ArrowRightLeft className="w-3.5 h-3.5 mr-2" /> Reassign Campaign
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => {
-            if (confirm(`Add ${leadName || `#${leadId}`} to Do Not Call list?`)) block.mutate();
-          }}
-        >
-          <Ban className="w-3.5 h-3.5 mr-2" /> Block (Add to DNC)
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
-          onClick={() => {
-            if (confirm(`Delete lead ${leadName || `#${leadId}`}? This cannot be undone.`)) del.mutate();
-          }}
-        >
-          <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete Lead
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      {showReassign && (
+        <ReassignCampaignModal
+          leadName={leadName}
+          campaigns={campaigns ?? []}
+          isPending={reassign.isPending}
+          onClose={() => setShowReassign(false)}
+          onSelect={(cid) => reassign.mutate(cid)}
+        />
+      )}
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button className="p-1.5 rounded hover:bg-muted/60 transition-colors">
+            <MoreVertical className="w-4 h-4 text-muted-foreground" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem onClick={() => callBack.mutate()} disabled={callBack.isPending}>
+            <Phone className="w-3.5 h-3.5 mr-2" /> Call Back
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setShowReassign(true)}>
+            <ArrowRightLeft className="w-3.5 h-3.5 mr-2" /> Reassign Campaign
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={block.isPending}
+            onClick={() => {
+              if (confirm(`Add ${leadName || `#${leadId}`} to Do Not Call list?`)) block.mutate();
+            }}
+          >
+            <Ban className="w-3.5 h-3.5 mr-2" /> Block (Add to DNC)
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            disabled={del.isPending}
+            onClick={() => {
+              if (confirm(`Delete lead ${leadName || `#${leadId}`}? This cannot be undone.`)) del.mutate();
+            }}
+          >
+            <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete Lead
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  );
+}
+
+// ── Reassign campaign sub-modal ─────────────────────────────────────────────────
+function ReassignCampaignModal({
+  leadName, campaigns, isPending, onClose, onSelect,
+}: {
+  leadName: string;
+  campaigns: { id: number; name: string; status?: string }[];
+  isPending: boolean;
+  onClose: () => void;
+  onSelect: (campaignId: number) => void;
+}) {
+  const [selectedId, setSelectedId] = useState<string>("");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-lg w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <p className="text-sm font-semibold text-foreground">Reassign Campaign</p>
+          <button onClick={onClose} className="p-1 rounded hover:bg-muted/60 transition-colors">
+            <X className="w-4 h-4 text-muted-foreground" />
+          </button>
+        </div>
+        <div className="p-4 space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Move <span className="text-foreground font-medium">{leadName || "this lead"}</span> to a different campaign.
+          </p>
+          <Select value={selectedId} onValueChange={setSelectedId}>
+            <SelectTrigger className="text-sm h-9">
+              <SelectValue placeholder="Select a campaign…" />
+            </SelectTrigger>
+            <SelectContent>
+              {campaigns.map(c => (
+                <SelectItem key={c.id} value={String(c.id)}>
+                  {c.name}{c.status ? ` (${c.status})` : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={!selectedId || isPending}
+            onClick={() => onSelect(parseInt(selectedId, 10))}
+          >
+            {isPending ? "Reassigning…" : "Reassign"}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
