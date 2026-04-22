@@ -136,16 +136,22 @@ export function maybePlayBackchannel(
 ): { phrase: string; playedAt: number } | null {
   if (ctx.isClosed || ctx.isAiSpeaking) return null;
 
-  // Skip first user turn — they're answering the greeting; "mm-hmm" feels off.
-  if (ctx.userTurnCount <= 1) return null;
+  // Allow backchannel from the FIRST user response onward. The first turn
+  // (name confirmation: "Yes, this is me", "Speaking", etc.) is the single
+  // most-noticeable LLM-latency gap in the call — masking it with a quick
+  // "Got it." / "Great." feels human and shaves ~1.5 s of perceived wait.
+  if (ctx.userTurnCount < 1) return null;
 
-  // Skip if user was terse — backchanneling a backchannel is robotic.
+  // Skip if user was extremely terse (single word like "yes"/"no") — those
+  // get a direct reply, no double-acknowledgement. 2+ words feel natural to
+  // backchannel on the first turn ("yes that's me", "speaking yes", etc.).
   const wordCount = userTranscript.split(/\s+/).filter(Boolean).length;
-  if (wordCount < 3) return null;
+  if (wordCount < 2) return null;
 
-  // Throttle: 7 s minimum gap.
+  // Throttle: 6 s minimum gap (was 7 s). Slightly tighter so the second
+  // qualifying question after the greeting still gets acknowledged.
   const now = Date.now();
-  if (ctx.lastBackchannelAt && now - ctx.lastBackchannelAt < 7000) return null;
+  if (ctx.lastBackchannelAt && now - ctx.lastBackchannelAt < 6000) return null;
 
   // Pick a phrase that isn't the previous one.
   const candidates = PHRASES.filter(p => p !== ctx.lastBackchannelPhrase);

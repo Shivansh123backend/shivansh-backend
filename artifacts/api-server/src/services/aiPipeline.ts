@@ -48,6 +48,12 @@ export function filterTranscript(transcript: string, confidence: number): Filter
   if (words.length === 1 && confidence < 0.85) {
     return { accept: false, reason: "low_confidence" };
   }
+  // 2-word phrases ("okay sure", "yeah right", "all right") are the next most
+  // common noise pattern from background TVs / overheard conversations.
+  // Require ≥0.78 to accept.
+  if (words.length === 2 && confidence < 0.78) {
+    return { accept: false, reason: "low_confidence" };
+  }
   return { accept: true };
 }
 

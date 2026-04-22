@@ -794,10 +794,13 @@ export function connectCustomBridge(
   logger.info({ callControlId }, "Custom bridge started (Deepgram + GPT-4o + Cartesia)");
 }
 
-/** Silence watchdog — every 1s checks if the caller has been silent for 4+ s while the AI is idle.
- *  After 3 consecutive prompts with no response, gives up and stops nudging. */
+/** Silence watchdog — every 1s checks if the caller has been silent for 2.5+ s while the AI is idle.
+ *  After 3 consecutive prompts with no response, gives up and stops nudging.
+ *  2.5 s is the "couple of seconds" threshold — long enough to not interrupt
+ *  natural thinking pauses but short enough that the caller never feels they
+ *  were left hanging. */
 function startSilenceWatchdog(state: BridgeState): void {
-  const SILENCE_MS = 4000;
+  const SILENCE_MS = 2500;
   const MAX_PROMPTS = 3;
   state.silenceTimer = setInterval(() => {
     if (state.isClosed) return;
