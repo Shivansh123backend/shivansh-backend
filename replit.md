@@ -232,3 +232,13 @@ All 6 gaps now live in production at `https://api.shivanshagent.cloudisoft.com`:
 - **LLM tuning** (`api-server/src/routes/llm.ts`): temperature 0.95→0.6, frequency_penalty 0.6→0.2, presence_penalty 0.4→0.15, max_tokens 90→120. Old values were too aggressive — they pushed gpt-4o-mini into creative tangents and forced unnatural rephrasing to dodge the penalties, causing the "irrelevant answers" reports.
 - **Turn timing** (`api-server/src/services/elevenBridge.ts`): turn_timeout 15→25s, silence_end_call_timeout 35→45s. Was the main cause of "AI talks during silence" — every 15s of natural thinking pause, ElevenLabs would prompt the AI to fill the gap.
 - **Prompt rewrite** (`api-server/src/routes/webhooks.ts`): the PATIENCE block previously instructed the model to volunteer "Mm-hm?", "Take your time", "No rush" — directly producing the chatty-during-silence behavior. Replaced with hard rule: stay silent, only re-engage on long pauses, and only with one short check-in. Same fix applied to inbound first-turn instructions.
+
+## Conversation quality round 2 — placeholder leakage (2026-04-22)
+
+- **Root cause discovered from real call transcripts**: campaigns with no/short prompts produced the AI literally saying "Hi, this is Riya calling from . How are you today?" (empty campaign name) and "matters most to you here, [benefit A] or [benefit B]?" (literal bracket text from objection playbook). The LLM was reading template placeholders out loud verbatim. No amount of LLM tuning could fix this — the templates themselves were broken.
+- **Fixes** (`api-server/src/routes/webhooks.ts` + `routes/campaigns.ts`):
+  - `firstMessage` (outbound + inbound) now drops the "from {campaignName}" clause entirely when the campaign name is blank.
+  - `buildSystemPrompt` adds a real `FALLBACK_PROMPT` for campaigns with no `agentPrompt` — gives the AI a generic-but-functional courtesy-call script instead of "Be helpful, warm, and professional" (which left it with nothing to actually say).
+  - Final returned prompt is run through a `stripPlaceholders` regex pass that removes `[anything]` and `{{anything}}` tokens, plus stray double spaces and " ." artifacts.
+  - `HUMAN_LIKE_INSTRUCTIONS` objection playbook rewritten to remove all literal `[benefit A]`, `[source]`, `[company]`, `[purpose]` brackets — replaced with natural-language directives ("name two benefits relevant to this campaign in your own words").
+- **Note for the user**: campaigns 12, 13, 15 (MVA) currently have empty/12-char prompts in prod. The fallback prompt now keeps them functional, but they will sound generic until proper agent prompts are added via the dashboard.

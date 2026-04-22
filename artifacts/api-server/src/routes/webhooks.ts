@@ -167,11 +167,33 @@ function buildSystemPrompt(
     agent_name: agentName,
   };
 
+  // If the campaign has no real prompt, give the AI a generic-but-functional
+  // script so it can actually hold a conversation instead of stalling on
+  // empty placeholders. Better than the previous one-line "be helpful" stub
+  // which left the AI with literally nothing to discuss.
+  const FALLBACK_PROMPT = `You are reaching out on a friendly courtesy call. You don't have a specific product to pitch — your goal is simply to:
+1. Verify you're speaking with the right person (politely confirm their name).
+2. Ask how things are going for them today (open, conversational tone).
+3. Briefly explain you wanted to check in and see if there's anything they need help with.
+4. If they're not interested, thank them warmly and end the call quickly.
+5. If they ARE interested in continuing, ask what's on their mind and offer to have a colleague follow up by email or schedule a callback.
+
+Never invent specific products, prices, or offers. Never mention placeholder words like "your service", "our offer", "the product" — speak naturally about checking in on them as a person.`;
+
   const coreScript = substituteVars(
-    rawPrompt?.trim() ||
-    `Be helpful, warm, and professional. Guide the conversation naturally. Ask one question at a time.`,
+    rawPrompt?.trim() || FALLBACK_PROMPT,
     templateVars
   );
+
+  // Strip any leftover literal bracket placeholders the model might otherwise
+  // read aloud (e.g. "[CompanyName]", "[purpose]", "[benefit A]"). These are
+  // common when admins paste prompts from templates without filling them in.
+  const stripPlaceholders = (s: string) =>
+    s.replace(/\[[^\]\n]{1,40}\]/g, "")        // [anything up to 40 chars]
+     .replace(/\{\{[^}\n]{1,40}\}\}/g, "")     // {{anything}}
+     .replace(/  +/g, " ")
+     .replace(/ \./g, ".")
+     .replace(/ ,/g, ",");
 
   // Short prompts get an expansion hint + real domain knowledge instruction
   const isShortPrompt = coreScript.length < 300 && !coreScript.includes("\n");
@@ -205,7 +227,7 @@ You have NO name for this contact. You must NEVER say "Unknown", "[Lead Name]", 
 - "May I ask who I have on the line?"
 Pick ONE such phrasing, casually. Once they share it, use their first name naturally a couple of times during the call (not in every sentence). If they refuse to share, that's fine — just continue without forcing it and do NOT invent a name.` : ""}`;
 
-  return `${opening}
+  const finalPrompt = `${opening}
 
 WHAT YOU'RE DOING:
 ${coreScript}${domainHint}
@@ -298,6 +320,11 @@ Say something short, calm, and human like "Sorry — could you say that again?" 
 
 FINISHING:
 ${completionLine}`;
+
+  // Final safety net: strip any literal placeholder brackets that survived
+  // (from objection playbook examples like "[reason]", "[benefit A]", etc.)
+  // so the LLM can't accidentally read them aloud.
+  return stripPlaceholders(finalPrompt);
 }
 
 // ── Telnyx Call Control helpers ───────────────────────────────────────────────
@@ -1413,9 +1440,14 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
       // With a lead name we ask for them by first name. Without a name we keep
       // it generic and friendly — just "Hi this is <agent> from <campaign>,
       // how are you today?" — and let the rest of the script confirm identity.
+      // Defensive against empty/blank campaign name — must not produce
+      // "Hi, this is Riya calling from . How are you today?" (literal blank).
+      const fromPart = (outboundCtx.campaignName ?? "").trim()
+        ? ` calling from ${outboundCtx.campaignName.trim()}`
+        : "";
       const firstMessage = firstName
-        ? `Hi, this is ${agentName} calling from ${outboundCtx.campaignName}. Am I speaking with ${firstName}?`
-        : `Hi, this is ${agentName} calling from ${outboundCtx.campaignName}. How are you today?`;
+        ? `Hi, this is ${agentName}${fromPart}. Am I speaking with ${firstName}?`
+        : `Hi, this is ${agentName}${fromPart}. How are you today?`;
 
       logger.info(
         { callControlId, campaignId, phone: outboundCtx.phone, leadName, agentName, voiceId: callVoiceId, backgroundSound: outboundCtx.backgroundSound },
@@ -1579,7 +1611,10 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
         effectiveTransferNumber,
         backgroundSound: inboundBackgroundSound,
       } = result;
-      const firstMessage = `Thank you for calling ${campaign.name}, this is ${agentName}. How may I help you today?`;
+      const fromName = (campaign.name ?? "").trim();
+      const firstMessage = fromName
+        ? `Thank you for calling ${fromName}, this is ${agentName}. How may I help you today?`
+        : `Hi, this is ${agentName}. How may I help you today?`;
 
       logger.info(
         { callControlId, campaignId: campaign.id, agentName, voiceId: inboundVoiceId, effectiveTransferNumber },
