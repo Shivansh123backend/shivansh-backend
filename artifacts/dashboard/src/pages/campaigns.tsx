@@ -1085,7 +1085,7 @@ function LaunchModal({
 
   const [selectedAgent, setSelectedAgent] = useState(campaign.agentId ? String(campaign.agentId) : "none");
   const [selectedNumber, setSelectedNumber] = useState(campaign.fromNumber ?? "");
-  const [selectedVoice, setSelectedVoice] = useState(campaign.voice ?? "default");
+  const [selectedVoice, setSelectedVoice] = useState(campaign.voice || "default");
   const [prompt, setPrompt] = useState(campaign.agentPrompt ?? "");
   const [isLaunching, setIsLaunching] = useState(false);
   const [resetLeads, setResetLeads] = useState(false);

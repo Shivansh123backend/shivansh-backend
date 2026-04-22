@@ -273,6 +273,31 @@ router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, r
     return;
   }
 
+  // ── Server-authoritative voice/provider coupling ────────────────────────────
+  // If the client sent a non-empty `voice`, look it up in the voices table and
+  // override `voiceProvider` from the DB row. This prevents drift where the
+  // dashboard sends a stale or wrong provider for the chosen voiceId.
+  // Empty string means "clear" → drop both fields so DB keeps its current value.
+  if (typeof parsed.data.voice === "string") {
+    const v = parsed.data.voice.trim();
+    if (!v || v === "default") {
+      delete (parsed.data as Record<string, unknown>).voice;
+      delete (parsed.data as Record<string, unknown>).voiceProvider;
+    } else {
+      const [voiceRow] = await db
+        .select({ provider: voicesTable.provider })
+        .from(voicesTable)
+        .where(eq(voicesTable.voiceId, v))
+        .limit(1);
+      if (voiceRow) {
+        parsed.data.voiceProvider = voiceRow.provider as "elevenlabs" | "deepgram" | "cartesia";
+      }
+      // If voice not in catalog (e.g. user pasted a raw ElevenLabs id), keep
+      // whatever provider the client sent (or fall back to elevenlabs).
+      if (!parsed.data.voiceProvider) parsed.data.voiceProvider = "elevenlabs";
+    }
+  }
+
   // Temporary diagnostics — voice change debugging.
   logger.info(
     {

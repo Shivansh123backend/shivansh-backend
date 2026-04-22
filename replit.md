@@ -218,3 +218,11 @@ All 6 gaps now live in production at `https://api.shivanshagent.cloudisoft.com`:
 4. **Conference 3-way** — `POST /api/calls/:callControlId/conference { to }` (admin-only). Telnyx dials third party with `client_state` encoding `conference_bridge`; webhook on `call.answered` issues a `bridge` to link the legs. Toll-fraud guards: blocked premium-rate prefixes (`+1900/+1976/+881-3/+979/+808`) + ownership check (caller must be a known active call in our DB).
 5. **Per-agent stats** — `GET /api/agents/stats` returns `{ id, name, status, current_call, stats: { callsToday, avgDuration, dispositions } }`. Single grouped query (no N+1).
 6. **Agent softphone (Lovable)** — Prompt at `.local/lovable-prompt-agent-softphone.md`. Browser-based softphone using `@telnyx/webrtc`, JWT from `/calls/webrtc-token`, screen-pop via lead lookup, wrap-up modal that PATCHes disposition + optionally schedules a callback.
+
+## Voice-swap fix (2026-04-22)
+
+- **Root cause**: Dashboard PATCH was sending client-computed `voiceProvider` that could drift; campaigns also stored `voice` as empty string (not null), causing the dashboard picker to render no selection.
+- **Server fix** (`artifacts/api-server/src/routes/campaigns.ts` PATCH /campaigns/:id): when `voice` is supplied, look up its provider in the `voices` table and override the client-supplied `voiceProvider`. Empty-string voice is treated as no-change (preserves "Resume Draft" behavior that re-sends the full row).
+- **Dashboard fix** (`artifacts/dashboard/src/pages/campaigns.tsx`): `useState(campaign.voice || "default")` so an empty stored voice cleanly initializes to the "default" option instead of an unhighlighted blank.
+- **Verified live** against prod with 3 PATCH calls on campaign 9 — provider correctly resolved from DB; wrong client-supplied provider correctly overridden; empty voice correctly preserves prior value.
+- **Known limitation** (pre-existing): no way to clear a non-default voice back to NULL via the API — dashboard always omits the field for "default". Not in scope.
