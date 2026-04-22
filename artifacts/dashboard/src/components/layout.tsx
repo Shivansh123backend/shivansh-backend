@@ -116,7 +116,7 @@ function AgentStatusDropdown() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-36 rounded border border-border bg-[hsl(224,71%,4%)] shadow-xl z-50 py-1">
+        <div className="absolute right-0 top-full mt-1 w-36 rounded border border-border bg-popover shadow-xl z-50 py-1">
           {STATUSES.map(s => (
             <button
               key={s.value}
@@ -145,7 +145,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
-      <aside className="w-52 flex-shrink-0 flex flex-col border-r border-border bg-[hsl(224,71%,3%)]">
+      <aside className="w-52 flex-shrink-0 flex flex-col border-r border-border bg-card">
         {/* Logo */}
         <div className="flex items-center gap-2.5 px-4 py-4 border-b border-border">
           <div className="w-7 h-7 rounded bg-primary/20 border border-primary/40 flex items-center justify-center">
@@ -187,7 +187,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Agent status bar */}
         {isAgent && (
-          <div className="flex items-center justify-end gap-4 px-4 py-1.5 border-b border-border bg-[hsl(224,71%,3%)] shrink-0">
+          <div className="flex items-center justify-end gap-4 px-4 py-1.5 border-b border-border bg-card shrink-0">
             <span className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
               <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
               SIP: Ready

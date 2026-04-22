@@ -44,7 +44,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-lg">
+      <div className="bg-card border border-border rounded w-full max-w-lg">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <p className="text-xs font-mono uppercase tracking-widest text-foreground">New AI Agent</p>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
@@ -120,7 +120,7 @@ export default function AgentsPage() {
               language: string;
               defaultVoiceId?: number;
             }) => (
-              <div key={a.id} className="border border-border rounded bg-[hsl(224,71%,3%)] p-4 space-y-3">
+              <div key={a.id} className="border border-border rounded bg-card p-4 space-y-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <div className="w-7 h-7 rounded bg-primary/15 border border-primary/25 flex items-center justify-center flex-shrink-0">

@@ -33,7 +33,7 @@ export default function QueuesPage() {
           )}
         </div>
 
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+        <div className="border border-border rounded bg-card">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <Layers className="w-3.5 h-3.5 text-primary" />
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Campaign Queues</p>
@@ -92,7 +92,7 @@ export default function QueuesPage() {
 
 function StatCard({ label, value, icon: Icon, color }: { label: string; value: number; icon: React.ElementType; color: string }) {
   return (
-    <div className="border border-border rounded p-4 bg-[hsl(224,71%,3%)]">
+    <div className="border border-border rounded p-4 bg-card">
       <div className="flex items-center justify-between mb-3">
         <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">{label}</p>
         <Icon className={`w-3.5 h-3.5 ${color}`} />

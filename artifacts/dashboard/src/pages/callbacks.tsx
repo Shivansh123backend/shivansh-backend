@@ -88,7 +88,7 @@ export default function CallbacksPage() {
         </div>
 
         {/* Table */}
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)] overflow-hidden">
+        <div className="border border-border rounded bg-card overflow-hidden">
           <table className="w-full text-xs font-mono">
             <thead>
               <tr className="border-b border-border">

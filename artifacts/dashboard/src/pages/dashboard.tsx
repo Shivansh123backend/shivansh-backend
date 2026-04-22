@@ -23,7 +23,7 @@ function StatCard({
   loading?: boolean;
 }) {
   return (
-    <div className="border border-border rounded p-4 bg-[hsl(224,71%,3%)]">
+    <div className="border border-border rounded p-4 bg-card">
       <div className="flex items-center justify-between mb-3">
         <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">{label}</p>
         <div className={`w-6 h-6 rounded flex items-center justify-center ${accent ?? "bg-primary/15 text-primary"}`}>
@@ -86,7 +86,7 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+          <div className="border border-border rounded bg-card">
             <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
               <Activity className="w-3.5 h-3.5 text-green-400" />
               <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Live Calls</p>
@@ -107,7 +107,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+          <div className="border border-border rounded bg-card">
             <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
               <Megaphone className="w-3.5 h-3.5 text-primary" />
               <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Campaign Status</p>
@@ -134,7 +134,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+        <div className="border border-border rounded bg-card">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <Clock className="w-3.5 h-3.5 text-primary" />
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Recent Call Records</p>
@@ -186,37 +186,62 @@ export default function DashboardPage() {
   );
 }
 
+// Soft pastel pill badges — match the reference UI: rounded, low-saturation
+// background, mid-tone text, no harsh borders. Designed for white-theme.
+const PASTEL = {
+  green:  "bg-emerald-100 text-emerald-700 border-emerald-200",
+  blue:   "bg-sky-100 text-sky-700 border-sky-200",
+  yellow: "bg-amber-100 text-amber-700 border-amber-200",
+  red:    "bg-rose-100 text-rose-700 border-rose-200",
+  purple: "bg-violet-100 text-violet-700 border-violet-200",
+  cyan:   "bg-cyan-100 text-cyan-700 border-cyan-200",
+  peach:  "bg-orange-100 text-orange-700 border-orange-200",
+  gray:   "bg-slate-100 text-slate-600 border-slate-200",
+} as const;
+
 export function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    active: "border-green-500/30 text-green-400 bg-green-500/5",
-    completed: "border-blue-500/30 text-blue-400 bg-blue-500/5",
-    paused: "border-yellow-500/30 text-yellow-400 bg-yellow-500/5",
-    draft: "border-border text-muted-foreground",
-    in_progress: "border-cyan-500/30 text-cyan-400 bg-cyan-500/5 animate-pulse",
-    available: "border-green-500/30 text-green-400 bg-green-500/5",
-    busy: "border-red-500/30 text-red-400 bg-red-500/5",
-    break: "border-yellow-500/30 text-yellow-400 bg-yellow-500/5",
-    offline: "border-border text-muted-foreground",
-    inactive: "border-border text-muted-foreground",
+    active:      PASTEL.green,
+    completed:   PASTEL.blue,
+    paused:      PASTEL.yellow,
+    draft:       PASTEL.gray,
+    in_progress: `${PASTEL.cyan} animate-pulse`,
+    available:   PASTEL.green,
+    busy:        PASTEL.red,
+    break:       PASTEL.yellow,
+    offline:     PASTEL.gray,
+    inactive:    PASTEL.gray,
   };
   return (
-    <Badge variant="outline" className={`text-[9px] font-mono uppercase ${map[status] ?? "border-border text-muted-foreground"}`}>
+    <Badge variant="outline" className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium normal-case border ${map[status] ?? PASTEL.gray}`}>
       {status.replace("_", " ")}
     </Badge>
   );
 }
 
 export function DispositionBadge({ disp }: { disp: string }) {
+  const key = disp.toLowerCase();
   const map: Record<string, string> = {
-    interested: "border-green-500/30 text-green-400 bg-green-500/5",
-    not_interested: "border-red-500/30 text-red-400 bg-red-500/5",
-    connected: "border-blue-500/30 text-blue-400 bg-blue-500/5",
-    vm: "border-yellow-500/30 text-yellow-400 bg-yellow-500/5",
-    no_answer: "border-border text-muted-foreground",
-    callback: "border-purple-500/30 text-purple-400 bg-purple-500/5",
+    interested:     PASTEL.green,
+    not_interested: PASTEL.red,
+    connected:      PASTEL.green,
+    transferred:    PASTEL.green,
+    vm:             PASTEL.yellow,
+    voicemail:      PASTEL.yellow,
+    no_answer:      PASTEL.peach,
+    "no answer":    PASTEL.peach,
+    busy:           PASTEL.peach,
+    callback:       PASTEL.purple,
+    failed:         PASTEL.gray,
   };
+  // Match by prefix too — e.g. "failed:timeout", "failed:normal clearing"
+  const cls =
+    map[key] ??
+    (key.startsWith("failed") ? PASTEL.gray :
+     key.startsWith("connect") ? PASTEL.green :
+     PASTEL.gray);
   return (
-    <Badge variant="outline" className={`text-[9px] font-mono uppercase ${map[disp] ?? "border-border text-muted-foreground"}`}>
+    <Badge variant="outline" className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium normal-case border ${cls}`}>
       {disp.replace("_", " ")}
     </Badge>
   );

@@ -429,7 +429,7 @@ export default function DialerPage() {
           )}
 
           {/* Dial pad card */}
-          <div className="bg-[hsl(224,71%,3%)] border border-border rounded-lg p-4">
+          <div className="bg-card border border-border rounded-lg p-4">
             {/* Number display */}
             <div className="flex items-center gap-2 min-h-[44px] mb-4">
               <span className="flex-1 text-xl font-mono text-foreground tracking-widest text-center">
@@ -509,7 +509,7 @@ export default function DialerPage() {
           </div>
 
           {/* ── Active AI Calls (always visible, with live timer + controls) ── */}
-          <div className="bg-[hsl(224,71%,3%)] border border-border rounded-lg p-4">
+          <div className="bg-card border border-border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-3">
               <PhoneCall className={cn(
                 "w-3.5 h-3.5",
@@ -628,7 +628,7 @@ export default function DialerPage() {
           </div>
 
           {/* ── Recent Inbound Calls (who has called) ─────────────────────── */}
-          <div className="bg-[hsl(224,71%,3%)] border border-border rounded-lg p-4">
+          <div className="bg-card border border-border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-3">
               <PhoneIncoming className="w-3.5 h-3.5 text-blue-400" />
               <h3 className="text-xs font-mono uppercase tracking-wider text-foreground">Recent Inbound</h3>

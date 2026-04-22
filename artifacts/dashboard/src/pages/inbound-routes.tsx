@@ -157,7 +157,7 @@ export default function InboundRoutesPage() {
       <div className="p-6 space-y-6">
 
         {/* ── Webhook config card ── */}
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+        <div className="border border-border rounded bg-card">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <Zap className="w-3.5 h-3.5 text-primary" />
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Telnyx Webhook Configuration</p>
@@ -206,7 +206,7 @@ export default function InboundRoutesPage() {
         </div>
 
         {/* ── Greeting behavior ── */}
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+        <div className="border border-border rounded bg-card">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <MessageSquare className="w-3.5 h-3.5 text-primary" />
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">AI Greeting Behavior</p>
@@ -263,7 +263,7 @@ export default function InboundRoutesPage() {
               {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-36 rounded" />)}
             </div>
           ) : inboundCampaigns.length === 0 ? (
-            <div className="border border-dashed border-border rounded p-12 bg-[hsl(224,71%,3%)] flex flex-col items-center gap-3">
+            <div className="border border-dashed border-border rounded p-12 bg-card flex flex-col items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-white/5 border border-border flex items-center justify-center">
                 <GitBranch className="w-5 h-5 text-muted-foreground" />
               </div>
@@ -291,7 +291,7 @@ export default function InboundRoutesPage() {
                 return (
                   <div
                     key={c.id}
-                    className={`border rounded bg-[hsl(224,71%,3%)] p-4 space-y-4 transition-all duration-300 ${
+                    className={`border rounded bg-card p-4 space-y-4 transition-all duration-300 ${
                       isRinging
                         ? "border-cyan-500/60 shadow-[0_0_12px_rgba(0,255,255,0.08)]"
                         : "border-border"
@@ -383,7 +383,7 @@ export default function InboundRoutesPage() {
         </div>
 
         {/* ── Unassigned numbers ── */}
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+        <div className="border border-border rounded bg-card">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <Phone className="w-3.5 h-3.5 text-muted-foreground" />
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Unassigned DIDs</p>

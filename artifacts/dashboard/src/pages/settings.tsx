@@ -17,7 +17,7 @@ import {
 
 function SettingSection({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
-    <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+    <div className="border border-border rounded bg-card">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         <Icon className="w-3.5 h-3.5 text-primary" />
         <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">{title}</p>

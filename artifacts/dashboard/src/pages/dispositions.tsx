@@ -35,7 +35,7 @@ export default function DispositionsPage() {
           {isLoading ? (
             [...Array(4)].map((_, i) => <Skeleton key={i} className="h-20 rounded" />)
           ) : counts.slice(0, 4).map(d => (
-            <div key={d.key} className="border border-border rounded p-4 bg-[hsl(224,71%,3%)]">
+            <div key={d.key} className="border border-border rounded p-4 bg-card">
               <div className="flex items-center justify-between mb-2">
                 <Badge variant="outline" className={`text-[9px] font-mono uppercase ${d.color}`}>{d.label}</Badge>
               </div>
@@ -47,7 +47,7 @@ export default function DispositionsPage() {
           ))}
         </div>
 
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+        <div className="border border-border rounded bg-card">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <Tag className="w-3.5 h-3.5 text-primary" />
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Disposition Distribution</p>
@@ -76,7 +76,7 @@ export default function DispositionsPage() {
           </div>
         </div>
 
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)] overflow-hidden">
+        <div className="border border-border rounded bg-card overflow-hidden">
           <div className="px-4 py-3 border-b border-border">
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Recent Dispositioned Calls</p>
           </div>

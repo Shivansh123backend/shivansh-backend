@@ -57,7 +57,7 @@ function CreateOrEditModal({ onClose, list, campaigns }: { onClose: () => void; 
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-md">
+      <div className="bg-card border border-border rounded w-full max-w-md">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <p className="text-xs font-mono uppercase tracking-widest">{list ? "Edit List" : "New List"}</p>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
@@ -139,7 +139,7 @@ export default function ListsPage() {
       />
 
       <div className="p-6">
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)] overflow-hidden">
+        <div className="border border-border rounded bg-card overflow-hidden">
           <table className="w-full text-xs font-mono">
             <thead>
               <tr className="border-b border-border">

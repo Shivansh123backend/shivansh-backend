@@ -264,7 +264,7 @@ function StatCard({ label, value, color, loading, icon: Icon }: {
   label: string; value: number | string; color: string; loading?: boolean; icon: React.ElementType
 }) {
   return (
-    <div className="border border-border rounded p-4 bg-[hsl(224,71%,3%)] flex items-start justify-between gap-2">
+    <div className="border border-border rounded p-4 bg-card flex items-start justify-between gap-2">
       <div>
         <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">{label}</p>
         {loading ? (
@@ -308,7 +308,7 @@ function LiveCallCard({
   }, [transcriptLines.length]);
 
   return (
-    <div className={`border rounded bg-[hsl(224,71%,3%)] p-4 space-y-3 relative overflow-hidden transition-colors ${
+    <div className={`border rounded bg-card p-4 space-y-3 relative overflow-hidden transition-colors ${
       isListening
         ? "border-cyan-500/60 shadow-[0_0_12px_rgba(6,182,212,0.15)]"
         : "border-green-500/20 hover:border-green-500/40"
@@ -460,7 +460,7 @@ function EventLog({ events }: { events: EventEntry[] }) {
   };
 
   return (
-    <div className="border border-border rounded bg-[hsl(224,71%,3%)] flex flex-col" style={{ height: 320 }}>
+    <div className="border border-border rounded bg-card flex flex-col" style={{ height: 320 }}>
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2">
           <Activity className="w-3.5 h-3.5 text-primary" />
@@ -915,7 +915,7 @@ export default function LiveMonitorPage() {
             </p>
           </div>
           {activeCallsArr.length === 0 ? (
-            <div className="border border-border/50 rounded p-10 bg-[hsl(224,71%,3%)] flex flex-col items-center justify-center gap-3">
+            <div className="border border-border/50 rounded p-10 bg-card flex flex-col items-center justify-center gap-3">
               <div className="w-10 h-10 rounded-full bg-white/5 border border-border flex items-center justify-center">
                 <PhoneMissed className="w-5 h-5 text-muted-foreground/40" />
               </div>
@@ -949,8 +949,8 @@ export default function LiveMonitorPage() {
           </div>
 
           {/* Active campaigns panel */}
-          <div className="border border-border rounded bg-[hsl(224,71%,3%)]" style={{ maxHeight: 320, overflowY: "auto" }}>
-            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border sticky top-0 bg-[hsl(224,71%,3%)]">
+          <div className="border border-border rounded bg-card" style={{ maxHeight: 320, overflowY: "auto" }}>
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border sticky top-0 bg-card">
               <Megaphone className="w-3.5 h-3.5 text-primary" />
               <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Running Campaigns</p>
             </div>
@@ -992,18 +992,18 @@ export default function LiveMonitorPage() {
 
         {/* Calls stats row */}
         <div className="grid grid-cols-2 gap-3">
-          <div className="border border-border rounded p-4 bg-[hsl(224,71%,3%)]">
+          <div className="border border-border rounded p-4 bg-card">
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">Total Calls Today</p>
             <p className="text-xl font-bold font-mono text-foreground">{totalToday}</p>
           </div>
-          <div className="border border-border rounded p-4 bg-[hsl(224,71%,3%)]">
+          <div className="border border-border rounded p-4 bg-card">
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">Completed Today</p>
             <p className="text-xl font-bold font-mono text-blue-400">{completedToday}</p>
           </div>
         </div>
 
         {/* Human Agent Performance */}
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+        <div className="border border-border rounded bg-card">
           <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
             <Users className="w-3.5 h-3.5 text-blue-400" />
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Human Agent Performance · Today</p>

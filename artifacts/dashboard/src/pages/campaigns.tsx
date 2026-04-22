@@ -581,7 +581,7 @@ function NumberMultiSelect({
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute z-50 top-full mt-1 w-full rounded-md border border-border bg-[hsl(224,71%,4%)] shadow-xl overflow-hidden">
+        <div className="absolute z-50 top-full mt-1 w-full rounded-md border border-border bg-popover shadow-xl overflow-hidden">
           <div className="px-3 py-1.5 border-b border-border/50 flex items-center justify-between">
             <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">
               {selected.length}/{max} selected
@@ -759,7 +759,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-xl flex flex-col max-h-[90vh]">
+      <div className="bg-card border border-border rounded w-full max-w-xl flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
           <p className="text-xs font-mono uppercase tracking-widest text-foreground">New Campaign</p>
@@ -1193,7 +1193,7 @@ function LaunchModal({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-lg flex flex-col max-h-[90vh]">
+      <div className="bg-card border border-border rounded w-full max-w-lg flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
           <div className="flex items-center gap-2">
             <Rocket className="w-3.5 h-3.5 text-primary" />
@@ -1510,7 +1510,7 @@ function TestCallModal({ campaign, onClose }: { campaign: Campaign; onClose: () 
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-lg flex flex-col max-h-[90vh]">
+      <div className="bg-card border border-border rounded w-full max-w-lg flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
           <div className="flex items-center gap-2">
@@ -1719,7 +1719,7 @@ export default function CampaignsPage() {
         }
       />
       <div className="p-6">
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)] overflow-hidden">
+        <div className="border border-border rounded bg-card overflow-hidden">
           <table className="w-full text-xs font-mono">
             <thead>
               <tr className="border-b border-border">

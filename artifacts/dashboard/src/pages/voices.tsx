@@ -150,7 +150,7 @@ function VoiceCard({
 
   return (
     <div className={cn(
-      "border rounded bg-[hsl(224,71%,3%)] p-4 space-y-3 transition-all",
+      "border rounded bg-card p-4 space-y-3 transition-all",
       playing ? "border-primary/40 shadow-[0_0_12px_rgba(0,255,255,0.08)]" : "border-border"
     )}>
       {/* Header */}
@@ -278,7 +278,7 @@ function AddVoiceModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-[hsl(224,71%,3%)] border border-border rounded w-full max-w-md">
+      <div className="bg-card border border-border rounded w-full max-w-md">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <p className="text-xs font-mono uppercase tracking-widest text-foreground">Add Voice</p>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">

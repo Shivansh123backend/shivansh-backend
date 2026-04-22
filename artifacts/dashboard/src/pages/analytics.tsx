@@ -96,18 +96,18 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="border border-border rounded bg-[hsl(224,71%,3%)] p-4">
+          <div className="border border-border rounded bg-card p-4">
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-4">Disposition Breakdown</p>
             {callsLoading ? <Skeleton className="h-40 w-full" /> : <MiniBarChart data={dispositionData} />}
           </div>
 
-          <div className="border border-border rounded bg-[hsl(224,71%,3%)] p-4">
+          <div className="border border-border rounded bg-card p-4">
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-4">Calls by Provider</p>
             {callsLoading ? <Skeleton className="h-40 w-full" /> : <MiniBarChart data={providerData} />}
           </div>
         </div>
 
-        <div className="border border-border rounded bg-[hsl(224,71%,3%)]">
+        <div className="border border-border rounded bg-card">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <BarChart2 className="w-3.5 h-3.5 text-primary" />
             <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Campaign Performance</p>
@@ -158,7 +158,7 @@ export default function AnalyticsPage() {
 
 function StatCard({ label, value, sub, icon: Icon }: { label: string; value: string | number; sub: string; icon: React.ElementType }) {
   return (
-    <div className="border border-border rounded p-4 bg-[hsl(224,71%,3%)]">
+    <div className="border border-border rounded p-4 bg-card">
       <div className="flex items-center justify-between mb-2">
         <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">{label}</p>
         <Icon className="w-3.5 h-3.5 text-primary" />
