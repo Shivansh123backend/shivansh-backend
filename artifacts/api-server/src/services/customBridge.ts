@@ -98,6 +98,7 @@ interface BridgeState {
   deepgramWs: WebSocket | null;
   messages: Message[];
   isAiSpeaking: boolean;
+  aiSpeakStartedAt: number | null;  // timestamp when current AI utterance started (for barge-in grace period)
   currentTurnId: number;            // increments on each turn — barge-in detection
   currentAbortCtrl: AbortController | null;   // aborts in-flight Cartesia fetch
   isClosed: boolean;
@@ -271,6 +272,13 @@ function triggerBargeIn(state: BridgeState): void {
   state.currentAbortCtrl?.abort();    // cancel the in-flight Cartesia fetch
   state.currentAbortCtrl = null;
   state.isAiSpeaking = false;
+  state.aiSpeakStartedAt = null;
+}
+
+/** Mark AI as speaking and stamp the start time (for barge-in grace window). */
+function markAiSpeaking(state: BridgeState, speaking: boolean): void {
+  state.isAiSpeaking = speaking;
+  state.aiSpeakStartedAt = speaking ? Date.now() : null;
 }
 
 /** Speak a pre-canned line (objection / fast-response) — bypasses LLM entirely. */
@@ -283,7 +291,7 @@ function speakInstant(
   state.messages.push({ role: "user", content: userText });
   state.messages.push({ role: "assistant", content: reply });
   const turnId = ++state.currentTurnId;
-  state.isAiSpeaking = true;
+  markAiSpeaking(state, true);
   // One-shot intervention applies to LLM turns only — clear it here so a
   // canned/instant assistant reply (objection, fast-response, silence prompt)
   // doesn't cause it to leak into a later LLM turn.
@@ -298,10 +306,10 @@ function speakInstant(
   // Fast/objection replies: speak immediately, no artificial delay
   speakText(state, reply, turnId)
     .then(() => {
-      if (state.currentTurnId === turnId) state.isAiSpeaking = false;
+      if (state.currentTurnId === turnId) markAiSpeaking(state, false);
       onDone?.();
     })
-    .catch(() => { state.isAiSpeaking = false; });
+    .catch(() => { markAiSpeaking(state, false); });
 }
 
 /** Hard-stop the bridge cleanly (used after hard rejection). */
@@ -346,7 +354,7 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
   if (state.isClosed || state.pendingTransfer) return;
 
   state.messages.push({ role: "user", content: userText });
-  state.isAiSpeaking = true;
+  markAiSpeaking(state, true);
   const turnId = ++state.currentTurnId;
 
   logger.info(
@@ -468,7 +476,7 @@ async function generateAndSpeak(state: BridgeState, userText: string): Promise<v
     logger.error({ err: String(err), callControlId: state.callControlId }, "GPT-4o error");
   } finally {
     if (state.currentTurnId === turnId) {
-      state.isAiSpeaking = false;
+      markAiSpeaking(state, false);
     }
   }
 }
@@ -501,11 +509,11 @@ function connectDeepgram(state: BridgeState): void {
     // Speak the opening line immediately
     if (state.firstMessage.trim()) {
       state.messages.push({ role: "assistant", content: state.firstMessage });
-      state.isAiSpeaking = true;
+      markAiSpeaking(state, true);
       const turnId = ++state.currentTurnId;
       speakText(state, state.firstMessage, turnId)
-        .then(() => { if (state.currentTurnId === turnId) state.isAiSpeaking = false; })
-        .catch(() => { state.isAiSpeaking = false; });
+        .then(() => { if (state.currentTurnId === turnId) markAiSpeaking(state, false); })
+        .catch(() => { markAiSpeaking(state, false); });
     }
   });
 
@@ -543,9 +551,23 @@ function connectDeepgram(state: BridgeState): void {
 
       const isSpeechFinal = msg.speech_final === true;
 
-      // ── Barge-in on ANY non-final result ────────────────────────────────
-      // (only if confidence is high enough to be real speech, not noise)
-      if (!isSpeechFinal && state.isAiSpeaking && confidence >= 0.6) {
+      // ── Barge-in: only on REAL interruptions, not background noise ──────
+      // Previously we cut the AI off on any ≥0.6 confidence interim, which
+      // meant a single "yeah" / "okay" / line noise / coughing chopped the
+      // AI mid-sentence. Now we require:
+      //   • ≥0.75 confidence (filters noise-as-speech)
+      //   • ≥3 words (a real interruption, not a backchannel "uh huh")
+      //   • AI has been speaking for ≥1200ms (grace period — don't kill the
+      //     opening syllable from a click on the line)
+      const wordCount = transcript.split(/\s+/).filter(Boolean).length;
+      const aiSpeakingFor = state.aiSpeakStartedAt ? Date.now() - state.aiSpeakStartedAt : 0;
+      if (
+        !isSpeechFinal &&
+        state.isAiSpeaking &&
+        confidence >= 0.75 &&
+        wordCount >= 3 &&
+        aiSpeakingFor >= 1200
+      ) {
         triggerBargeIn(state);
         return;
       }
@@ -688,6 +710,7 @@ export function connectCustomBridge(
     deepgramWs: null,
     messages: [{ role: "system", content: opts.systemPrompt }],
     isAiSpeaking: false,
+    aiSpeakStartedAt: null,
     currentTurnId: 0,
     currentAbortCtrl: null,
     isClosed: false,

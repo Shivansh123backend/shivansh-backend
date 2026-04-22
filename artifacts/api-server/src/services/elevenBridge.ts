@@ -297,9 +297,10 @@ async function connectToElevenLabs(
                                            // the human real space to think before the AI re-engages.
           silence_end_call_timeout: 45,    // up from 35 to match — don't kill calls during natural long pauses.
           mode: "silence",                 // explicit silence-based VAD (more predictable than default)
-          endpointing_ms: 200,             // 200ms silence wait — total reply lag ≈ 450ms (200 + ~150 LLM + ~75 TTS)
-                                           // Was 250 (user said too slow); 150 risked clipping natural mid-sentence
-                                           // pauses. 200ms is the sweet spot for phone-call turn-taking.
+          endpointing_ms: 350,             // 350ms silence wait — was 200 but the AI was getting cut off
+                                           // mid-sentence by background noise / brief uh-huhs. 350ms is the
+                                           // sweet spot for phone calls: still snappy on real turns, but
+                                           // ignores micro-pauses and short backchannels.
         },
       },
     }));
