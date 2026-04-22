@@ -521,6 +521,7 @@ export function handleTelnyxMediaSocket(ws: WebSocket, req: IncomingMessage): vo
           // ElevenLabs ID into Cartesia rejects the stream. Falls back to the
           // bridge's built-in default Cartesia voice when provider mismatches.
           cartesiaVoiceId: bridge.voiceProvider === "cartesia" ? bridge.voiceId : undefined,
+          voiceProvider: (bridge.voiceProvider ?? "cartesia") as "elevenlabs" | "deepgram" | "cartesia",
           telnyxWs: ws,
           accent: bridge.accent,
           region: bridge.region,

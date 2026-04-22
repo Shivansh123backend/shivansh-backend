@@ -188,31 +188,41 @@ function FileUploadArea({
   hint?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const { toast } = useToast();
 
   const handleFile = async (file: File) => {
-    if (file.type.startsWith("audio/")) {
-      onContent(`[Audio recording: ${file.name}]\nKey insights from this recording should be extracted and applied to the agent's behavior.`, file.name);
-      return;
-    }
-
-    const name = file.name.toLowerCase();
+    setBusy(true);
     try {
+      if (file.type.startsWith("audio/")) {
+        onContent(`[Audio recording: ${file.name}]\nKey insights from this recording should be extracted and applied to the agent's behavior.`, file.name);
+        toast({ title: `Attached ${file.name}` });
+        return;
+      }
+
+      const name = file.name.toLowerCase();
+      let extracted = "";
+
       // ── DOCX (Microsoft Word) ────────────────────────────────────────────
       if (name.endsWith(".docx")) {
         const mammoth = await import("mammoth/mammoth.browser");
         const arrayBuffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer });
-        onContent(result.value.trim(), file.name);
-        return;
-      }
+        extracted = result.value.trim();
 
       // ── PDF ──────────────────────────────────────────────────────────────
-      if (name.endsWith(".pdf")) {
+      } else if (name.endsWith(".pdf")) {
+        // pdfjs v5 needs the worker URL set before getDocument() runs.
+        // Vite resolves `?url` imports to a hashed asset URL at build time.
         const pdfjs = await import("pdfjs-dist");
-        // Worker is required by pdfjs — load from the package's CDN-style URL
-        // so we don't need to copy the worker file into our public dir.
-        const workerUrl = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
-        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        try {
+          const workerUrl = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
+          pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        } catch {
+          // Worker import failed — fall back to the .mjs (un-minified) build.
+          const workerUrl = (await import("pdfjs-dist/build/pdf.worker.mjs?url")).default;
+          pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        }
 
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
@@ -225,28 +235,45 @@ function FileUploadArea({
             .join(" ");
           pages.push(pageText);
         }
-        onContent(pages.join("\n\n").trim(), file.name);
-        return;
-      }
+        extracted = pages.join("\n\n").trim();
 
-      // ── DOC (legacy Word) — not supported in browser; warn user ─────────
-      if (name.endsWith(".doc")) {
-        onContent(
-          `[Could not read ${file.name} — legacy .doc format is not supported. Please save as .docx or .pdf and re-upload.]`,
-          file.name,
-        );
+      // ── DOC (legacy Word) — not supported in browser ────────────────────
+      } else if (name.endsWith(".doc")) {
+        toast({
+          title: "Legacy .doc not supported",
+          description: "Save as .docx or .pdf and re-upload.",
+          variant: "destructive",
+        });
         return;
-      }
 
       // ── Plain text fallback (.txt, .md, anything else) ──────────────────
-      const text = await file.text();
-      onContent(text, file.name);
+      } else {
+        extracted = (await file.text()).trim();
+      }
+
+      if (!extracted) {
+        toast({
+          title: `Could not read ${file.name}`,
+          description: "The file contained no extractable text (may be a scanned image PDF).",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      onContent(extracted, file.name);
+      toast({
+        title: `${file.name} added`,
+        description: `Extracted ${extracted.length.toLocaleString()} characters into the knowledge base.`,
+      });
     } catch (err) {
       console.error("File extraction failed:", err);
-      onContent(
-        `[Failed to extract text from ${file.name}: ${err instanceof Error ? err.message : "unknown error"}]`,
-        file.name,
-      );
+      toast({
+        title: `Failed to read ${file.name}`,
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setBusy(false);
     }
   };
 

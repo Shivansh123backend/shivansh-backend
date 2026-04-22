@@ -93,6 +93,7 @@ interface BridgeState {
   systemPrompt: string;
   firstMessage: string;
   cartesiaVoiceId: string;
+  voiceProvider: "elevenlabs" | "deepgram" | "cartesia";  // tracks the campaign's chosen provider — backchannel is only safe to inject when this is "cartesia"
   accent?: string;
   paceMultiplier?: number;
   telnyxWs: WebSocket;
@@ -668,18 +669,25 @@ function connectDeepgram(state: BridgeState): void {
       // done, masking the ~400-700ms LLM+TTS round-trip. Pre-cached audio
       // chunks are written synchronously to the WS, so they queue ahead of
       // the main reply audio with no risk of overlap.
-      const bc = maybePlayBackchannel({
-        voiceId: state.cartesiaVoiceId,
-        send: (payload) => injectAudio(state, payload),
-        isClosed: state.isClosed,
-        isAiSpeaking: state.isAiSpeaking,
-        lastBackchannelAt: state.lastBackchannelAt,
-        lastBackchannelPhrase: state.lastBackchannelPhrase,
-        userTurnCount: state.userTurnCount,
-      }, transcript);
-      if (bc) {
-        state.lastBackchannelAt = bc.playedAt;
-        state.lastBackchannelPhrase = bc.phrase;
+      //
+      // Gated to ONLY fire when the campaign actually picked a Cartesia voice.
+      // The backchannel is synthesised through Cartesia, so injecting it on a
+      // Deepgram-routed call (where main reply uses default voice) would mix
+      // two unrelated voices in the same turn — that's the "robotic" effect.
+      if (state.voiceProvider === "cartesia") {
+        const bc = maybePlayBackchannel({
+          voiceId: state.cartesiaVoiceId,
+          send: (payload) => injectAudio(state, payload),
+          isClosed: state.isClosed,
+          isAiSpeaking: state.isAiSpeaking,
+          lastBackchannelAt: state.lastBackchannelAt,
+          lastBackchannelPhrase: state.lastBackchannelPhrase,
+          userTurnCount: state.userTurnCount,
+        }, transcript);
+        if (bc) {
+          state.lastBackchannelAt = bc.playedAt;
+          state.lastBackchannelPhrase = bc.phrase;
+        }
       }
 
       generateAndSpeak(state, transcript).catch((err) => {
@@ -715,6 +723,7 @@ export function connectCustomBridge(
     systemPrompt: string;
     firstMessage: string;
     cartesiaVoiceId?: string;
+    voiceProvider?: "elevenlabs" | "deepgram" | "cartesia";
     telnyxWs: WebSocket;
     accent?: string;
     region?: string;
@@ -733,11 +742,19 @@ export function connectCustomBridge(
     }
   } catch { /* keep default 1.0 */ }
 
+  const resolvedVoiceProvider = opts.voiceProvider ?? "cartesia";
+  const resolvedCartesiaVoice = opts.cartesiaVoiceId ?? DEFAULT_CARTESIA_VOICE;
+  logger.info(
+    { callControlId, voiceProvider: resolvedVoiceProvider, cartesiaVoiceId: resolvedCartesiaVoice, defaulted: !opts.cartesiaVoiceId },
+    "Custom bridge voice resolved",
+  );
+
   const state: BridgeState = {
     callControlId,
     systemPrompt: opts.systemPrompt,
     firstMessage: opts.firstMessage,
-    cartesiaVoiceId: opts.cartesiaVoiceId ?? DEFAULT_CARTESIA_VOICE,
+    cartesiaVoiceId: resolvedCartesiaVoice,
+    voiceProvider: resolvedVoiceProvider,
     accent: opts.accent,
     paceMultiplier,
     telnyxWs: opts.telnyxWs,
