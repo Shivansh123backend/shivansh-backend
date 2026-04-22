@@ -1116,38 +1116,64 @@ function LaunchModal({
   const effectivePending = resetLeads ? pendingLeads.length + calledLeads.length : pendingLeads.length;
   const canLaunch = effectivePending > 0;
 
-  const handleLaunch = async () => {
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Build the PATCH body from current modal state. Shared by Save and Launch.
+  const buildPatchBody = () => {
     const resolvedVoiceProvider = selectedVoice !== "default"
       ? (dbVoices?.find(v => v.voiceId === selectedVoice)?.provider ?? (elVoices.some(v => v.voice_id === selectedVoice) ? "elevenlabs" : undefined))
       : undefined;
+    return {
+      voice: selectedVoice !== "default" ? selectedVoice : undefined,
+      voiceProvider: resolvedVoiceProvider,
+      fromNumber: selectedNumber || undefined,
+      agentPrompt: prompt || undefined,
+      agentId: selectedAgent !== "none" ? parseInt(selectedAgent) : null,
+      backgroundSound,
+      holdMusic,
+      transferNumber: transferNumber || undefined,
+      humanLike,
+      dialingMode,
+      dialingRatio: parseInt(dialingRatio) || 1,
+      dialingSpeed: parseInt(dialingSpeed) || 10,
+      dropRateLimit: parseInt(dropRateLimit) || 3,
+      retryAttempts: parseInt(retryAttempts) || 2,
+      retryIntervalMinutes: parseInt(retryIntervalMinutes) || 60,
+      workingHoursStart: workingHoursStart || undefined,
+      workingHoursEnd: workingHoursEnd || undefined,
+      workingHoursTimezone,
+      amdEnabled,
+      vmDropMessage: vmDropMessage || undefined,
+      tcpaEnabled,
+    };
+  };
+
+  // Save changes (voice, prompt, dialing settings, etc.) WITHOUT starting calls.
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await customFetch(`/api/campaigns/${campaign.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildPatchBody()),
+      });
+      toast({ title: "Campaign saved", description: `Updated "${campaign.name}"` });
+      onLaunched(); // refresh list / cache
+      onClose();
+    } catch {
+      toast({ title: "Failed to save campaign", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleLaunch = async () => {
     setIsLaunching(true);
     try {
       await customFetch(`/api/campaigns/${campaign.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          voice: selectedVoice !== "default" ? selectedVoice : undefined,
-          voiceProvider: resolvedVoiceProvider,
-          fromNumber: selectedNumber || undefined,
-          agentPrompt: prompt || undefined,
-          agentId: selectedAgent !== "none" ? parseInt(selectedAgent) : null,
-          backgroundSound,
-          holdMusic,
-          transferNumber: transferNumber || undefined,
-          humanLike,
-          dialingMode,
-          dialingRatio: parseInt(dialingRatio) || 1,
-          dialingSpeed: parseInt(dialingSpeed) || 10,
-          dropRateLimit: parseInt(dropRateLimit) || 3,
-          retryAttempts: parseInt(retryAttempts) || 2,
-          retryIntervalMinutes: parseInt(retryIntervalMinutes) || 60,
-          workingHoursStart: workingHoursStart || undefined,
-          workingHoursEnd: workingHoursEnd || undefined,
-          workingHoursTimezone,
-          amdEnabled,
-          vmDropMessage: vmDropMessage || undefined,
-          tcpaEnabled,
-        }),
+        body: JSON.stringify(buildPatchBody()),
       });
       if (resetLeads && calledLeads.length > 0) {
         await customFetch(`/api/campaigns/${campaign.id}/reset-leads`, { method: "POST" });
@@ -1389,13 +1415,28 @@ function LaunchModal({
         </div>
 
         <div className="flex gap-2 px-4 py-3 border-t border-border shrink-0">
-          <Button variant="outline" className="flex-1 font-mono text-xs uppercase tracking-wider" onClick={onClose} disabled={isLaunching}>
+          <Button variant="outline" className="flex-1 font-mono text-xs uppercase tracking-wider" onClick={onClose} disabled={isLaunching || isSaving}>
             Cancel
+          </Button>
+          <Button
+            variant="outline"
+            className="flex-1 font-mono text-xs uppercase tracking-wider border-primary/40 text-primary hover:bg-primary/10"
+            onClick={handleSave}
+            disabled={isLaunching || isSaving}
+            title="Save changes (voice, prompt, etc.) without starting calls"
+          >
+            {isSaving ? (
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-primary animate-pulse" /> Saving...
+              </span>
+            ) : (
+              "Save Changes"
+            )}
           </Button>
           <Button
             className="flex-1 font-mono text-xs uppercase tracking-wider bg-green-600 hover:bg-green-700 text-white"
             onClick={handleLaunch}
-            disabled={isLaunching || !canLaunch}
+            disabled={isLaunching || isSaving || !canLaunch}
           >
             {isLaunching ? (
               <span className="flex items-center gap-1.5">
