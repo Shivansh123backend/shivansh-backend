@@ -1230,8 +1230,20 @@ function LaunchModal({
       toast({ title: `Campaign "${campaign.name}" launched`, description: `Calling ${effectivePending} leads` });
       onLaunched();
       onClose();
-    } catch {
-      toast({ title: "Failed to launch campaign", variant: "destructive" });
+    } catch (err) {
+      // Extract the server's actual error message instead of a generic toast.
+      // Covers customFetch errors (response.json().error), axios-style errors,
+      // and plain Error instances.
+      let description = "Please try again.";
+      const e = err as { response?: { data?: { error?: string } }; body?: { error?: string }; message?: string };
+      if (e?.response?.data?.error) description = e.response.data.error;
+      else if (e?.body?.error) description = e.body.error;
+      else if (e?.message) description = e.message;
+      toast({
+        title: "Failed to launch campaign",
+        description,
+        variant: "destructive",
+      });
     } finally {
       setIsLaunching(false);
     }

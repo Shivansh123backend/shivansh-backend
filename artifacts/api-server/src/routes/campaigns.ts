@@ -403,14 +403,33 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
         return;
       }
 
-      // Auto-reset previously called leads so they can be dialled again
-      await db
+      // Auto-reset previously dialled leads so they can be dialled again.
+      // Covers every "we already tried this number" status — without this
+      // the engine starts with count:0 and silently does nothing.
+      const resetResult = await db
         .update(leadsTable)
         .set({ status: "pending", retryCount: 0 })
         .where(and(
           startSourceFilter,
-          inArray(leadsTable.status, ["called", "completed"]),
-        ));
+          inArray(leadsTable.status, [
+            "called", "completed", "no_answer", "busy",
+            "failed", "voicemail", "answered", "rejected",
+          ]),
+        ))
+        .returning({ id: leadsTable.id });
+
+      if (resetResult.length === 0) {
+        // Leads exist but none are in a re-dialable state (e.g. all DNC,
+        // converted, or in-progress). Tell the user clearly instead of
+        // starting an empty engine.
+        res.status(400).json({
+          error: `Campaign has ${totalCount} lead(s) but none are pending or eligible for redial. Reset leads or upload new ones.`,
+          code: "no_pending_leads",
+          totalLeads: totalCount,
+          pendingLeads: 0,
+        });
+        return;
+      }
     }
   }
 
