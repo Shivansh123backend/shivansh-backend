@@ -88,9 +88,12 @@ function buildAssistant(payload: VapiCallPayload) {
 
   return {
     model: {
-      provider: "openai",
-      model: "gpt-4o-mini",
+      // Groq's llama-3.1-8b-instant returns first token in ~150ms vs ~600ms
+      // for gpt-4o-mini — the single biggest latency win for live calls.
+      provider: "groq",
+      model: "llama-3.1-8b-instant",
       temperature: 0.7,
+      maxTokens: 250,
       messages: [{ role: "system", content: systemPrompt }],
     },
     voice: {
@@ -119,16 +122,19 @@ function buildAssistant(payload: VapiCallPayload) {
     // Respond as fast as possible; smart endpointing uses an LLM to detect
     // when the caller has actually finished a thought (vs a brief pause).
     startSpeakingPlan: {
-      waitSeconds: 0.4,
+      waitSeconds: 0.1,
       smartEndpointingEnabled: true,
+      transcriptionEndpointingPlan: {
+        onPunctuationSeconds: 0.1,
+        onNoPunctuationSeconds: 0.4,
+        onNumberSeconds: 0.3,
+      },
     },
-    // Barge-in: if the caller starts talking, the agent stops within ~2 words
-    // and listens. backoffSeconds prevents the agent from instantly resuming
-    // its previous sentence after being interrupted.
+    // Barge-in: cut off on the first word; almost no voice-detection delay.
     stopSpeakingPlan: {
-      numWords: 2,
-      voiceSeconds: 0.2,
-      backoffSeconds: 1,
+      numWords: 1,
+      voiceSeconds: 0.1,
+      backoffSeconds: 0.5,
     },
     // After ~5s of caller silence, gently check in instead of dead-airing.
     // (Vapi's minimum allowed idle timeout is 5s — closest we can get to the
