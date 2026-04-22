@@ -58,12 +58,29 @@ function mapVoiceProvider(provider?: string): string {
   return "11labs"; // safe default
 }
 
+// Behavioural preamble prepended to every system prompt so the agent feels
+// human: it must answer the user's actual question instead of plowing through
+// the script, keep replies short, and never read out punctuation/markdown.
+const NATURAL_CONVERSATION_PREAMBLE = `You are on a live phone call. Behave like a real human salesperson, not a script-reader.
+
+CONVERSATION RULES (these override the script when they conflict):
+- Keep replies short and conversational — 1-2 sentences max unless the caller asks for detail.
+- If the caller interrupts or asks a question, STOP whatever you were saying and answer THEIR question first. Then, only if it still makes sense, continue the script.
+- Never repeat the same line twice. If the caller didn't hear you, paraphrase.
+- Never speak markdown, asterisks, bullets, or stage directions out loud. Speak only what a person would actually say.
+- If the caller is silent for a few seconds, gently check in ("Are you still there?") instead of restarting the pitch.
+- Match the caller's pace and tone. If they sound rushed, be brief. If they're chatting, be warm.
+
+--- SCRIPT / GOAL ---
+`;
+
 // Build the inline assistant config sent with each call
 function buildAssistant(payload: VapiCallPayload) {
   const voiceProvider = mapVoiceProvider(payload.voice_provider);
-  const systemPrompt = payload.knowledge_base
+  const baseScript = payload.knowledge_base
     ? `${payload.agent_prompt}\n\n--- KNOWLEDGE BASE (use this as your source of truth) ---\n${payload.knowledge_base}`
     : payload.agent_prompt;
+  const systemPrompt = `${NATURAL_CONVERSATION_PREAMBLE}${baseScript}`;
 
   const firstMessage =
     payload.first_message ??
@@ -90,11 +107,41 @@ function buildAssistant(payload: VapiCallPayload) {
     firstMessageMode: "assistant-speaks-first",
     endCallMessage: "Thank you for your time. Have a great day!",
     endCallPhrases: ["goodbye", "good bye", "have a good day", "have a great day"],
-    silenceTimeoutSeconds: 20,
+    // Hang-up only after 30s of total silence (call abandoned).
+    silenceTimeoutSeconds: 30,
     maxDurationSeconds: 600,
-    // Vapi handles barge-in / interruption natively
+    // No background office/cafe noise — keep the line clean unless the
+    // caller explicitly enables it on the campaign in future.
     backgroundSound: "off",
+    // Backchannel ("mhm", "right") makes the agent feel present while listening.
     backchannelingEnabled: true,
+    // ---- Latency / interruption tuning (air.ai-style natural conversation) ----
+    // Respond as fast as possible; smart endpointing uses an LLM to detect
+    // when the caller has actually finished a thought (vs a brief pause).
+    startSpeakingPlan: {
+      waitSeconds: 0.4,
+      smartEndpointingEnabled: true,
+    },
+    // Barge-in: if the caller starts talking, the agent stops within ~2 words
+    // and listens. backoffSeconds prevents the agent from instantly resuming
+    // its previous sentence after being interrupted.
+    stopSpeakingPlan: {
+      numWords: 2,
+      voiceSeconds: 0.2,
+      backoffSeconds: 1,
+    },
+    // After ~5s of caller silence, gently check in instead of dead-airing.
+    // (Vapi's minimum allowed idle timeout is 5s — closest we can get to the
+    // requested 2s without the API rejecting the config.)
+    messagePlan: {
+      idleMessages: [
+        "Are you still there?",
+        "Hello, can you hear me?",
+        "Just checking — are you on the line?",
+      ],
+      idleTimeoutSeconds: 5,
+      idleMessageMaxSpokenCount: 3,
+    },
     serverUrl: `${BACKEND_WEBHOOK_URL}/api/vapi/webhook`,
     // Sent back to us as `x-vapi-secret` header on every webhook event so
     // we can authenticate the request. Falls back to empty if not set
