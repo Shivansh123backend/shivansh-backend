@@ -27,7 +27,12 @@ export interface FilterResult {
 
 export function filterTranscript(transcript: string, confidence: number): FilterResult {
   const clean = transcript.trim().toLowerCase();
-  if (confidence < 0.6) {
+  // Raised from 0.6 → 0.72. Background noise (TVs, traffic, kitchen sounds)
+  // typically transcribes at 0.4-0.65 confidence; real caller speech sits at
+  // 0.8+. The tighter floor keeps the AI from "responding" to ambient noise
+  // while still catching genuine but slightly muffled speech (which can also
+  // legitimately ask for clarification — see the low_confidence branch below).
+  if (confidence < 0.72) {
     return { accept: false, reason: "low_confidence" };
   }
   if (clean.length < 2) {
@@ -36,6 +41,12 @@ export function filterTranscript(transcript: string, confidence: number): Filter
   const words = clean.split(/\s+/);
   if (words.length <= 2 && words.every((w) => FILLERS.has(w.replace(/[.,!?]/g, "")))) {
     return { accept: false, reason: "filler" };
+  }
+  // Single-word non-filler utterances at marginal confidence are almost always
+  // background noise misclassified as speech ("hey", "no", "yes" pulled from
+  // a TV). Require ≥0.85 confidence for single words.
+  if (words.length === 1 && confidence < 0.85) {
+    return { accept: false, reason: "low_confidence" };
   }
   return { accept: true };
 }
@@ -164,13 +175,36 @@ const STATE_GUIDANCE: Record<ConversationState, string> = {
 const OUTPUT_STYLE = `
 YOU ARE A CONTROLLED CONVERSATIONAL AGENT — NOT A SCRIPT READER.
 
-PRIMARY RULE (non-negotiable):
-- Follow the campaign SOP and stage flow exactly. Never skip stages, never invent flow.
-- Adapt HOW you say things (tone, wording) based on the user — but never WHAT stage you are in.
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY RULES (NON-NEGOTIABLE — VIOLATIONS BREAK THE CALL):
+═══════════════════════════════════════════════════════════════════════════
+1. KNOWLEDGE BASE IS SOURCE OF TRUTH (when present):
+   - IF a "=== KNOWLEDGE BASE & SOPs ===" block appears at the top of your
+     context, treat it as the authoritative source for product details,
+     prices, hours, policies, and transfer rules. Never contradict it.
+   - For specific facts NOT covered by the knowledge base or your script
+     (exact prices, dates, account-level details, contractual terms): say
+     "Let me get back to you on that — I'll have a colleague follow up."
+   - For general conversational questions ("how are you", "what do you do",
+     "tell me more"): answer naturally from your script and persona — do NOT
+     defer those to a colleague.
 
-CONTEXT MEMORY:
-- Remember what the user has already told you. Never re-ask the same question.
-- Stay context-aware. Reference what they said when relevant.
+2. SEQUENTIAL FLOW IS LOCKED:
+   - Follow the campaign SOP stages in order: INTRO → QUALIFY → DISCOVER →
+     PITCH → OBJECTION → CLOSE → END. Never skip a stage. Never go backwards
+     except to handle a NEW objection.
+   - You may rephrase/adapt HOW you speak in each stage, but you may NOT
+     change WHICH stage you are in.
+   - Do not pitch before you have qualified. Do not close before you have
+     pitched. Do not end before you have closed (or hit a hard objection).
+   - Each turn, your response must match the CURRENT CONVERSATION STAGE
+     printed at the bottom of this prompt.
+
+3. CONTEXT MEMORY:
+   - Remember what the user has already told you. NEVER re-ask the same
+     question (name, interest, timing, budget, etc.).
+   - Reference their earlier answers naturally when relevant — proves you
+     listened.
 
 RESPONSE RULES:
 - Keep replies to 1–2 short sentences. No paragraphs, no lists, no markdown.

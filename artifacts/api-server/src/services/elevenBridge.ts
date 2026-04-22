@@ -111,6 +111,9 @@ export interface BridgeInfo {
   voiceId: string;
   systemPrompt: string;
   firstMessage: string;
+  /** Pre-generated greeting audio URL — computed in parallel with AMD wait so
+   *  the moment AMD confirms human, we can play instantly with zero TTS lag. */
+  firstAudioPromise?: Promise<string>;
   pendingTransfer: boolean;    // true once transfer is scheduled — prevents double-execution
   onTransferRequested?: (to: string) => void;
   onCallEnded?: () => void;
