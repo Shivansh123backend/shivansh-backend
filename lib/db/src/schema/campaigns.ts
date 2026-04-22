@@ -24,6 +24,10 @@ export const campaignsTable = pgTable("campaigns", {
   recordingNotes: text("recording_notes"),
   voice: text("voice"),
   voiceProvider: text("voice_provider").default("elevenlabs"), // "elevenlabs" | "deepgram" | "cartesia"
+  // When true, outbound calls are placed via Vapi (https://vapi.ai) instead of
+  // our custom Telnyx + STT/LLM/TTS pipeline. Vapi handles realtime audio,
+  // barge-in, and endpointing internally for air.ai-grade latency.
+  useVapi: boolean("use_vapi").notNull().default(false),
   fromNumber: text("from_number"),
   transferNumber: text("transfer_number"),
   backgroundSound: text("background_sound").default("none"),

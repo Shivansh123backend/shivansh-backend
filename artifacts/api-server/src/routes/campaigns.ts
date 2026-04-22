@@ -57,6 +57,7 @@ const createCampaignSchema = z.object({
   amdEnabled: z.boolean().default(false),
   tcpaEnabled: z.boolean().default(false),
   voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).default("elevenlabs").nullish(),
+  useVapi: z.boolean().default(false),
   vmDropMessage: z.string().nullish(),
   // Geo + voice profile (additive)
   region: z.enum(["US", "UK", "CA", "AU", "IN", "OTHER"]).nullish(),
@@ -130,6 +131,7 @@ const draftCampaignSchema = z.object({
   workingHoursTimezone: z.string().nullish(),
   amdEnabled: z.boolean().optional(),
   tcpaEnabled: z.boolean().optional(),
+  useVapi: z.boolean().optional(),
   vmDropMessage: z.string().nullish(),
   region: z.enum(["US", "UK", "CA", "AU", "IN", "OTHER"]).nullish(),
   accent: z.enum(["US", "UK", "neutral"]).nullish(),
@@ -236,6 +238,7 @@ const updateCampaignSchema = z.object({
   amdEnabled: z.boolean().optional(),
   tcpaEnabled: z.boolean().optional(),
   voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).optional(),
+  useVapi: z.boolean().optional(),
   region: z.enum(["US", "UK", "CA", "AU", "IN", "OTHER"]).nullish(),
   accent: z.enum(["US", "UK", "neutral"]).nullish(),
   voiceProfile: z.string().nullish(),
@@ -835,8 +838,14 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       return; // Don't update status — retry later when it's within hours
     }
 
-    // Dynamic number allocation from pool (picks least-used, non-busy, non-blocked number)
-    const callFromNumber = await allocateNumber(campaignId, fromNumber);
+    // Vapi-routed campaigns originate from the Vapi-registered number
+    // (env VAPI_PHONE_NUMBER_ID), not from our Telnyx pool. Skip pool
+    // allocation so we don't lock a Telnyx number that won't actually
+    // be dialed and never get released by the Vapi webhook.
+    const useVapiForThisCall = Boolean((campaign as { useVapi?: boolean }).useVapi);
+    const callFromNumber = useVapiForThisCall
+      ? `vapi:${process.env.VAPI_PHONE_NUMBER_ID ?? "unknown"}`
+      : await allocateNumber(campaignId, fromNumber);
 
     // ── Conversion prediction (additive — never blocks dial) ─────────────
     let predProb: number | null = null;
@@ -879,7 +888,12 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
     // campaign is running wouldn't take effect until the next run. This makes
     // voice changes apply to the very next call.
     const [liveCampaign] = await db
-      .select({ voice: campaignsTable.voice, voiceProvider: campaignsTable.voiceProvider })
+      .select({
+        voice: campaignsTable.voice,
+        voiceProvider: campaignsTable.voiceProvider,
+        useVapi: campaignsTable.useVapi,
+        knowledgeBase: campaignsTable.knowledgeBase,
+      })
       .from(campaignsTable)
       .where(eq(campaignsTable.id, campaignId))
       .limit(1);
@@ -900,10 +914,15 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       background_sound: backgroundSound !== "none" ? backgroundSound : undefined,
       hold_music_url: holdMusicUrl ?? undefined,
       amd_enabled: campaign.amdEnabled ? "true" : undefined,
+      use_vapi: liveCampaign?.useVapi ?? false,
+      knowledge_base: liveCampaign?.knowledgeBase ?? undefined,
+      lead_id: String(lead.id),
+      lead_name: lead.name ?? undefined,
     });
 
-    // If call fails, release the number immediately (webhook won't fire)
-    if (!result.success) {
+    // If call fails, release the number immediately (webhook won't fire).
+    // Skip for Vapi path — no Telnyx number was allocated.
+    if (!result.success && !useVapiForThisCall) {
       await db
         .update(phoneNumbersTable)
         .set({ isBusy: false })

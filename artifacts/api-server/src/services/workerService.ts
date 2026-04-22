@@ -29,6 +29,13 @@ export interface EnqueueCallPayload {
   background_sound?: string;
   hold_music_url?: string;
   amd_enabled?: string;
+  // When true, route this call through Vapi instead of Telnyx+custom pipeline
+  use_vapi?: boolean;
+  // Optional context fields used by Vapi assistant (firstMessage, KB, etc.)
+  knowledge_base?: string;
+  lead_id?: string;
+  lead_name?: string;
+  first_message?: string;
 }
 
 export interface TriggerCallResult {
@@ -249,6 +256,26 @@ export async function enqueueCall(payload: EnqueueCallPayload): Promise<TriggerC
   // protect downstream STT/LLM/TTS streams. No-op when DIAL_RATE_PER_SEC=0.
   const { acquireDispatchToken } = await import("../lib/dispatchLimiter.js");
   await acquireDispatchToken();
+
+  // ── Vapi branch ──────────────────────────────────────────────────────────
+  // If campaign opted into Vapi, hand the call off to Vapi's managed
+  // realtime pipeline. Bypasses Telnyx-direct + customBridge entirely.
+  if (payload.use_vapi) {
+    const { vapiDirectCall } = await import("./vapiService.js");
+    return vapiDirectCall({
+      phone: payload.phone,
+      agent_prompt: payload.agent_prompt,
+      voice: payload.voice,
+      voice_provider: payload.voice_provider,
+      campaign_id: payload.campaign_id,
+      campaign_name: payload.campaign_name,
+      transfer_number: payload.transfer_number,
+      knowledge_base: payload.knowledge_base,
+      lead_id: payload.lead_id,
+      lead_name: payload.lead_name,
+      first_message: payload.first_message,
+    });
+  }
 
   // If no worker configured (or WORKER_URL not set), use Telnyx direct
   if (!WORKER_URL) {

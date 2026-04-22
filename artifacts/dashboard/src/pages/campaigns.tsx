@@ -725,6 +725,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const [amdEnabled, setAmdEnabled] = useState(false);
   const [vmDropMessage, setVmDropMessage] = useState("");
   const [tcpaEnabled, setTcpaEnabled] = useState(false);
+  const [useVapi, setUseVapi] = useState(false);
 
   const { data: dbVoices } = useListVoices() as { data: Array<{ id: number; name: string; voiceId: string; provider: string; gender: string; accent: string; previewUrl?: string; description?: string }> | undefined };
   const { data: numbers } = useListNumbers() as { data: Array<NumberOption> | undefined };
@@ -771,6 +772,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           amdEnabled,
           vmDropMessage: vmDropMessage || undefined,
           tcpaEnabled,
+          useVapi,
         } as Parameters<typeof createCampaign.mutate>[0]["data"],
       },
       {
@@ -957,6 +959,21 @@ function CreateModal({ onClose }: { onClose: () => void }) {
                 />
               </div>
 
+              {/* Vapi engine toggle ─ routes call through Vapi's managed pipeline */}
+              <div className="flex items-center justify-between rounded border border-border px-3 py-2.5">
+                <div>
+                  <p className="text-xs font-mono font-medium text-foreground">Use Vapi engine (beta)</p>
+                  <p className="text-[10px] font-mono text-muted-foreground mt-0.5">Route calls through Vapi for air.ai-grade latency. Selected voice is sent as a per-call override.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setUseVapi(!useVapi)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors ${useVapi ? "bg-primary" : "bg-muted"}`}
+                >
+                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${useVapi ? "translate-x-4" : "translate-x-0"}`} />
+                </button>
+              </div>
+
               <div className="space-y-1.5">
                 <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
                   <Phone className="w-3 h-3" /> Caller Number (From)
@@ -1136,6 +1153,7 @@ function LaunchModal({
   const [amdEnabled, setAmdEnabled] = useState(Boolean((campaign as Record<string, unknown>).amdEnabled));
   const [vmDropMessage, setVmDropMessage] = useState(String((campaign as Record<string, unknown>).vmDropMessage ?? ""));
   const [tcpaEnabled, setTcpaEnabled] = useState(Boolean((campaign as Record<string, unknown>).tcpaEnabled));
+  const [useVapi, setUseVapi] = useState(Boolean((campaign as Record<string, unknown>).useVapi));
 
   const pendingLeads = (leads ?? []).filter((l: { status: string }) => l.status === "pending");
   const calledLeads = (leads ?? []).filter((l: { status: string }) => ["called", "callback", "completed"].includes(l.status));
@@ -1172,6 +1190,7 @@ function LaunchModal({
       amdEnabled,
       vmDropMessage: vmDropMessage || undefined,
       tcpaEnabled,
+      useVapi,
     };
   };
 
@@ -1322,6 +1341,21 @@ function LaunchModal({
               elVoices={elVoices}
               elLoading={elLoading}
             />
+          </div>
+
+          {/* Vapi engine toggle ─ routes call through Vapi's managed pipeline */}
+          <div className="flex items-center justify-between rounded border border-border px-3 py-2.5">
+            <div>
+              <p className="text-xs font-mono font-medium text-foreground">Use Vapi engine (beta)</p>
+              <p className="text-[10px] font-mono text-muted-foreground mt-0.5">Route calls through Vapi for air.ai-grade latency. Selected voice is sent as a per-call override.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setUseVapi(!useVapi)}
+              className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors ${useVapi ? "bg-primary" : "bg-muted"}`}
+            >
+              <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${useVapi ? "translate-x-4" : "translate-x-0"}`} />
+            </button>
           </div>
 
           {/* Background sound + Hold music */}
