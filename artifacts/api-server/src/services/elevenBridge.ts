@@ -206,7 +206,7 @@ async function getBaseAgentId(): Promise<string> {
             turn_timeout: 15,
             silence_end_call_timeout: 20,
             mode: "silence",
-            endpointing_ms: 700,             // 350ms = humans typically speak again ~250-400ms after partner stops
+            endpointing_ms: 500,             // 350ms = humans typically speak again ~250-400ms after partner stops
           },
         },
       }),
@@ -297,7 +297,7 @@ async function connectToElevenLabs(
                                            // the human real space to think before the AI re-engages.
           silence_end_call_timeout: 45,    // up from 35 to match — don't kill calls during natural long pauses.
           mode: "silence",                 // explicit silence-based VAD (more predictable than default)
-          endpointing_ms: 700,             // 350ms silence wait — was 200 but the AI was getting cut off
+          endpointing_ms: 500,             // 350ms silence wait — was 200 but the AI was getting cut off
                                            // mid-sentence by background noise / brief uh-huhs. 350ms is the
                                            // sweet spot for phone calls: still snappy on real turns, but
                                            // ignores micro-pauses and short backchannels.

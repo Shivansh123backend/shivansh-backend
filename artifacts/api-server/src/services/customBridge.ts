@@ -489,12 +489,14 @@ function connectDeepgram(state: BridgeState): void {
     encoding: "mulaw",
     sample_rate: "8000",
     channels: "1",
-    // 700ms silence before utterance is "done". 200ms was too aggressive —
-    // humans pause 300-500ms mid-thought (breath, finding a word) so the bot
-    // was firing a reply mid-sentence and cutting the caller off. 700ms is
-    // the sweet spot for natural conversational pauses without feeling laggy.
-    endpointing: "700",
-    utterance_end_ms: "1200",    // Deepgram smart end-of-turn fallback (>endpointing)
+    // 500ms silence = end of turn — the conversational sweet spot.
+    //   • 200ms cut callers off mid-sentence (too eager).
+    //   • 700ms felt sluggish — long awkward pause before AI replied.
+    //   • 500ms is the standard human conversational gap threshold.
+    // utterance_end_ms = 1100 fires UtteranceEnd as a smart fallback for
+    // longer thoughtful pauses, so we never lose a complete sentence.
+    endpointing: "500",
+    utterance_end_ms: "1100",
     interim_results: "true",     // used for barge-in detection
     smart_format: "true",
     punctuate: "true",
