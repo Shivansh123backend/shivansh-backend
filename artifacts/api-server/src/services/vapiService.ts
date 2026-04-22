@@ -33,6 +33,11 @@ export interface VapiCallPayload {
   lead_id?: string;
   lead_name?: string;
   knowledge_base?: string;  // Optional KB injected into system prompt
+  // Vapi phone-number ID to originate from. Per-call override of the
+  // VAPI_PHONE_NUMBER_ID env var. Set this to the allocated Telnyx
+  // number's Vapi-registered ID so calls go out from the user-selected
+  // number pool, not a single global number.
+  vapi_phone_number_id?: string;
 }
 
 export interface VapiCallResult {
@@ -102,11 +107,14 @@ export async function vapiDirectCall(payload: VapiCallPayload): Promise<VapiCall
   if (!VAPI_API_KEY) {
     return { success: false, error: "VAPI_API_KEY environment variable not set" };
   }
-  if (!VAPI_PHONE_NUMBER_ID) {
+  // Per-call override (allocated from campaign's number pool) takes
+  // priority; fall back to the global env var for one-off test calls.
+  const phoneNumberId = payload.vapi_phone_number_id ?? VAPI_PHONE_NUMBER_ID;
+  if (!phoneNumberId) {
     return {
       success: false,
       error:
-        "VAPI_PHONE_NUMBER_ID not set. Register a phone number at https://dashboard.vapi.ai/phone-numbers (BYO your Telnyx number) and set the env var to its ID.",
+        "No Vapi phone number available. Go to Phone Numbers → click 'Sync to Vapi' to register your Telnyx numbers with Vapi, then assign at least one to this campaign.",
     };
   }
 
@@ -116,7 +124,7 @@ export async function vapiDirectCall(payload: VapiCallPayload): Promise<VapiCall
   }
 
   const body = {
-    phoneNumberId: VAPI_PHONE_NUMBER_ID,
+    phoneNumberId,
     customer: {
       number: phone,
       name: payload.lead_name,
@@ -173,38 +181,116 @@ export async function vapiDirectCall(payload: VapiCallPayload): Promise<VapiCall
   }
 }
 
-// One-shot helper: register an existing Telnyx number with Vapi (BYO).
-// Run this once per number; persist the returned `id` as VAPI_PHONE_NUMBER_ID.
-export async function registerByoTelnyxNumber(opts: {
-  number: string;        // E.164
+// ─────────────────────────────────────────────────────────────────────────────
+// Telnyx credential + phone-number registration in Vapi
+//
+// Vapi needs each Telnyx number registered as a Vapi phone-number record
+// before it can originate calls from it. The setup is two-step:
+//   1. Create a Vapi credential carrying your Telnyx API key (one-time per
+//      Telnyx account). Vapi stores it server-side and uses it to talk to
+//      Telnyx on your behalf.
+//   2. POST /phone-number with provider="byo-phone-number-credential" + the
+//      credentialId for each E.164 number. (Vapi's "telnyx" provider name
+//      is for Vapi-purchased Telnyx numbers — we want BYO since the user
+//      already owns the numbers in their own Telnyx account.)
+//
+// We cache the credentialId in module memory after first lookup/creation so
+// the per-number calls during a sync don't re-list every time.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let cachedTelnyxCredentialId: string | null = null;
+
+async function getOrCreateTelnyxCredential(): Promise<{ id: string } | { error: string }> {
+  if (cachedTelnyxCredentialId) return { id: cachedTelnyxCredentialId };
+  if (!VAPI_API_KEY) return { error: "VAPI_API_KEY not set" };
+  const telnyxKey = process.env.TELNYX_API_KEY;
+  if (!telnyxKey) return { error: "TELNYX_API_KEY not set" };
+
+  try {
+    // Try to find an existing Telnyx credential first (idempotent sync)
+    const list = await axios.get(`${VAPI_API_BASE}/credential`, {
+      headers: { Authorization: `Bearer ${VAPI_API_KEY}` },
+      timeout: 10_000,
+    });
+    const existing = (list.data as Array<{ id: string; provider: string }>).find(
+      (c) => c.provider === "byo-sip-trunk" || c.provider === "telnyx"
+    );
+    if (existing?.id) {
+      cachedTelnyxCredentialId = existing.id;
+      return { id: existing.id };
+    }
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "Could not list Vapi credentials — will try to create");
+  }
+
+  // Create a new Telnyx credential carrying the API key
+  try {
+    const create = await axios.post(
+      `${VAPI_API_BASE}/credential`,
+      { provider: "telnyx", apiKey: telnyxKey, name: "Shivansh Telnyx" },
+      {
+        headers: { Authorization: `Bearer ${VAPI_API_KEY}`, "Content-Type": "application/json" },
+        timeout: 10_000,
+      }
+    );
+    const id = create.data?.id as string | undefined;
+    if (!id) return { error: "Vapi did not return a credential id" };
+    cachedTelnyxCredentialId = id;
+    return { id };
+  } catch (err) {
+    const ax = err as AxiosError<{ message?: string }>;
+    return { error: `Vapi credential create failed: ${ax.response?.data?.message ?? ax.message}` };
+  }
+}
+
+// Register a single Telnyx number with Vapi. Idempotent-ish: returns the
+// existing id if Vapi 409s on duplicate.
+export async function registerNumberWithVapi(opts: {
+  number: string;   // E.164
   name?: string;
-  telnyxApiKey?: string; // defaults to env TELNYX_API_KEY
 }): Promise<{ success: boolean; id?: string; error?: string }> {
   if (!VAPI_API_KEY) return { success: false, error: "VAPI_API_KEY not set" };
-  const telnyxKey = opts.telnyxApiKey ?? process.env.TELNYX_API_KEY;
-  if (!telnyxKey) return { success: false, error: "TELNYX_API_KEY not set" };
+
+  const cred = await getOrCreateTelnyxCredential();
+  if ("error" in cred) return { success: false, error: cred.error };
 
   try {
     const resp = await axios.post(
       `${VAPI_API_BASE}/phone-number`,
       {
-        provider: "byo-phone-number",
-        name: opts.name ?? `Telnyx ${opts.number}`,
+        provider: "telnyx",
         number: opts.number,
-        numberE164CheckEnabled: true,
-        credentialId: undefined, // for BYO via Telnyx, see Vapi docs; alternative: use 'twilio'/'telnyx' provider
+        credentialId: cred.id,
+        name: opts.name ?? `Telnyx ${opts.number}`,
+        // Hook every Vapi call from this number to our webhook. Per-call
+        // assistant configs override this, so it's just a safe default.
+        serverUrl: `${BACKEND_WEBHOOK_URL}/api/vapi/webhook`,
+        serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET ?? "",
       },
       {
-        headers: {
-          Authorization: `Bearer ${VAPI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${VAPI_API_KEY}`, "Content-Type": "application/json" },
         timeout: 10_000,
       }
     );
     return { success: true, id: resp.data?.id };
   } catch (err) {
-    const ax = err as AxiosError<{ message?: string }>;
-    return { success: false, error: ax.response?.data?.message ?? ax.message };
+    const ax = err as AxiosError<{ message?: string | string[] }>;
+    const msg = Array.isArray(ax.response?.data?.message)
+      ? ax.response.data.message.join("; ")
+      : (ax.response?.data?.message ?? ax.message);
+    // 409 / "already exists" → try to look it up so we can persist the id
+    if (ax.response?.status === 409 || /already exists|duplicate/i.test(msg)) {
+      try {
+        const list = await axios.get(`${VAPI_API_BASE}/phone-number`, {
+          headers: { Authorization: `Bearer ${VAPI_API_KEY}` },
+          timeout: 10_000,
+        });
+        const found = (list.data as Array<{ id: string; number: string }>).find((p) => p.number === opts.number);
+        if (found?.id) return { success: true, id: found.id };
+      } catch {
+        // fall through to error return
+      }
+    }
+    return { success: false, error: msg };
   }
 }

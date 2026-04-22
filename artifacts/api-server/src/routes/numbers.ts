@@ -6,6 +6,7 @@ import { authenticate, requireRole } from "../middlewares/auth.js";
 import { z } from "zod";
 import axios from "axios";
 import { logger } from "../lib/logger.js";
+import { registerNumberWithVapi } from "../services/vapiService.js";
 
 const TELNYX_API_BASE = "https://api.telnyx.com/v2";
 
@@ -253,6 +254,70 @@ router.post("/numbers/sync-from-telnyx", authenticate, requireRole("admin"), asy
     logger.error({ err: String(err), status, detail }, "Telnyx number sync failed");
     res.status(502).json({ error: `Telnyx API error (${status ?? "unknown"}): ${String(err)}` });
   }
+});
+
+// ── POST /numbers/sync-to-vapi ───────────────────────────────────────────────
+// Registers every Telnyx number in our DB with Vapi (one-time per number)
+// so Vapi-routed campaigns can originate calls from the user's selected
+// number pool. Stores the returned Vapi phone-number ID on each row.
+//
+// Idempotent: numbers that already have `vapiPhoneNumberId` set are skipped.
+// Numbers that 409 on Vapi (already registered out-of-band) are looked up
+// and back-filled.
+//
+// Requires: VAPI_API_KEY + TELNYX_API_KEY env vars.
+router.post("/numbers/sync-to-vapi", authenticate, requireRole("admin"), async (_req, res): Promise<void> => {
+  if (!process.env.VAPI_API_KEY) {
+    res.status(500).json({ error: "VAPI_API_KEY not configured" });
+    return;
+  }
+  if (!process.env.TELNYX_API_KEY) {
+    res.status(500).json({ error: "TELNYX_API_KEY not configured (needed for Vapi to call Telnyx)" });
+    return;
+  }
+
+  const rows = await db
+    .select({
+      id: phoneNumbersTable.id,
+      phoneNumber: phoneNumbersTable.phoneNumber,
+      vapiPhoneNumberId: phoneNumbersTable.vapiPhoneNumberId,
+    })
+    .from(phoneNumbersTable)
+    .where(eq(phoneNumbersTable.provider, "telnyx"));
+
+  let registered = 0;
+  let skipped = 0;
+  const failures: Array<{ number: string; error: string }> = [];
+
+  for (const row of rows) {
+    if (row.vapiPhoneNumberId) {
+      skipped++;
+      continue;
+    }
+    const result = await registerNumberWithVapi({ number: row.phoneNumber });
+    if (result.success && result.id) {
+      await db
+        .update(phoneNumbersTable)
+        .set({ vapiPhoneNumberId: result.id })
+        .where(eq(phoneNumbersTable.id, row.id));
+      registered++;
+    } else {
+      failures.push({ number: row.phoneNumber, error: result.error ?? "unknown error" });
+    }
+  }
+
+  logger.info({ registered, skipped, failed: failures.length, total: rows.length }, "Vapi number sync complete");
+  res.json({
+    total: rows.length,
+    registered,
+    skippedAlreadyRegistered: skipped,
+    failed: failures.length,
+    failures,
+    message:
+      registered > 0
+        ? `Registered ${registered} number${registered !== 1 ? "s" : ""} with Vapi (${skipped} already registered).`
+        : `All ${skipped} Telnyx numbers are already registered with Vapi.`,
+  });
 });
 
 export default router;

@@ -25,6 +25,11 @@ export const phoneNumbersTable = pgTable("phone_numbers", {
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   isBusy: boolean("is_busy").notNull().default(false),
   isBlocked: boolean("is_blocked").notNull().default(false),
+  // Vapi phone-number record ID (returned by POST /phone-number on Vapi).
+  // Populated by `POST /api/numbers/sync-to-vapi`. NULL means this number
+  // has not been registered with Vapi yet — Vapi-routed campaigns will
+  // skip it during allocation.
+  vapiPhoneNumberId: text("vapi_phone_number_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

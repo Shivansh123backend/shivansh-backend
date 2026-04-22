@@ -676,7 +676,11 @@ async function stage<T>(stageName: string, campaignId: number, fn: () => Promise
  *  numbers. We never silently fall back to unassigned floating numbers — that
  *  would let calls go out from numbers the user didn't pick. Only when the
  *  campaign has zero assigned numbers do we use the unassigned pool. */
-async function allocateNumber(campaignId: number, fallbackNumber: string): Promise<string> {
+async function allocateNumber(
+  campaignId: number,
+  fallbackNumber: string,
+  opts: { requireVapiId?: boolean } = {}
+): Promise<{ phoneNumber: string; vapiPhoneNumberId: string | null }> {
   // Are there any numbers explicitly assigned to this campaign?
   const [assignedRow] = await db
     .select({ count: sql<number>`count(*)::int` })
@@ -688,21 +692,36 @@ async function allocateNumber(campaignId: number, fallbackNumber: string): Promi
     ? eq(phoneNumbersTable.campaignId, campaignId)
     : sql`${phoneNumbersTable.campaignId} IS NULL`;
 
+  const filters = [
+    eq(phoneNumbersTable.status, "active"),
+    eq(phoneNumbersTable.isBusy, false),
+    eq(phoneNumbersTable.isBlocked, false),
+    sql`${phoneNumbersTable.spamScore} < 70`,
+    sql`${phoneNumbersTable.direction} IN ('outbound', 'both')`,
+    scopeFilter,
+  ];
+  // For Vapi-routed campaigns, only consider numbers that have already been
+  // registered with Vapi (otherwise the call has no Vapi phoneNumberId to
+  // originate from and would fail the lead).
+  if (opts.requireVapiId) {
+    filters.push(sql`${phoneNumbersTable.vapiPhoneNumberId} IS NOT NULL`);
+  }
+
   const [poolRow] = await db
-    .select({ phoneNumber: phoneNumbersTable.phoneNumber })
+    .select({
+      phoneNumber: phoneNumbersTable.phoneNumber,
+      vapiPhoneNumberId: phoneNumbersTable.vapiPhoneNumberId,
+    })
     .from(phoneNumbersTable)
-    .where(
-      and(
-        eq(phoneNumbersTable.status, "active"),
-        eq(phoneNumbersTable.isBusy, false),
-        eq(phoneNumbersTable.isBlocked, false),
-        sql`${phoneNumbersTable.spamScore} < 70`,
-        sql`${phoneNumbersTable.direction} IN ('outbound', 'both')`,
-        scopeFilter,
-      )
-    )
+    .where(and(...filters))
     .orderBy(asc(phoneNumbersTable.usageCount), asc(phoneNumbersTable.spamScore))
     .limit(1);
+
+  // Vapi path with no synced numbers in the pool — surface a clear error
+  // rather than dialing from an arbitrary fallback that Vapi can't use.
+  if (opts.requireVapiId && !poolRow) {
+    return { phoneNumber: "", vapiPhoneNumberId: null };
+  }
 
   const chosen = poolRow?.phoneNumber ?? fallbackNumber;
 
@@ -715,7 +734,7 @@ async function allocateNumber(campaignId: number, fallbackNumber: string): Promi
       .catch(() => {});
   }
 
-  return chosen;
+  return { phoneNumber: chosen, vapiPhoneNumberId: poolRow?.vapiPhoneNumberId ?? null };
 }
 
 async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
@@ -838,14 +857,34 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       return; // Don't update status — retry later when it's within hours
     }
 
-    // Vapi-routed campaigns originate from the Vapi-registered number
-    // (env VAPI_PHONE_NUMBER_ID), not from our Telnyx pool. Skip pool
-    // allocation so we don't lock a Telnyx number that won't actually
-    // be dialed and never get released by the Vapi webhook.
+    // Allocate a Telnyx number from the campaign's selected pool (round-
+    // robin, least-recently-used, skips busy/blocked). For Vapi-routed
+    // campaigns we additionally require `vapiPhoneNumberId IS NOT NULL`
+    // so we never pick a number that hasn't been registered with Vapi.
     const useVapiForThisCall = Boolean((campaign as { useVapi?: boolean }).useVapi);
-    const callFromNumber = useVapiForThisCall
-      ? `vapi:${process.env.VAPI_PHONE_NUMBER_ID ?? "unknown"}`
-      : await allocateNumber(campaignId, fromNumber);
+    const allocation = await allocateNumber(campaignId, fromNumber, {
+      requireVapiId: useVapiForThisCall,
+    });
+    const callFromNumber = allocation.phoneNumber;
+    const vapiPhoneNumberIdForCall = allocation.vapiPhoneNumberId ?? undefined;
+
+    // No synced numbers in the Vapi pool — fail this lead with a clear,
+    // actionable error and stop here (number was never marked busy).
+    if (useVapiForThisCall && !vapiPhoneNumberIdForCall) {
+      logger.warn(
+        { leadId: lead.id, campaignId },
+        "Vapi campaign has no numbers registered with Vapi — open Phone Numbers and click 'Sync to Vapi'"
+      );
+      await db
+        .update(leadsTable)
+        .set({
+          status: "failed",
+          lastError:
+            "No phone numbers in this campaign are registered with Vapi. Go to Phone Numbers → click 'Sync to Vapi'.",
+        })
+        .where(eq(leadsTable.id, lead.id));
+      return;
+    }
 
     // ── Conversion prediction (additive — never blocks dial) ─────────────
     let predProb: number | null = null;
@@ -915,14 +954,15 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       hold_music_url: holdMusicUrl ?? undefined,
       amd_enabled: campaign.amdEnabled ? "true" : undefined,
       use_vapi: liveCampaign?.useVapi ?? false,
+      vapi_phone_number_id: vapiPhoneNumberIdForCall,
       knowledge_base: liveCampaign?.knowledgeBase ?? undefined,
       lead_id: String(lead.id),
       lead_name: lead.name ?? undefined,
     });
 
     // If call fails, release the number immediately (webhook won't fire).
-    // Skip for Vapi path — no Telnyx number was allocated.
-    if (!result.success && !useVapiForThisCall) {
+    // Both paths now allocate a real Telnyx number, so always release.
+    if (!result.success) {
       await db
         .update(phoneNumbersTable)
         .set({ isBusy: false })

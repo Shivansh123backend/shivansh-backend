@@ -174,10 +174,34 @@ export default function NumbersPage() {
   const { data: campaigns } = useListCampaigns();
   const [showCreate, setShowCreate] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncingVapi, setSyncingVapi] = useState(false);
   const qc = useQueryClient();
   const { toast } = useToast();
 
   const campaignMap = Object.fromEntries((campaigns ?? []).map((c: { id: number; name: string }) => [c.id, c.name]));
+
+  const handleSyncToVapi = async () => {
+    setSyncingVapi(true);
+    try {
+      const result = await customFetch<{ registered: number; skippedAlreadyRegistered: number; failed: number; failures: Array<{ number: string; error: string }>; message: string }>(
+        "/api/numbers/sync-to-vapi",
+        { method: "POST" }
+      );
+      await qc.invalidateQueries({ queryKey: getListNumbersQueryKey() });
+      const failBlurb = result.failed > 0 ? ` ${result.failed} failed (see server logs).` : "";
+      toast({
+        title: result.message + failBlurb,
+        variant: result.failed > 0 ? "destructive" : "default",
+      });
+    } catch {
+      toast({
+        title: "Vapi sync failed — check VAPI_API_KEY and TELNYX_API_KEY are set on the server",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingVapi(false);
+    }
+  };
 
   const handleSyncFromTelnyx = async () => {
     setSyncing(true);
@@ -209,6 +233,17 @@ export default function NumbersPage() {
             >
               <RefreshCw className={`w-3 h-3 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
               {syncing ? "Syncing…" : "Sync from Telnyx"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="font-mono text-xs uppercase tracking-wider h-7 px-3 border-primary/40 text-primary hover:bg-primary/10"
+              onClick={handleSyncToVapi}
+              disabled={syncingVapi}
+              title="Register all Telnyx numbers with Vapi (one-time per number) so Vapi-routed campaigns can use them"
+            >
+              <RefreshCw className={`w-3 h-3 mr-1.5 ${syncingVapi ? "animate-spin" : ""}`} />
+              {syncingVapi ? "Registering…" : "Sync to Vapi"}
             </Button>
             <Button size="sm" className="font-mono text-xs uppercase tracking-wider h-7 px-3" onClick={() => setShowCreate(true)}>
               <Plus className="w-3 h-3 mr-1.5" /> Add Number

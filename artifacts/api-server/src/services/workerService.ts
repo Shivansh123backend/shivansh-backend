@@ -31,6 +31,9 @@ export interface EnqueueCallPayload {
   amd_enabled?: string;
   // When true, route this call through Vapi instead of Telnyx+custom pipeline
   use_vapi?: boolean;
+  // Vapi phone-number ID to originate from (resolved from the allocated
+  // Telnyx number's vapiPhoneNumberId column). Required when use_vapi=true.
+  vapi_phone_number_id?: string;
   // Optional context fields used by Vapi assistant (firstMessage, KB, etc.)
   knowledge_base?: string;
   lead_id?: string;
@@ -274,6 +277,7 @@ export async function enqueueCall(payload: EnqueueCallPayload): Promise<TriggerC
       lead_id: payload.lead_id,
       lead_name: payload.lead_name,
       first_message: payload.first_message,
+      vapi_phone_number_id: payload.vapi_phone_number_id,
     });
   }
 

@@ -31,7 +31,9 @@ const router: IRouter = Router();
 // on auth failure (the only case where we *want* Vapi to stop retrying).
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/vapi/webhook", async (req: Request, res: Response) => {
-  // Authenticate the webhook
+  // Authenticate the webhook. In production we *require* the secret to be
+  // set — otherwise anyone could forge end-of-call events that mutate
+  // call_logs and release allocated numbers.
   const expected = process.env.VAPI_WEBHOOK_SECRET;
   if (expected) {
     const provided = req.header("x-vapi-secret") ?? req.header("x-vapi-signature") ?? "";
@@ -39,8 +41,11 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
       logger.warn({ ip: req.ip }, "Vapi webhook rejected — bad/missing secret");
       return res.status(401).json({ error: "unauthorized" });
     }
+  } else if (process.env.NODE_ENV === "production") {
+    logger.error("VAPI_WEBHOOK_SECRET not set in production — refusing unauthenticated webhook");
+    return res.status(503).json({ error: "vapi_webhook_secret_not_configured" });
   } else {
-    logger.warn("VAPI_WEBHOOK_SECRET not set — Vapi webhook is unauthenticated");
+    logger.warn("VAPI_WEBHOOK_SECRET not set — Vapi webhook is unauthenticated (dev only)");
   }
 
   try {
