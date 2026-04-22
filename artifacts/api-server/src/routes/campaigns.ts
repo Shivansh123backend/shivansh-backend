@@ -404,29 +404,34 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
       }
 
       // Auto-reset previously dialled leads so they can be dialled again.
-      // Covers every "we already tried this number" status — without this
-      // the engine starts with count:0 and silently does nothing.
+      // Only the lead_status enum values that mean "already tried, safe to
+      // redial" — `callback` is left alone (scheduler handles it) and
+      // `do_not_call` must never be re-dialled.
       const resetResult = await db
         .update(leadsTable)
         .set({ status: "pending", retryCount: 0 })
         .where(and(
           startSourceFilter,
-          inArray(leadsTable.status, [
-            "called", "completed", "no_answer", "busy",
-            "failed", "voicemail", "answered", "rejected",
-          ]),
+          inArray(leadsTable.status, ["called", "completed"]),
         ))
         .returning({ id: leadsTable.id });
 
       if (resetResult.length === 0) {
-        // Leads exist but none are in a re-dialable state (e.g. all DNC,
-        // converted, or in-progress). Tell the user clearly instead of
-        // starting an empty engine.
+        // Leads exist but none are eligible for redial (all DNC, scheduled
+        // callbacks, etc). Tell the user clearly instead of starting an
+        // empty engine.
+        const breakdown = await db
+          .select({ status: leadsTable.status, count: db.$count(leadsTable) })
+          .from(leadsTable)
+          .where(startSourceFilter)
+          .groupBy(leadsTable.status);
+        const summary = breakdown.map(b => `${b.count} ${b.status}`).join(", ");
         res.status(400).json({
-          error: `Campaign has ${totalCount} lead(s) but none are pending or eligible for redial. Reset leads or upload new ones.`,
+          error: `No leads ready to dial (${summary}). Upload new leads, or clear scheduled callbacks / DNC entries.`,
           code: "no_pending_leads",
           totalLeads: totalCount,
           pendingLeads: 0,
+          breakdown,
         });
         return;
       }
