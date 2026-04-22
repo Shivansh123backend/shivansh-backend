@@ -1671,6 +1671,13 @@ export default function CampaignsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [launchingCampaign, setLaunchingCampaign] = useState<Campaign | null>(null);
   const [testingCampaign, setTestingCampaign] = useState<Campaign | null>(null);
+  const [filterStatus, setFilterStatus] = useState<string>("all");
+
+  const filteredCampaigns = (campaigns ?? []).filter((c: Campaign) => {
+    if (filterStatus === "all") return true;
+    if (filterStatus === "drafts") return c.status === "draft";
+    return c.status === filterStatus;
+  });
 
   const handleStop = (id: number) => {
     stopCampaign.mutate(
@@ -1707,46 +1714,66 @@ export default function CampaignsPage() {
       )}
       <PageHeader
         title="Campaigns"
-        subtitle={`${(campaigns ?? []).length} total`}
+        subtitle={`${(campaigns ?? []).length} of ${(campaigns ?? []).length} campaigns`}
         action={
           <Button
             size="sm"
-            className="font-mono text-xs uppercase tracking-wider h-7 px-3"
+            className="h-8 px-3 text-xs"
             onClick={() => setShowCreate(true)}
           >
-            <Plus className="w-3 h-3 mr-1.5" /> New Campaign
+            <Plus className="w-3.5 h-3.5 mr-1.5" /> New Campaign
           </Button>
         }
       />
+
+      {/* Filter pill row */}
+      <div className="px-6 pt-4">
+        <CampaignFilterPills
+          campaigns={campaigns ?? []}
+          value={filterStatus}
+          onChange={setFilterStatus}
+        />
+      </div>
+
       <div className="p-6">
+        {isLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-64 rounded-lg" />)}
+          </div>
+        ) : (campaigns ?? []).length === 0 ? (
+          <div className="border border-dashed border-border rounded-lg p-12 text-center text-sm text-muted-foreground bg-card">
+            No campaigns yet. Click "New Campaign" to get started.
+          </div>
+        ) : filteredCampaigns.length === 0 ? (
+          <div className="border border-dashed border-border rounded-lg p-12 text-center text-sm text-muted-foreground bg-card">
+            No campaigns in this filter.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filteredCampaigns.map((c: Campaign) => (
+              <CampaignCard
+                key={c.id}
+                campaign={c}
+                onTest={() => setTestingCampaign(c)}
+                onLaunch={() => setLaunchingCampaign(c)}
+                onStop={() => handleStop(c.id)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Hidden — preserve original table for reference (now a no-op) */}
+      <div className="hidden">
         <div className="border border-border rounded bg-card overflow-hidden">
           <table className="w-full text-xs font-mono">
             <thead>
               <tr className="border-b border-border">
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Name</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Type</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Routing</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Concurrent</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
-                <th className="text-right px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Actions</th>
+                <th>Name</th><th>Type</th><th>Routing</th><th>Concurrent</th><th>Status</th><th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {isLoading ? (
-                [...Array(4)].map((_, i) => (
-                  <tr key={i}>
-                    {[...Array(6)].map((_, j) => (
-                      <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>
-                    ))}
-                  </tr>
-                ))
-              ) : (campaigns ?? []).length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground text-xs font-mono">
-                    No campaigns yet. Click "New Campaign" to get started.
-                  </td>
-                </tr>
-              ) : (campaigns ?? []).map((c: Campaign) => (
+              {(campaigns ?? []).map((c: Campaign) => (
                 <tr key={c.id} className="border-b border-border/30 hover:bg-white/[0.02] transition-colors">
                   <td className="px-4 py-3 text-foreground font-medium">{c.name}</td>
                   <td className="px-4 py-3 uppercase text-muted-foreground">{c.type}</td>
@@ -1785,5 +1812,175 @@ export default function CampaignsPage() {
         </div>
       </div>
     </Layout>
+  );
+}
+
+// ── Filter pill row ─────────────────────────────────────────────────────────────
+function CampaignFilterPills({
+  campaigns, value, onChange,
+}: { campaigns: Campaign[]; value: string; onChange: (v: string) => void }) {
+  const counts = {
+    all: campaigns.length,
+    active: campaigns.filter(c => c.status === "active").length,
+    paused: campaigns.filter(c => c.status === "paused").length,
+    completed: campaigns.filter(c => c.status === "completed").length,
+    drafts: campaigns.filter(c => c.status === "draft").length,
+  };
+  const tabs: { key: keyof typeof counts; label: string }[] = [
+    { key: "all", label: "ALL" },
+    { key: "active", label: "ACTIVE" },
+    { key: "paused", label: "PAUSED" },
+    { key: "completed", label: "COMPLETED" },
+    { key: "drafts", label: "DRAFTS" },
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {tabs.map(t => {
+        const active = value === t.key;
+        return (
+          <button
+            key={t.key}
+            onClick={() => onChange(t.key)}
+            className={`rounded-full px-3 py-1 text-[11px] font-medium tracking-wide border transition-colors ${
+              active
+                ? "bg-foreground text-background border-foreground"
+                : "bg-background text-muted-foreground border-border hover:bg-muted/40"
+            }`}
+          >
+            {t.label} ({counts[t.key]})
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Campaign card ───────────────────────────────────────────────────────────────
+function CampaignCard({
+  campaign, onTest, onLaunch, onStop,
+}: { campaign: Campaign; onTest: () => void; onLaunch: () => void; onStop: () => void }) {
+  const c = campaign;
+  const isActive = c.status === "active";
+
+  const statusPill = (() => {
+    const map: Record<string, string> = {
+      active:    "bg-emerald-100 text-emerald-700 border-emerald-200",
+      paused:    "bg-amber-100 text-amber-700 border-amber-200",
+      completed: "bg-sky-100 text-sky-700 border-sky-200",
+      draft:     "bg-amber-50 text-amber-700 border-amber-200",
+    };
+    return map[c.status] ?? "bg-slate-100 text-slate-600 border-slate-200";
+  })();
+
+  const typePill = (() => {
+    const map: Record<string, string> = {
+      outbound: "bg-emerald-100 text-emerald-700 border-emerald-200",
+      inbound:  "bg-sky-100 text-sky-700 border-sky-200",
+      both:     "bg-violet-100 text-violet-700 border-violet-200",
+    };
+    return map[c.type] ?? "bg-slate-100 text-slate-600 border-slate-200";
+  })();
+
+  return (
+    <div className="border border-border rounded-lg bg-card p-4 space-y-3 hover:shadow-sm transition-shadow">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="text-sm font-semibold text-foreground truncate">{c.name}</h3>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium border ${statusPill}`}>
+            {c.status}
+          </span>
+          <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium border ${typePill}`}>
+            {c.type}
+          </span>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+        <span className="flex items-center gap-1"><Users className="w-3 h-3" /> 0 total</span>
+        <span className="flex items-center gap-1"><Phone className="w-3 h-3" /> 0 called</span>
+        <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> 0 pending</span>
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={onTest}
+            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium bg-amber-100 text-amber-700 border border-amber-200 hover:bg-amber-200 transition-colors"
+          >
+            <Zap className="w-3 h-3" /> Test
+          </button>
+          {!isActive ? (
+            <button
+              onClick={onLaunch}
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200 transition-colors"
+            >
+              <Play className="w-3 h-3" /> Resume
+            </button>
+          ) : (
+            <button
+              onClick={onStop}
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium bg-rose-100 text-rose-700 border border-rose-200 hover:bg-rose-200 transition-colors"
+            >
+              <Square className="w-3 h-3" /> Stop
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium bg-orange-100 text-orange-700 border border-orange-200 hover:bg-orange-200 transition-colors"
+            title="Scan campaign"
+          >
+            <RefreshCw className="w-3 h-3" /> Scan
+          </button>
+          <button
+            onClick={onLaunch}
+            className="p-1.5 rounded text-muted-foreground hover:bg-muted/60 transition-colors"
+            title="Edit"
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            className="p-1.5 rounded text-muted-foreground hover:bg-muted/60 hover:text-destructive transition-colors"
+            title="Delete"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Meta row */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground border-t border-border/50 pt-2">
+        <span className="flex items-center gap-1">
+          <Activity className="w-3 h-3" /> {c.routingType?.replace("_", " ") || "progressive"}
+        </span>
+        <span className="flex items-center gap-1">
+          <Zap className="w-3 h-3 text-orange-500" /> {c.maxConcurrentCalls ?? 10} c/min
+        </span>
+        {c.transferNumber && (
+          <span className="flex items-center gap-1">
+            <Phone className="w-3 h-3 text-rose-500" /> Transfer: {c.transferNumber}
+          </span>
+        )}
+        {c.backgroundSound && (
+          <span className="flex items-center gap-1">
+            <Music className="w-3 h-3" /> {c.backgroundSound}
+          </span>
+        )}
+      </div>
+
+      {/* Speed controls collapsible (visual only) */}
+      <details className="text-[11px] text-muted-foreground border-t border-border/50 pt-2">
+        <summary className="cursor-pointer flex items-center gap-1 hover:text-foreground transition-colors list-none">
+          <Settings2 className="w-3 h-3" /> SPEED CONTROLS
+          <ChevronDown className="w-3 h-3 ml-auto" />
+        </summary>
+        <p className="mt-2 text-muted-foreground/80">
+          Configure pacing, concurrency, and call rate from the Edit panel.
+        </p>
+      </details>
+    </div>
   );
 }

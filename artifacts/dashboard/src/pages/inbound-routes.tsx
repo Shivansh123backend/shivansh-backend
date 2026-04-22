@@ -11,7 +11,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   GitBranch, Phone, Bot, Copy, CheckCheck, Terminal,
   Radio, ArrowRight, Shield, Zap, MessageSquare, PhoneIncoming,
+  PhoneOutgoing, ArrowUpDown,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 
 const WEBHOOK_URL = "https://shivanshbackend.replit.app/api/webhooks/telnyx";
 
@@ -155,6 +157,15 @@ export default function InboundRoutesPage() {
       />
 
       <div className="p-6 space-y-6">
+
+        {/* ── Phone Number Routing (primary table) ── */}
+        <PhoneNumberRoutingTable
+          numbers={numbers ?? []}
+          campaigns={campaigns ?? []}
+          agents={agents ?? []}
+          ringingCampaigns={ringingCampaigns}
+          isLoading={isLoading}
+        />
 
         {/* ── Webhook config card ── */}
         <div className="border border-border rounded bg-card">
@@ -409,5 +420,151 @@ export default function InboundRoutesPage() {
 
       </div>
     </Layout>
+  );
+}
+
+// ── Phone Number Routing table ──────────────────────────────────────────────────
+type RoutingNumber = {
+  id: number; phoneNumber: string; provider: string;
+  campaignId?: number | null;
+  forwardTo?: string | null; forward_to?: string | null;
+  agentId?: number | null;
+  queueId?: number | null;
+};
+type RoutingCampaign = { id: number; name: string; type: string; status: string };
+type RoutingAgent = { id: number; name: string };
+
+function DirectionPill({ type }: { type: string }) {
+  if (type === "both") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-medium bg-violet-100 text-violet-700 border border-violet-200">
+        <ArrowUpDown className="w-2.5 h-2.5" /> BOTH
+      </span>
+    );
+  }
+  if (type === "outbound") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-medium bg-sky-100 text-sky-700 border border-sky-200">
+        <PhoneOutgoing className="w-2.5 h-2.5" /> OUT
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-medium bg-cyan-100 text-cyan-700 border border-cyan-200">
+      <PhoneIncoming className="w-2.5 h-2.5" /> IN
+    </span>
+  );
+}
+
+function PhoneNumberRoutingTable({
+  numbers, campaigns, agents, ringingCampaigns, isLoading,
+}: {
+  numbers: RoutingNumber[]; campaigns: RoutingCampaign[]; agents: RoutingAgent[];
+  ringingCampaigns: Set<number>; isLoading: boolean;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const campaignMap = Object.fromEntries(campaigns.map(c => [c.id, c]));
+  const filtered = showAll ? numbers : numbers.filter(n => n.campaignId);
+
+  return (
+    <div className="border border-border rounded-lg bg-card overflow-hidden">
+      <div className="flex items-center justify-between gap-4 px-4 py-3 border-b border-border bg-muted/30">
+        <div className="flex items-center gap-2">
+          <Phone className="w-4 h-4 text-muted-foreground" />
+          <p className="text-xs font-semibold uppercase tracking-wider text-foreground">Phone Number Routing</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Switch checked={showAll} onCheckedChange={setShowAll} />
+          <span className="text-xs text-muted-foreground">Show all numbers</span>
+        </div>
+      </div>
+
+      <div className="px-4 py-2 border-b border-border bg-muted/20">
+        <p className="text-[11px] text-muted-foreground">
+          Forward To overrides everything. If blank, Agent is used. If no Agent, Queue picks the best
+          available member. Falls back to campaign transfer number.
+        </p>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Number</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Direction</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Forward To</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Agent</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Queue</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Campaign</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Status</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Busy</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? (
+              [...Array(5)].map((_, i) => (
+                <tr key={i}>
+                  {[...Array(8)].map((_, j) => (
+                    <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>
+                  ))}
+                </tr>
+              ))
+            ) : filtered.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="px-4 py-12 text-center text-muted-foreground text-xs">
+                  No assigned numbers. Toggle "Show all numbers" to see unassigned DIDs.
+                </td>
+              </tr>
+            ) : filtered.map(n => {
+              const c = n.campaignId ? campaignMap[n.campaignId] : null;
+              const agent = n.agentId ? agents.find(a => a.id === n.agentId) : null;
+              const fwd = n.forwardTo ?? n.forward_to ?? "";
+              const busy = c && ringingCampaigns.has(c.id);
+              return (
+                <tr key={n.id} className="border-b border-border/40 hover:bg-muted/30 transition-colors">
+                  <td className="px-4 py-3 text-foreground font-medium">{n.phoneNumber}</td>
+                  <td className="px-4 py-3">
+                    {c ? <DirectionPill type={c.type} /> : <span className="text-muted-foreground text-xs">—</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="inline-flex items-center justify-between gap-2 min-w-[140px] px-2.5 py-1 rounded-md border border-border bg-background text-xs text-muted-foreground">
+                      {fwd || "No forward"}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="inline-flex items-center justify-between gap-2 min-w-[120px] px-2.5 py-1 rounded-md border border-border bg-background text-xs text-muted-foreground">
+                      {agent?.name || "None"}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="inline-flex items-center justify-between gap-2 min-w-[120px] px-2.5 py-1 rounded-md border border-border bg-background text-xs text-muted-foreground">
+                      None
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">{c?.name ?? <span className="text-muted-foreground/60">—</span>}</td>
+                  <td className="px-4 py-3">
+                    {c ? (
+                      <Badge
+                        variant="outline"
+                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium normal-case border ${
+                          c.status === "active"
+                            ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+                            : "bg-slate-100 text-slate-600 border-slate-200"
+                        }`}
+                      >
+                        {c.status}
+                      </Badge>
+                    ) : <span className="text-muted-foreground text-xs">—</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-block w-2 h-2 rounded-full ${busy ? "bg-rose-500 animate-pulse" : "bg-slate-300"}`} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

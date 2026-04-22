@@ -14,7 +14,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, X, Filter, Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ClipboardList, Trash2, FolderInput } from "lucide-react";
+import { Plus, X, Filter, Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ClipboardList, Trash2, FolderInput, MoreVertical, Phone, ArrowRightLeft, Ban } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 type LeadList = { id: number; name: string; description: string | null; campaignId: number | null; active: boolean; campaignName: string | null; leadsCount: number };
 
@@ -500,8 +501,8 @@ export default function LeadsPage() {
       {showAssign && <AssignListModal ids={Array.from(selected)} onClose={() => setShowAssign(false)} lists={lists} />}
 
       <PageHeader
-        title="Leads"
-        subtitle={`${(leads ?? []).length} records`}
+        title="Lead Lists"
+        subtitle={`${(leads ?? []).length} leads total`}
         action={
           <div className="flex items-center gap-2">
             <Button
@@ -583,11 +584,11 @@ export default function LeadsPage() {
       </div>
 
       <div className="p-6">
-        <div className="border border-border rounded bg-card overflow-hidden">
-          <table className="w-full text-xs font-mono">
+        <div className="border border-border rounded-lg bg-card overflow-hidden">
+          <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border">
-                <th className="px-4 py-2.5 w-8">
+              <tr className="border-b border-border bg-muted/40">
+                <th className="px-4 py-3 w-8">
                   <input
                     type="checkbox"
                     checked={allChecked}
@@ -595,52 +596,131 @@ export default function LeadsPage() {
                     className="w-3.5 h-3.5 cursor-pointer accent-primary"
                   />
                 </th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">ID</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Name</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Phone</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Campaign</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">List</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Contact</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Phone</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Campaign</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Status</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Spam Score</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground">Callback Time</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 [...Array(6)].map((_, i) => (
                   <tr key={i}>
-                    {[...Array(7)].map((_, j) => (
+                    {[...Array(8)].map((_, j) => (
                       <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>
                     ))}
                   </tr>
                 ))
               ) : visibleLeads.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-12 text-center text-muted-foreground">
                     No leads yet. Use <span className="text-primary">Upload CSV</span> to import in bulk or <span className="text-primary">Add Lead</span> to add one at a time.
                   </td>
                 </tr>
-              ) : visibleLeads.map((l: { id: number; name: string; phone?: string; phone_number?: string; campaignId?: number; campaign_id?: number; listId?: number | null; list_id?: number | null; status: string; email?: string | null }) => {
+              ) : visibleLeads.map((l: { id: number; name: string; phone?: string; phone_number?: string; campaignId?: number; campaign_id?: number; listId?: number | null; list_id?: number | null; status: string; email?: string | null; spam_score?: number | null; spamScore?: number | null; callback_at?: string | null; callbackAt?: string | null }) => {
                 const phone = l.phone || l.phone_number || "-";
                 const cid = l.campaignId ?? l.campaign_id;
-                const lid = l.listId ?? l.list_id ?? null;
                 const isSel = selected.has(l.id);
+                const spam = l.spamScore ?? l.spam_score;
+                const cbAt = l.callbackAt ?? l.callback_at;
                 return (
-                  <tr key={l.id} className={`border-b border-border/30 hover:bg-white/2 transition-colors ${isSel ? "bg-primary/5" : ""}`}>
+                  <tr key={l.id} className={`border-b border-border/40 hover:bg-muted/30 transition-colors ${isSel ? "bg-primary/5" : ""}`}>
                     <td className="px-4 py-3">
                       <input type="checkbox" checked={isSel} onChange={() => toggleOne(l.id)} className="w-3.5 h-3.5 cursor-pointer accent-primary" />
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">#{l.id}</td>
-                    <td className="px-4 py-3 text-foreground font-medium">{l.name}</td>
+                    <td className="px-4 py-3 text-foreground font-medium">{l.name || "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground">{phone}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{cid ? campaignMap[cid] ?? `#${cid}` : "-"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{lid ? listMap[lid] ?? `#${lid}` : "-"}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{cid ? campaignMap[cid] ?? `#${cid}` : "—"}</td>
                     <td className="px-4 py-3"><StatusBadge status={l.status} /></td>
+                    <td className="px-4 py-3 text-muted-foreground">{spam != null ? spam : "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{cbAt ? new Date(cbAt).toLocaleString() : "—"}</td>
+                    <td className="px-4 py-3 text-right">
+                      <LeadActionsMenu leadId={l.id} leadName={l.name} />
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+          {visibleLeads.length > 0 && (
+            <div className="px-4 py-3 border-t border-border/40 text-xs text-muted-foreground text-center">
+              Showing {visibleLeads.length} lead{visibleLeads.length !== 1 ? "s" : ""}
+            </div>
+          )}
         </div>
       </div>
     </Layout>
+  );
+}
+
+// ── Per-row 3-dot actions menu ──────────────────────────────────────────────────
+function LeadActionsMenu({ leadId, leadName }: { leadId: number; leadName: string }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  const callBack = useMutation({
+    mutationFn: async () =>
+      customFetch(`/api/leads/${leadId}/callback`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      toast({ title: `Callback queued for ${leadName || `#${leadId}`}` });
+    },
+    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+  });
+
+  const block = useMutation({
+    mutationFn: async () =>
+      customFetch(`/api/leads/${leadId}/block`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      toast({ title: `${leadName || `#${leadId}`} added to DNC` });
+    },
+    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+  });
+
+  const del = useMutation({
+    mutationFn: async () =>
+      customFetch(`/api/leads/${leadId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      toast({ title: `Lead deleted` });
+    },
+    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button className="p-1.5 rounded hover:bg-muted/60 transition-colors">
+          <MoreVertical className="w-4 h-4 text-muted-foreground" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuItem onClick={() => callBack.mutate()}>
+          <Phone className="w-3.5 h-3.5 mr-2" /> Call Back
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled>
+          <ArrowRightLeft className="w-3.5 h-3.5 mr-2" /> Reassign Campaign
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => {
+            if (confirm(`Add ${leadName || `#${leadId}`} to Do Not Call list?`)) block.mutate();
+          }}
+        >
+          <Ban className="w-3.5 h-3.5 mr-2" /> Block (Add to DNC)
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="text-destructive focus:text-destructive"
+          onClick={() => {
+            if (confirm(`Delete lead ${leadName || `#${leadId}`}? This cannot be undone.`)) del.mutate();
+          }}
+        >
+          <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete Lead
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

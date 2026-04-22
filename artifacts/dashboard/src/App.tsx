@@ -23,6 +23,7 @@ import VoicesPage from "@/pages/voices";
 import DialerPage from "@/pages/dialer";
 import CallbacksPage from "@/pages/callbacks";
 import DncPage from "@/pages/dnc";
+import ComingSoonPage from "@/pages/coming-soon";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -120,6 +121,28 @@ function Router() {
       <Route path="/settings">
         <ProtectedRoute component={SettingsPage} adminOnly />
       </Route>
+      {/* Coming soon stubs */}
+      <Route path="/bulk-upload">
+        <ProtectedRoute component={() => <ComingSoonPage title="Bulk Upload" />} adminOnly />
+      </Route>
+      <Route path="/human-agents">
+        <ProtectedRoute component={() => <ComingSoonPage title="Human Agents" />} adminOnly />
+      </Route>
+      <Route path="/send-sms">
+        <ProtectedRoute component={() => <ComingSoonPage title="Send SMS" />} adminOnly />
+      </Route>
+      <Route path="/sms-logs">
+        <ProtectedRoute component={() => <ComingSoonPage title="SMS Logs" />} adminOnly />
+      </Route>
+      <Route path="/softphone">
+        <ProtectedRoute component={() => <ComingSoonPage title="Softphone" />} adminOnly />
+      </Route>
+      <Route path="/ai-optimizer">
+        <ProtectedRoute component={() => <ComingSoonPage title="AI Optimizer" />} adminOnly />
+      </Route>
+      <Route path="/phone-qa">
+        <ProtectedRoute component={() => <ComingSoonPage title="Phone QA" />} adminOnly />
+      </Route>
       <Route>
         <div className="flex h-screen items-center justify-center font-mono text-sm text-muted-foreground">
           404 — Not Found
@@ -145,9 +168,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <div className="dark">
-          <AppInner />
-        </div>
+        <AppInner />
       </TooltipProvider>
     </QueryClientProvider>
   );
