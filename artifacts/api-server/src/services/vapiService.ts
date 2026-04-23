@@ -170,7 +170,9 @@ export async function vapiDirectCall(payload: VapiCallPayload): Promise<VapiCall
   // here. Several upstream paths (campaign loop, dashboard test call, etc.)
   // pass the raw DB id; resolving at the boundary guarantees Vapi always
   // gets a real provider voice ID like "5BTfD9GV7eMTyvzofs0V".
+  logger.info({ voice: payload.voice, type: typeof payload.voice, isNumeric: payload.voice ? /^\d+$/.test(payload.voice) : false }, "[VOICE-CHECK] entering vapiDirectCall");
   if (payload.voice && /^\d+$/.test(payload.voice)) {
+    logger.info({ voice: payload.voice }, "[VOICE-CHECK] entering resolver branch");
     try {
       const { db, voicesTable } = await import("@workspace/db");
       const { eq } = await import("drizzle-orm");
