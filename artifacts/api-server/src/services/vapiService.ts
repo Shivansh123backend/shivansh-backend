@@ -1,6 +1,7 @@
 import axios, { AxiosError } from "axios";
 import { logger } from "../lib/logger.js";
 import { setActiveCall } from "../lib/redis.js";
+import { setVapiMonitorUrls } from "./vapiMonitor.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vapi outbound call service
@@ -158,6 +159,14 @@ function buildAssistant(payload: VapiCallPayload) {
     // we can authenticate the request. Falls back to empty if not set
     // (dev only — production must set VAPI_WEBHOOK_SECRET).
     serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET ?? "",
+    // Live supervisor support: ask Vapi to expose listen + control URLs in
+    // the call response. We persist them in Redis so the dashboard's
+    // `listen:join` can find them later (see services/vapiMonitor.ts and
+    // websocket/vapiListen.ts).
+    monitorPlan: {
+      listenEnabled: true,
+      controlEnabled: true,
+    },
   };
 }
 
@@ -237,9 +246,10 @@ export async function vapiDirectCall(payload: VapiCallPayload): Promise<VapiCall
     });
 
     const callId: string = response.data?.id ?? "";
+    const monitor = (response.data as { monitor?: { listenUrl?: string; controlUrl?: string } })?.monitor;
 
     logger.info(
-      { phone, callId, status: response.status },
+      { phone, callId, status: response.status, hasListenUrl: !!monitor?.listenUrl },
       "Vapi outbound call initiated"
     );
 
@@ -252,6 +262,15 @@ export async function vapiDirectCall(payload: VapiCallPayload): Promise<VapiCall
         status: "ringing",
         started_at: new Date().toISOString(),
       }).catch(() => {}); // non-fatal
+
+      // Persist the supervisor monitor URLs so listen:join (which may land on
+      // a different VPS than the one that placed the call) can resolve them.
+      if (monitor?.listenUrl || monitor?.controlUrl) {
+        await setVapiMonitorUrls(callId, {
+          listenUrl: monitor.listenUrl,
+          controlUrl: monitor.controlUrl,
+        }).catch(() => {}); // non-fatal
+      }
     }
 
     return { success: true, data: response.data, callControlId: callId };

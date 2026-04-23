@@ -5,6 +5,7 @@ import axios from "axios";
 import { verifyToken } from "../lib/jwt.js";
 import { logger } from "../lib/logger.js";
 import { getRedisClient } from "../lib/redis.js";
+import { startVapiListen, stopVapiListen } from "./vapiListen.js";
 
 // Live-listen subscribers are tracked using Socket.IO **rooms** named
 // `listen:<callControlId>`. With the Redis adapter installed, broadcasts to
@@ -31,6 +32,12 @@ function buildListenStreamUrl(callControlId: string): string {
 
 async function startListenFork(callControlId: string): Promise<void> {
   if (activeListenForks.has(callControlId)) return;
+  // Vapi-routed call → use the Vapi listen bridge instead of Telnyx fork.
+  if (callControlId.startsWith("vapi:")) {
+    activeListenForks.add(callControlId);
+    await startVapiListen(callControlId);
+    return;
+  }
   const apiKey = process.env.TELNYX_API_KEY;
   if (!apiKey) {
     logger.warn({ callControlId }, "Cannot start listen fork — TELNYX_API_KEY not set");
@@ -72,6 +79,11 @@ async function maybeStopListenFork(callControlId: string): Promise<void> {
 
 async function stopListenFork(callControlId: string): Promise<void> {
   if (!activeListenForks.has(callControlId)) return;
+  if (callControlId.startsWith("vapi:")) {
+    activeListenForks.delete(callControlId);
+    stopVapiListen(callControlId);
+    return;
+  }
   const apiKey = process.env.TELNYX_API_KEY;
   if (!apiKey) return;
   try {
