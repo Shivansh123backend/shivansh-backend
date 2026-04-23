@@ -960,10 +960,25 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       .from(campaignsTable)
       .where(eq(campaignsTable.id, campaignId))
       .limit(1);
-    const liveVoice = liveCampaign?.voice && liveCampaign.voice !== "default"
+    let liveVoice = liveCampaign?.voice && liveCampaign.voice !== "default"
       ? liveCampaign.voice
       : voiceName;
-    const liveVoiceProvider = liveCampaign?.voiceProvider ?? voiceProvider;
+    let liveVoiceProvider = liveCampaign?.voiceProvider ?? voiceProvider;
+    // If `voice` is a numeric DB id (campaigns.voice stores the voices.id),
+    // resolve it to the provider's actual voice_id string before sending to
+    // Vapi/TTS. Without this, Vapi gets "60" instead of "5BTfD9GV..." and
+    // ElevenLabs returns voice-not-found, dropping the call instantly.
+    if (liveVoice && /^\d+$/.test(liveVoice)) {
+      const [v] = await db
+        .select({ voiceId: voicesTable.voiceId, provider: voicesTable.provider })
+        .from(voicesTable)
+        .where(eq(voicesTable.id, Number(liveVoice)))
+        .limit(1);
+      if (v?.voiceId) {
+        liveVoice = v.voiceId;
+        liveVoiceProvider = v.provider;
+      }
+    }
 
     const result = await enqueueCall({
       phone: normPhone,
