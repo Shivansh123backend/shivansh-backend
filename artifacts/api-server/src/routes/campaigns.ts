@@ -888,7 +888,9 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
     // robin, least-recently-used, skips busy/blocked). For Vapi-routed
     // campaigns we additionally require `vapiPhoneNumberId IS NOT NULL`
     // so we never pick a number that hasn't been registered with Vapi.
-    const useVapiForThisCall = Boolean((campaign as { useVapi?: boolean }).useVapi);
+    const useVapiForThisCall =
+      Boolean((campaign as { useVapi?: boolean }).useVapi) ||
+      process.env.VAPI_FORCE_DEFAULT === "true";
     const allocation = await allocateNumber(campaignId, fromNumber, {
       requireVapiId: useVapiForThisCall,
     });
