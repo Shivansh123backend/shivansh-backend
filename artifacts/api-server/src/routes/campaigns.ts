@@ -308,8 +308,11 @@ router.patch("/campaigns/:id", authenticate, requireRole("admin"), async (req, r
       bodyKeys: Object.keys(req.body ?? {}),
       bodyVoice: (req.body as Record<string, unknown>)?.voice,
       bodyVoiceProvider: (req.body as Record<string, unknown>)?.voiceProvider,
+      bodyUseVapi: (req.body as Record<string, unknown>)?.useVapi,
+      bodyUseVapiType: typeof (req.body as Record<string, unknown>)?.useVapi,
       parsedVoice: parsed.data.voice,
       parsedVoiceProvider: parsed.data.voiceProvider,
+      parsedUseVapi: parsed.data.useVapi,
     },
     "PATCH /campaigns — incoming voice fields",
   );
