@@ -224,15 +224,56 @@ function FileUploadArea({
           pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
         }
 
+        // CMap + standard-font URLs are REQUIRED for many PDFs (Word/PPT/Asian
+        // fonts use CID-encoded glyphs that need CMap lookup tables to decode
+        // into real Unicode). Without these, page.getTextContent() returns
+        // gibberish glyph codes instead of readable text.
+        // pdfjs-dist ships them; we serve them from the CDN that's pinned to
+        // the same version as the npm package to avoid worker/data mismatches.
+        const PDFJS_VERSION = "5.6.205";
+        const CDN_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}`;
+
         const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+        const pdf = await pdfjs.getDocument({
+          data: arrayBuffer,
+          cMapUrl: `${CDN_BASE}/cmaps/`,
+          cMapPacked: true,
+          standardFontDataUrl: `${CDN_BASE}/standard_fonts/`,
+          // Extract embedded text AND fall back to glyph-based reconstruction
+          // when text layer is missing/broken (older scanned exports).
+          useSystemFonts: true,
+        }).promise;
         const pages: string[] = [];
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          const pageText = content.items
-            .map((item) => ("str" in item ? item.str : ""))
-            .join(" ");
+          // includeMarkedContent: true preserves logical reading order on
+          // structured PDFs. disableNormalization: false keeps ligatures
+          // collapsed into normal letters (fi → fi etc).
+          const content = await page.getTextContent({
+            includeMarkedContent: true,
+            disableNormalization: false,
+          });
+          // Reconstruct lines using the y-coordinate of each text item so
+          // we don't smush every page into one run-on paragraph. Items on
+          // the same baseline are joined with a space; new lines insert \n.
+          let pageText = "";
+          let lastY: number | null = null;
+          for (const item of content.items) {
+            if (!("str" in item)) continue;
+            const str = item.str;
+            const y = Array.isArray(item.transform) ? item.transform[5] : null;
+            if (lastY !== null && y !== null && Math.abs(y - lastY) > 2) {
+              pageText += "\n";
+            } else if (pageText && !pageText.endsWith(" ") && !pageText.endsWith("\n")) {
+              pageText += " ";
+            }
+            pageText += str;
+            if (y !== null) lastY = y;
+            if ("hasEOL" in item && item.hasEOL) {
+              pageText += "\n";
+              lastY = null;
+            }
+          }
           pages.push(pageText);
         }
         extracted = pages.join("\n\n").trim();
