@@ -160,6 +160,31 @@ export async function vapiDirectCall(payload: VapiCallPayload): Promise<VapiCall
   if (!VAPI_API_KEY) {
     return { success: false, error: "VAPI_API_KEY environment variable not set" };
   }
+  // Last-mile voice resolution: if `voice` arrives as a numeric voices.id
+  // (e.g. "60") instead of the provider's actual voice_id string, look it up
+  // here. Several upstream paths (campaign loop, dashboard test call, etc.)
+  // pass the raw DB id; resolving at the boundary guarantees Vapi always
+  // gets a real provider voice ID like "5BTfD9GV7eMTyvzofs0V".
+  if (payload.voice && /^\d+$/.test(payload.voice)) {
+    try {
+      const { db } = await import("../lib/db.js");
+      const { voicesTable } = await import("@workspace/db");
+      const { eq } = await import("drizzle-orm");
+      const [v] = await db
+        .select({ voiceId: voicesTable.voiceId, provider: voicesTable.provider })
+        .from(voicesTable)
+        .where(eq(voicesTable.id, Number(payload.voice)))
+        .limit(1);
+      if (v?.voiceId) {
+        logger.info({ from: payload.voice, to: v.voiceId, provider: v.provider }, "Resolved numeric voice id");
+        payload = { ...payload, voice: v.voiceId, voice_provider: v.provider };
+      } else {
+        logger.warn({ voice: payload.voice }, "Numeric voice id not found in voices table");
+      }
+    } catch (e) {
+      logger.error({ err: e instanceof Error ? e.message : String(e) }, "Voice resolution lookup failed");
+    }
+  }
   // Per-call override (allocated from campaign's number pool) takes
   // priority; fall back to the global env var for one-off test calls.
   const phoneNumberId = payload.vapi_phone_number_id ?? VAPI_PHONE_NUMBER_ID;
