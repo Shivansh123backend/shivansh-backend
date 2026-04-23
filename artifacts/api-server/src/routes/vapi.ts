@@ -10,6 +10,59 @@ import { authenticate, requireRole } from "../middlewares/auth.js";
 const router: IRouter = Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Disposition mapper — collapses Vapi's verbose `endedReason` strings (and
+// other free-form sources) onto our short, dashboard-friendly enum:
+//   interested | not_interested | vm | no_answer | busy | connected
+//   | transferred | disconnected | failed
+//
+// Keep this list as the single source of truth — UI, analytics, and follow-up
+// engine all branch on these values. Anything unknown returns "disconnected"
+// rather than null so the column is always populated for reporting.
+// ─────────────────────────────────────────────────────────────────────────────
+type Disposition =
+  | "interested" | "not_interested" | "vm" | "no_answer" | "busy"
+  | "connected" | "transferred" | "disconnected" | "failed";
+
+export function normalizeDisposition(raw: string | null | undefined): Disposition {
+  if (!raw) return "disconnected";
+  const r = String(raw).toLowerCase().trim();
+
+  // Already-clean enum values pass through
+  const clean = new Set([
+    "interested", "not_interested", "vm", "no_answer", "busy",
+    "connected", "transferred", "disconnected", "failed",
+  ]);
+  if (clean.has(r)) return r as Disposition;
+
+  // Vapi endedReason → enum
+  if (r.includes("voicemail")) return "vm";
+  if (r === "customer-busy" || r.includes("busy")) return "busy";
+  if (
+    r === "customer-did-not-answer" ||
+    r === "customer-did-not-give-microphone-permission" ||
+    r === "silence-timed-out" ||
+    r.includes("no-answer") ||
+    r.includes("did-not-answer")
+  ) return "no_answer";
+  if (r === "assistant-forwarded-call" || r.includes("transfer")) return "transferred";
+  if (
+    r === "customer-ended-call" ||
+    r === "assistant-ended-call" ||
+    r === "assistant-said-end-call-phrase" ||
+    r === "customer-ended-call-after-message" ||
+    r === "completed" || r === "successful" || r === "callback_requested"
+  ) return "connected";
+  if (
+    r.startsWith("pipeline-error") ||
+    r.startsWith("sip-") ||
+    r.startsWith("phone-call-provider-bypass") ||
+    r === "failed" || r === "error" || r === "unknown-error"
+  ) return "failed";
+
+  return "disconnected";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/vapi/webhook — Vapi server-side webhook
 //
 // Vapi POSTs an event envelope of the form:
@@ -110,10 +163,13 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
       const durationSeconds: number = envelope.durationSeconds ?? envelope.duration ?? 0;
       const customerNumber: string = call.customer?.number ?? "";
 
-      const normalizedStatus =
-        endedReason === "customer-ended-call" || endedReason === "assistant-ended-call"
-          ? "completed"
-          : endedReason || "unknown";
+      const disposition = normalizeDisposition(endedReason);
+      // Status is the lifecycle column ("initiated" | "ringing" | "in-progress"
+      // | "completed" | "failed"). Map dispositions onto it: anything that
+      // actually connected → completed, anything that errored at the SIP/
+      // pipeline level → failed, everything else → completed (the call ended
+      // cleanly even if no human picked up).
+      const normalizedStatus = disposition === "failed" ? "failed" : "completed";
 
       try {
         // Prefer UPDATE of the existing row (created at dispatch time in
@@ -134,8 +190,11 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
               transcript,
               summary,
               recordingUrl,
-              disposition: endedReason || null,
-              answerType: "human",
+              disposition,
+              answerType: disposition === "vm" ? "voicemail"
+                : disposition === "no_answer" ? "no_answer"
+                : disposition === "busy" ? "busy"
+                : "human",
             })
             .where(eq(callLogsTable.id, existing[0].id));
 
@@ -159,8 +218,11 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
             summary,
             recordingUrl,
             callControlId: callId,
-            disposition: endedReason || null,
-            answerType: "human",
+            disposition,
+            answerType: disposition === "vm" ? "voicemail"
+              : disposition === "no_answer" ? "no_answer"
+              : disposition === "busy" ? "busy"
+              : "human",
             numberUsed: `vapi:${process.env.VAPI_PHONE_NUMBER_ID ?? "unknown"}`,
           });
         }
