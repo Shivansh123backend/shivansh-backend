@@ -113,9 +113,9 @@ function buildAssistant(payload: VapiCallPayload) {
     // Hang-up only after 30s of total silence (call abandoned).
     silenceTimeoutSeconds: 30,
     maxDurationSeconds: 600,
-    // No background office/cafe noise — keep the line clean unless the
-    // caller explicitly enables it on the campaign in future.
-    backgroundSound: "off",
+    // Subtle office ambience — makes the agent sound like it's calling from
+    // a real workplace, which significantly reduces "robocall" suspicion.
+    backgroundSound: "office",
     // Backchannel ("mhm", "right") makes the agent feel present while listening.
     backchannelingEnabled: true,
     // ---- Latency / interruption tuning (air.ai-style natural conversation) ----

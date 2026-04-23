@@ -1363,20 +1363,17 @@ TONE: Be a real person having a real conversation. Stay warm, listen actively, a
   // If `campaign.voice` stored a numeric voices.id (e.g. "60") instead of the
   // provider's actual voice_id string, resolve it here so downstream callers
   // (Vapi/TTS) receive the real provider id like "5BTfD9GV7eMTyvzofs0V".
-  logger.info({ campaignId, voiceNameBefore: voiceName }, "[VOICE-RESOLVE] before");
   if (voiceName && /^\d+$/.test(voiceName)) {
     const [v] = await db
       .select({ voiceId: voicesTable.voiceId, provider: voicesTable.provider })
       .from(voicesTable)
       .where(eq(voicesTable.id, Number(voiceName)))
       .limit(1);
-    logger.info({ campaignId, lookupResult: v }, "[VOICE-RESOLVE] lookup");
     if (v?.voiceId) {
       voiceName = v.voiceId;
       voiceProvider = v.provider;
     }
   }
-  logger.info({ campaignId, voiceNameAfter: voiceName, voiceProvider }, "[VOICE-RESOLVE] after");
 
   // Resolve fromNumber: campaign field → campaign-assigned pool → any active DB number → placeholder
   if (!fromNumber) {
