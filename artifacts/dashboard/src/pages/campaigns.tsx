@@ -756,7 +756,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           voice: selectedVoice !== "default" ? selectedVoice : undefined,
           voiceProvider: resolvedVoiceProvider as "elevenlabs" | "deepgram" | "cartesia" | undefined,
           fromNumber: selectedNumber || undefined,
-          backgroundSound: backgroundSound as "none" | "office" | "typing" | "cafe",
+          backgroundSound: backgroundSound as "none" | "office",
           holdMusic: holdMusic as "none" | "jazz" | "corporate" | "smooth" | "classical",
           transferNumber: transferNumber || undefined,
           humanLike,
