@@ -38,6 +38,7 @@ export interface VapiCallPayload {
   // number's Vapi-registered ID so calls go out from the user-selected
   // number pool, not a single global number.
   vapi_phone_number_id?: string;
+  background_sound?: string;
 }
 
 export interface VapiCallResult {
@@ -113,9 +114,13 @@ function buildAssistant(payload: VapiCallPayload) {
     // Hang-up only after 30s of total silence (call abandoned).
     silenceTimeoutSeconds: 30,
     maxDurationSeconds: 600,
-    // Subtle office ambience — makes the agent sound like it's calling from
-    // a real workplace, which significantly reduces "robocall" suspicion.
-    backgroundSound: "office",
+    // Background ambience comes from the campaign's `background_sound` field.
+    // Vapi only ships built-in "office"; everything else (none/typing/cafe) is
+    // mapped accordingly. "none" or unset → silent line.
+    backgroundSound: ((): "off" | "office" => {
+      const v = (payload.background_sound ?? "").toLowerCase();
+      return v === "office" ? "office" : "off";
+    })(),
     // Backchannel ("mhm", "right") makes the agent feel present while listening.
     backchannelingEnabled: true,
     // ---- Latency / interruption tuning (air.ai-style natural conversation) ----
@@ -167,8 +172,7 @@ export async function vapiDirectCall(payload: VapiCallPayload): Promise<VapiCall
   // gets a real provider voice ID like "5BTfD9GV7eMTyvzofs0V".
   if (payload.voice && /^\d+$/.test(payload.voice)) {
     try {
-      const { db } = await import("../lib/db.js");
-      const { voicesTable } = await import("@workspace/db");
+      const { db, voicesTable } = await import("@workspace/db");
       const { eq } = await import("drizzle-orm");
       const [v] = await db
         .select({ voiceId: voicesTable.voiceId, provider: voicesTable.provider })

@@ -1005,8 +1005,6 @@ function CreateModal({ onClose }: { onClose: () => void }) {
                     <SelectContent>
                       <SelectItem value="none">None (silent)</SelectItem>
                       <SelectItem value="office">Office Environment</SelectItem>
-                      <SelectItem value="typing">Typing Sounds</SelectItem>
-                      <SelectItem value="cafe">Café Background</SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-[10px] font-mono text-muted-foreground">Subtle ambient sounds make the agent feel like a real person in an office</p>
@@ -1381,8 +1379,6 @@ function LaunchModal({
                 <SelectContent>
                   <SelectItem value="none">None (silent)</SelectItem>
                   <SelectItem value="office">Office Environment</SelectItem>
-                  <SelectItem value="typing">Typing Sounds</SelectItem>
-                  <SelectItem value="cafe">Café Background</SelectItem>
                 </SelectContent>
               </Select>
             </div>
