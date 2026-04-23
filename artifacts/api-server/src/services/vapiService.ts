@@ -76,8 +76,11 @@ CONVERSATION RULES (these override the script when they conflict):
 --- SCRIPT / GOAL ---
 `;
 
-// Build the inline assistant config sent with each call
-function buildAssistant(payload: VapiCallPayload) {
+// Build the inline assistant config sent with each call.
+// Exported so the inbound webhook (assistant-request) can build the same
+// shape from a campaign row when Vapi asks "what assistant do I run for
+// this incoming call?" — keeping outbound and inbound conversation parity.
+export function buildAssistant(payload: VapiCallPayload) {
   const voiceProvider = mapVoiceProvider(payload.voice_provider);
   const baseScript = payload.knowledge_base
     ? `${payload.agent_prompt}\n\n--- KNOWLEDGE BASE (use this as your source of truth) ---\n${payload.knowledge_base}`
@@ -343,6 +346,95 @@ async function getOrCreateTelnyxCredential(): Promise<{ id: string } | { error: 
   } catch (err) {
     const ax = err as AxiosError<{ message?: string }>;
     return { error: `Vapi credential create failed: ${ax.response?.data?.message ?? ax.message}` };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inbound assistant resolver
+//
+// When someone dials a Vapi-registered Telnyx number, Telnyx SIP-forwards
+// the call to sip.vapi.ai. Vapi then POSTs `{message:{type:"assistant-request",
+// call:{phoneNumber:{number,...},customer:{number,...},...}}}` to our
+// configured serverUrl. We look up the called number → its assigned campaign
+// (and the campaign's voice + prompt + KB) and return the assistant inline.
+//
+// Returns either { assistant } (Vapi runs it) or { error } (Vapi rejects the
+// call gracefully). Voice resolution mirrors vapiDirectCall — accepts numeric
+// voices.id or provider voiceId.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function buildInboundAssistantForNumber(
+  calledE164: string,
+  callerE164: string,
+): Promise<{ assistant?: ReturnType<typeof buildAssistant>; error?: string }> {
+  if (!calledE164) return { error: "no called number on inbound request" };
+
+  try {
+    const { db, phoneNumbersTable, campaignsTable, voicesTable } = await import("@workspace/db");
+    const { eq } = await import("drizzle-orm");
+
+    const [num] = await db
+      .select()
+      .from(phoneNumbersTable)
+      .where(eq(phoneNumbersTable.phoneNumber, calledE164))
+      .limit(1);
+
+    if (!num?.campaignId) {
+      return { error: `Number ${calledE164} is not assigned to any campaign` };
+    }
+
+    const [campaign] = await db
+      .select()
+      .from(campaignsTable)
+      .where(eq(campaignsTable.id, num.campaignId))
+      .limit(1);
+
+    if (!campaign) return { error: `Campaign ${num.campaignId} not found` };
+    if (campaign.type !== "inbound" && campaign.type !== "both") {
+      return { error: `Campaign "${campaign.name}" is outbound-only — refusing inbound call` };
+    }
+
+    // Resolve voice: campaigns store either a numeric voices.id or the
+    // provider voiceId string. Look up the row to get the real voice + provider.
+    let voiceId = campaign.voice ?? "21m00Tcm4TlvDq8ikWAM";
+    let voiceProvider = campaign.voiceProvider ?? "elevenlabs";
+    if (voiceId && /^\d+$/.test(voiceId)) {
+      const [v] = await db
+        .select({ voiceId: voicesTable.voiceId, provider: voicesTable.provider })
+        .from(voicesTable)
+        .where(eq(voicesTable.id, Number(voiceId)))
+        .limit(1);
+      if (v?.voiceId) {
+        voiceId = v.voiceId;
+        voiceProvider = v.provider ?? voiceProvider;
+      }
+    }
+
+    const callerName = callerE164 || "there";
+    const inboundFirstMessage = `Hi, this is ${campaign.name}. How can I help you today?`;
+
+    const assistant = buildAssistant({
+      phone: callerE164,
+      agent_prompt: campaign.agentPrompt ?? "You are a helpful assistant. Greet the caller warmly and ask how you can help.",
+      voice: voiceId,
+      voice_provider: voiceProvider,
+      campaign_id: String(campaign.id),
+      campaign_name: campaign.name,
+      transfer_number: campaign.transferNumber ?? undefined,
+      first_message: inboundFirstMessage,
+      lead_name: callerName,
+      knowledge_base: campaign.knowledgeBase ?? undefined,
+      background_sound: campaign.backgroundSound ?? undefined,
+    });
+
+    logger.info(
+      { calledE164, callerE164, campaignId: campaign.id, voiceId, voiceProvider },
+      "Built inbound assistant config",
+    );
+    return { assistant };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err: msg, calledE164 }, "buildInboundAssistantForNumber failed");
+    return { error: msg };
   }
 }
 

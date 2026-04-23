@@ -4,7 +4,7 @@ import { db } from "@workspace/db";
 import { callLogsTable, phoneNumbersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { removeActiveCall } from "../lib/redis.js";
-import { vapiDirectCall } from "../services/vapiService.js";
+import { vapiDirectCall, buildInboundAssistantForNumber } from "../services/vapiService.js";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
@@ -57,6 +57,37 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
     const campaignId = meta.campaignId ? parseInt(String(meta.campaignId), 10) : undefined;
 
     logger.info({ type, callId, campaignId }, "Vapi webhook event");
+
+    // ── Inbound: Vapi asks us which assistant to run for this incoming call ──
+    // Telnyx SIP-forwards inbound PSTN calls to sip.vapi.ai. Vapi looks up
+    // the BYO number, then POSTs assistant-request to our serverUrl. We look
+    // up the campaign assigned to the called number and return its assistant.
+    if (type === "assistant-request") {
+      const calledNumber: string =
+        call?.phoneNumber?.number ??
+        envelope?.phoneNumber?.number ??
+        "";
+      const callerNumber: string =
+        call?.customer?.number ??
+        envelope?.customer?.number ??
+        "";
+      const result = await buildInboundAssistantForNumber(calledNumber, callerNumber);
+      if (result.assistant) {
+        // Persist any monitor URLs Vapi gives us back for inbound, so the
+        // supervisor "Listen" works on inbound calls too. Vapi includes
+        // them on the assistant-request envelope when monitorPlan is set.
+        const monitor = call?.monitor as { listenUrl?: string; controlUrl?: string } | undefined;
+        if (callId && monitor && (monitor.listenUrl || monitor.controlUrl)) {
+          try {
+            const { setVapiMonitorUrls } = await import("../services/vapiMonitor.js");
+            await setVapiMonitorUrls(callId, monitor);
+          } catch { /* non-fatal */ }
+        }
+        return res.status(200).json({ assistant: result.assistant });
+      }
+      logger.warn({ calledNumber, callerNumber, err: result.error }, "Inbound assistant resolution failed — Vapi will reject the call");
+      return res.status(200).json({ error: result.error ?? "no_assistant" });
+    }
 
     if (type === "status-update") {
       const status: string = envelope.status ?? call.status ?? "";
