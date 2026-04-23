@@ -29,7 +29,7 @@ const activeCampaignRuns = new Map<number, boolean>();
 
 const createCampaignSchema = z.object({
   name: z.string().min(1),
-  agentId: z.number().nullish(),
+  agentId: z.preprocess((v) => (v === "" || v == null ? null : typeof v === "string" ? Number(v) : v), z.number().nullish()),
   type: z.enum(["outbound", "inbound", "both"]).default("outbound"),
   routingType: z.enum(["ai", "human", "ai_then_human"]).default("ai"),
   routingStrategy: z.enum(["round_robin", "priority", "sequential"]).default("round_robin"),
@@ -104,7 +104,7 @@ router.post("/campaigns/create", authenticate, requireRole("admin"), async (req,
 //       can resume an in-progress draft from the campaigns list)
 const draftCampaignSchema = z.object({
   name: z.string().min(1).default("Untitled draft"),
-  agentId: z.number().nullish(),
+  agentId: z.preprocess((v) => (v === "" || v == null ? null : typeof v === "string" ? Number(v) : v), z.number().nullish()),
   type: z.enum(["outbound", "inbound", "both"]).optional(),
   routingType: z.enum(["ai", "human", "ai_then_human"]).optional(),
   routingStrategy: z.enum(["round_robin", "priority", "sequential"]).optional(),
@@ -209,7 +209,7 @@ router.get("/campaigns/options", authenticate, (_req, res): void => {
 const updateCampaignSchema = z.object({
   name: z.string().min(1).optional(),
   type: z.enum(["outbound", "inbound", "both"]).optional(),
-  agentId: z.number().nullish(),
+  agentId: z.preprocess((v) => (v === "" || v == null ? null : typeof v === "string" ? Number(v) : v), z.number().nullish()),
   routingType: z.enum(["ai", "human", "ai_then_human"]).optional(),
   routingStrategy: z.enum(["round_robin", "priority", "sequential"]).optional(),
   agentPrompt: z.string().nullish(),
