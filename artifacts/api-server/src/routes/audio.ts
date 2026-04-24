@@ -15,20 +15,10 @@ const router: IRouter = Router();
 
 // ── Source lists — ordered by reliability (first = preferred) ─────────────────
 const AMBIENT_SOURCES: Record<string, string[]> = {
-  typing: [
-    "https://freesound.org/data/previews/398/398699_5121236-lq.mp3",   // Mechanical keyboard typing
-    "https://freesound.org/data/previews/270/270404_5123851-lq.mp3",   // Keyboard typing 2
-    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",   // fallback music
-  ],
   office: [
     "https://freesound.org/data/previews/462/462065_3612722-lq.mp3",   // Office ambience
     "https://freesound.org/data/previews/171/171671_2437358-lq.mp3",   // Office room tone
     "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-  ],
-  cafe: [
-    "https://freesound.org/data/previews/521/521975_11421771-lq.mp3",  // Café ambience
-    "https://freesound.org/data/previews/172/172948_1033898-lq.mp3",   // Coffee shop
-    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
   ],
 };
 

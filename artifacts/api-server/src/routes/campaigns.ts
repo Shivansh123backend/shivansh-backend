@@ -41,7 +41,7 @@ const createCampaignSchema = z.object({
   voice: z.string().nullish(),
   fromNumber: z.string().nullish(),
   transferNumber: z.string().nullish(),
-  backgroundSound: z.enum(["none", "office", "typing", "cafe"]).default("none"),
+  backgroundSound: z.enum(["none", "office"]).default("none"),
   holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).default("none"),
   humanLike: z.string().default("true"),
   // Dialing engine
@@ -117,7 +117,7 @@ const draftCampaignSchema = z.object({
   transferNumber: z.string().nullish(),
   transferRules: z.string().nullish(),
   maxConcurrentCalls: z.number().min(1).max(100).optional(),
-  backgroundSound: z.enum(["none", "office", "typing", "cafe"]).optional(),
+  backgroundSound: z.enum(["none", "office"]).optional(),
   holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).optional(),
   humanLike: z.string().optional(),
   dialingMode: z.enum(["manual", "progressive", "predictive", "preview"]).optional(),
@@ -181,8 +181,6 @@ router.get("/campaigns/options", authenticate, (_req, res): void => {
     backgroundSound: [
       { value: "none",   label: "None" },
       { value: "office", label: "Office Ambience" },
-      { value: "typing", label: "Keyboard Typing" },
-      { value: "cafe",   label: "Café Background" },
     ],
     holdMusic: [
       { value: "none",      label: "None" },
@@ -220,7 +218,7 @@ const updateCampaignSchema = z.object({
   transferNumber: z.string().nullish(),
   transferRules: z.string().nullish(),
   maxConcurrentCalls: z.number().min(1).max(100).optional(),
-  backgroundSound: z.enum(["none", "office", "typing", "cafe"]).optional(),
+  backgroundSound: z.enum(["none", "office"]).optional(),
   holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).optional(),
   humanLike: z.string().optional(),
   // Allow status changes via PATCH (stop/pause/resume from frontend)

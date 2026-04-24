@@ -78,16 +78,12 @@ function resolveHoldMusicUrl(holdMusic?: string | null): string {
 // Background sound URLs — played as overlay:true so they mix beneath the AI voice.
 // Served via our audio proxy so Telnyx can reliably fetch actual ambient sounds.
 const BACKGROUND_SOUND_URLS: Record<string, string> = {
-  office:  `${BACKEND_WEBHOOK_URL}/api/audio/ambient/office`,
-  typing:  `${BACKEND_WEBHOOK_URL}/api/audio/ambient/typing`,
-  cafe:    `${BACKEND_WEBHOOK_URL}/api/audio/ambient/cafe`,
+  office: `${BACKEND_WEBHOOK_URL}/api/audio/ambient/office`,
 };
 
 // System-prompt context injected so the AI's language matches the selected environment
 const BACKGROUND_CONTEXT_MAP: Record<string, string> = {
   office: "ENVIRONMENT NOTE: You are calling from a busy professional call center. Keyboards and colleague conversations may be faintly audible.",
-  typing: "ENVIRONMENT NOTE: You are in a modern open-plan workspace. Light keyboard typing sounds are in the background.",
-  cafe:   "ENVIRONMENT NOTE: You are making this call from a coffee shop. Gentle background conversations and espresso machine sounds are present.",
 };
 
 // Track calls where background audio has been injected (so we can ignore its playback.ended event)

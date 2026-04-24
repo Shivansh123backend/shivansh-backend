@@ -103,7 +103,7 @@ export interface BridgeInfo {
   recordingUrl?: string;
   transferNumber?: string;
   holdMusicUrl?: string;
-  backgroundSound?: string;    // "office" | "typing" | "cafe" | "none" | undefined
+  backgroundSound?: string;    // "office" | "none" | undefined
   voiceProvider?: string;      // "elevenlabs" | "deepgram" | "cartesia"
   accent?: string;             // "US" | "UK" | "neutral" — passed to custom bridge for accent tuning
   region?: string;             // "US" | "UK" | "CA" | "AU" | "IN" | "OTHER" — for geo behavior
