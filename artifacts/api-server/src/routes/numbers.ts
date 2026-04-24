@@ -15,7 +15,7 @@ const router: IRouter = Router();
 const addNumberSchema = z.object({
   phoneNumber: z.string().min(1),
   label: z.string().optional(),
-  provider: z.enum(["voip", "telnyx", "twilio"]),
+  provider: z.enum(["voip", "telnyx", "twilio", "vapi"]),
   campaignId: z.number().optional(),
   direction: z.enum(["inbound", "outbound", "both"]).default("both"),
   forwardNumber: z.string().optional(),
@@ -75,6 +75,7 @@ router.get("/numbers", authenticate, async (req, res): Promise<void> => {
       lastUsedAt: phoneNumbersTable.lastUsedAt,
       isBusy: phoneNumbersTable.isBusy,
       isBlocked: phoneNumbersTable.isBlocked,
+      vapiPhoneNumberId: phoneNumbersTable.vapiPhoneNumberId,
       createdAt: phoneNumbersTable.createdAt,
       updatedAt: phoneNumbersTable.updatedAt,
     })

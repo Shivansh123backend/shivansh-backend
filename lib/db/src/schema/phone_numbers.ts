@@ -2,7 +2,7 @@ import { pgTable, text, serial, timestamp, integer, pgEnum, boolean } from "driz
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const phoneProviderEnum = pgEnum("phone_provider", ["voip", "telnyx", "twilio"]);
+export const phoneProviderEnum = pgEnum("phone_provider", ["voip", "telnyx", "twilio", "vapi"]);
 export const phoneStatusEnum = pgEnum("phone_status", ["active", "inactive"]);
 
 export const phoneDirectionEnum = pgEnum("phone_direction", ["inbound", "outbound", "both"]);
