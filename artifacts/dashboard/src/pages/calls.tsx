@@ -202,6 +202,62 @@ function DispositionUpdater({
   );
 }
 
+// ── Recording button — shows link if URL ready, refresh spinner if not ────────
+function RecordingButton({ row, onRefreshed }: { row: CdrRow; onRefreshed: () => void }) {
+  const [loading, setLoading] = useState(false);
+  const [refreshedUrl, setRefreshedUrl] = useState<string | null>(null);
+  const url = refreshedUrl ?? row.recordingUrl;
+
+  if (url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <Play className="w-2.5 h-2.5" />
+        Recording
+        <ExternalLink className="w-2 h-2" />
+      </a>
+    );
+  }
+
+  if (row.source !== "call_logs") return null;
+  const numId = parseInt(row.id.replace(/^[cl]-/, ""), 10);
+  if (isNaN(numId)) return null;
+
+  const handleRefresh = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem("auth_token");
+      const res = await fetch(`/api/call-logs/${numId}/refresh-recording`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data: { recordingUrl?: string | null } = await res.json();
+      if (data.recordingUrl) {
+        setRefreshedUrl(data.recordingUrl);
+        onRefreshed();
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleRefresh}
+      disabled={loading}
+      className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono rounded border border-border text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+      title="Recording may still be processing — click to check"
+    >
+      <RefreshCw className={`w-2.5 h-2.5 ${loading ? "animate-spin" : ""}`} />
+      {loading ? "Checking…" : "Fetch Recording"}
+    </button>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function CallsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("cdr");
@@ -423,18 +479,7 @@ export default function CallsPage() {
                                 endpoint={c.source === "call_logs" ? "call-logs" : "calls"}
                                 id={parseInt(c.id.replace(/^[cl]-/, ""))}
                               />
-                              {c.recordingUrl && (
-                                <a
-                                  href={c.recordingUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
-                                >
-                                  <Play className="w-2.5 h-2.5" />
-                                  Recording
-                                  <ExternalLink className="w-2 h-2" />
-                                </a>
-                              )}
+                              <RecordingButton row={c} onRefreshed={refetchCalls} />
                             </div>
 
                             {c.summary && (

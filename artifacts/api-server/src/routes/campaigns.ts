@@ -946,6 +946,14 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       })
       .returning();
 
+    // Notify live monitor immediately (before Vapi confirms the call is live)
+    emitToSupervisors("call:queued", {
+      callId: logEntry?.id,
+      leadId: lead.id,
+      campaignId,
+      phoneNumber: normPhone,
+    });
+
     totalCalls++;
 
     // Re-read the campaign's CURRENT voice + provider from DB on every dial.
@@ -1025,6 +1033,16 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       .where(eq(callLogsTable.id, logEntry.id));
 
     if (result.success) {
+      // Promote queued → started now that Vapi confirmed the call
+      emitToSupervisors("call:started", {
+        callId: logEntry?.id,
+        callControlId: result.callControlId ? `vapi:${result.callControlId}` : undefined,
+        leadId: lead.id,
+        campaignId,
+        phoneNumber: normPhone,
+        providerUsed: "vapi",
+        selectedNumber: callFromNumber,
+      });
       await db
         .update(leadsTable)
         .set({ status: "called", lastCalledAt: new Date(), retryCount: newRetryCount })

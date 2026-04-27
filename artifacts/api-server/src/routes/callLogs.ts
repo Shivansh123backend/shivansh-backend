@@ -298,6 +298,53 @@ router.get("/call-logs/:campaign_id", authenticate, async (req, res): Promise<vo
   res.json(logs);
 });
 
+// ── POST /call-logs/:id/refresh-recording ─────────────────────────────────────
+// Vapi CDN takes 30-90 seconds to process recordings after a call ends.
+// This endpoint re-fetches the recording URL from the Vapi call API and
+// updates the DB row, so the frontend can poll after a short wait.
+router.post("/call-logs/:id/refresh-recording", authenticate, async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id as string, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
+
+  const [log] = await db
+    .select({ id: callLogsTable.id, callControlId: callLogsTable.callControlId, recordingUrl: callLogsTable.recordingUrl })
+    .from(callLogsTable)
+    .where(eq(callLogsTable.id, id))
+    .limit(1);
+
+  if (!log) { res.status(404).json({ error: "Call log not found" }); return; }
+
+  // Already has a recording — return it
+  if (log.recordingUrl) {
+    res.json({ recordingUrl: log.recordingUrl, fresh: false });
+    return;
+  }
+
+  // Try to fetch from Vapi
+  const vapiCallId = log.callControlId?.replace(/^vapi:/, "");
+  if (!vapiCallId || !process.env.VAPI_API_KEY) {
+    res.json({ recordingUrl: null, fresh: false });
+    return;
+  }
+
+  try {
+    const axios = (await import("axios")).default;
+    const { data } = await axios.get(`https://api.vapi.ai/call/${vapiCallId}`, {
+      headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
+      timeout: 8_000,
+    });
+    const url: string = data?.recordingUrl ?? data?.artifact?.recordingUrl ?? "";
+    if (url) {
+      await db.update(callLogsTable).set({ recordingUrl: url }).where(eq(callLogsTable.id, id));
+      logger.info({ id, vapiCallId, url }, "Recording URL refreshed from Vapi");
+    }
+    res.json({ recordingUrl: url || null, fresh: !!url });
+  } catch (err) {
+    logger.warn({ id, vapiCallId, err: String(err) }, "Failed to refresh recording URL from Vapi");
+    res.json({ recordingUrl: null, fresh: false });
+  }
+});
+
 export default router;
 
 // ── Redis helper ──────────────────────────────────────────────────────────────
