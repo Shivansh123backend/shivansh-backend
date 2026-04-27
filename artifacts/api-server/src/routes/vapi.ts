@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { removeActiveCall } from "../lib/redis.js";
 import { vapiDirectCall, buildInboundAssistantForNumber } from "../services/vapiService.js";
 import { authenticate, requireRole } from "../middlewares/auth.js";
+import { emitToSupervisors } from "../websocket/index.js";
 
 const router: IRouter = Router();
 
@@ -136,6 +137,20 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
             await setVapiMonitorUrls(callId, monitor);
           } catch { /* non-fatal */ }
         }
+        // Notify live monitor that an inbound call is starting.
+        // Use a stable pseudo-ID derived from the Vapi callId so the
+        // live monitor can track this call without a DB row ID yet.
+        const controlId = `vapi:${callId}`;
+        const pseudoId = -(parseInt(callId.replace(/-/g, "").slice(-7), 16) % 9_000_000 + 1_000_000);
+        emitToSupervisors("call:inbound", { callControlId: controlId, from: callerNumber, campaignId: result.campaignId });
+        emitToSupervisors("call:started", {
+          id: pseudoId,
+          callControlId: controlId,
+          phoneNumber: callerNumber,
+          campaignId: result.campaignId,
+          providerUsed: "vapi",
+          selectedNumber: calledNumber,
+        });
         return res.status(200).json({ assistant: result.assistant });
       }
       logger.warn({ calledNumber, callerNumber, err: result.error }, "Inbound assistant resolution failed — Vapi will reject the call");
@@ -146,6 +161,21 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
       const status: string = envelope.status ?? call.status ?? "";
       if (status === "ended" && callId) {
         await removeActiveCall(`vapi:${callId}`).catch(() => {});
+      }
+    }
+
+    // ── Live transcript relay ─────────────────────────────────────────────────
+    // Vapi sends real-time transcript events so supervisors can read along.
+    if (type === "transcript") {
+      const role: string = envelope.role ?? "";
+      const text: string = envelope.transcript ?? "";
+      if (callId && text) {
+        emitToSupervisors("call:transcription", {
+          callControlId: `vapi:${callId}`,
+          speaker: role === "user" ? "caller" : "agent",
+          text,
+          ts: Date.now(),
+        });
       }
     }
 
@@ -229,6 +259,15 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
       } catch (e) {
         logger.warn({ err: e instanceof Error ? e.message : String(e), callId }, "Failed to persist Vapi call_log");
       }
+
+      // Emit call:ended so live monitor removes the call card
+      emitToSupervisors("call:ended", {
+        callControlId: `vapi:${callId}`,
+        disposition,
+        duration: Math.round(durationSeconds),
+      });
+      // Notify CDR table to refresh
+      emitToSupervisors("call_update", { source: "vapi", callId });
 
       await removeActiveCall(`vapi:${callId}`).catch(() => {});
     }

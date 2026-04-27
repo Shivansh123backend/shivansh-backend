@@ -365,7 +365,7 @@ async function getOrCreateTelnyxCredential(): Promise<{ id: string } | { error: 
 export async function buildInboundAssistantForNumber(
   calledE164: string,
   callerE164: string,
-): Promise<{ assistant?: ReturnType<typeof buildAssistant>; error?: string }> {
+): Promise<{ assistant?: ReturnType<typeof buildAssistant>; campaignId?: number; error?: string }> {
   if (!calledE164) return { error: "no called number on inbound request" };
 
   try {
@@ -430,7 +430,7 @@ export async function buildInboundAssistantForNumber(
       { calledE164, callerE164, campaignId: campaign.id, voiceId, voiceProvider },
       "Built inbound assistant config",
     );
-    return { assistant };
+    return { assistant, campaignId: campaign.id };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ err: msg, calledE164 }, "buildInboundAssistantForNumber failed");
