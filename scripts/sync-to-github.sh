@@ -10,8 +10,12 @@ AUTH=(-H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+jso
 
 mask() { sed "s|${TOKEN}|***|g"; }
 
+echo "==> Deleting old ${BRANCH} (if any)..."
+curl -s -o /dev/null -w "  delete: HTTP %{http_code}\n" "${AUTH[@]}" \
+  -X DELETE "${API}/git/refs/heads/${BRANCH}" || true
+
 echo "==> Pushing local HEAD to ${BRANCH}..."
-GIT_TERMINAL_PROMPT=0 git -c credential.helper= push --force-with-lease "${REMOTE_URL}" "HEAD:${BRANCH}" 2>&1 | mask
+GIT_TERMINAL_PROMPT=0 git -c credential.helper= push "${REMOTE_URL}" "HEAD:refs/heads/${BRANCH}" 2>&1 | mask
 
 LOCAL_SHA="$(git rev-parse HEAD)"
 REMOTE_MAIN_SHA="$(GIT_TERMINAL_PROMPT=0 git ls-remote "${REMOTE_URL}" main 2>/dev/null | awk '{print $1}')"
