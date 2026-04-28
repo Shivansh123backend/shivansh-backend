@@ -168,12 +168,12 @@ async function handleManualCall(req: import("express").Request, res: import("exp
       data: result.data,
     });
   } else {
-    const isMissingConfig = result.error?.includes("TELNYX_CONNECTION_ID") || result.error?.includes("TELNYX_API_KEY");
+    const isMissingConfig = result.error?.includes("VAPI_API_KEY") || result.error?.includes("VAPI_PHONE_NUMBER_ID");
     res.status(isMissingConfig ? 503 : 502).json({
       success: false,
       error: result.error,
       hint: isMissingConfig
-        ? "Set TELNYX_CONNECTION_ID in Replit Secrets. Get it from portal.telnyx.com → Call Control Applications."
+        ? "Set VAPI_API_KEY and VAPI_PHONE_NUMBER_ID in server environment variables."
         : undefined,
     });
   }
