@@ -8,7 +8,16 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, X, Trash2, Edit2, Power, PowerOff } from "lucide-react";
+import { Plus, X, Trash2, Edit2, Power, PowerOff, ChevronDown, ChevronRight, Users } from "lucide-react";
+
+type Lead = {
+  id: number;
+  name: string;
+  phone: string;
+  email: string | null;
+  status: string;
+  createdAt: string;
+};
 
 type LeadList = {
   id: number;
@@ -25,6 +34,14 @@ type LeadList = {
 type Campaign = { id: number; name: string };
 
 const LISTS_KEY = ["/api/lists"];
+
+const STATUS_COLORS: Record<string, string> = {
+  pending:     "bg-yellow-500/15 text-yellow-400",
+  called:      "bg-blue-500/15 text-blue-400",
+  callback:    "bg-purple-500/15 text-purple-400",
+  do_not_call: "bg-red-500/15 text-red-400",
+  completed:   "bg-green-500/15 text-green-400",
+};
 
 function CreateOrEditModal({ onClose, list, campaigns }: { onClose: () => void; list?: LeadList; campaigns: Campaign[] }) {
   const [name, setName] = useState(list?.name ?? "");
@@ -97,11 +114,90 @@ function CreateOrEditModal({ onClose, list, campaigns }: { onClose: () => void; 
   );
 }
 
+function LeadsPanel({ listId, listName }: { listId: number; listName: string }) {
+  const { data, isLoading, isError } = useQuery<{ leads: Lead[] }>({
+    queryKey: ["/api/lists", listId],
+    queryFn: () => customFetch<{ leads: Lead[] }>(`/api/lists/${listId}`),
+  });
+
+  const leads = data?.leads ?? [];
+
+  if (isLoading) {
+    return (
+      <tr>
+        <td colSpan={8} className="px-6 py-4 bg-white/[0.02] border-b border-border">
+          <div className="space-y-2">
+            {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
+  if (isError) {
+    return (
+      <tr>
+        <td colSpan={8} className="px-6 py-4 bg-white/[0.02] border-b border-border text-xs font-mono text-destructive">
+          Failed to load leads for "{listName}".
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr>
+      <td colSpan={8} className="bg-white/[0.015] border-b border-border">
+        <div className="px-6 py-3">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">
+            <Users className="w-3 h-3 inline mr-1.5" />
+            {leads.length} lead{leads.length !== 1 ? "s" : ""} in "{listName}"
+          </p>
+          {leads.length === 0 ? (
+            <p className="text-xs font-mono text-muted-foreground py-2">
+              No leads assigned to this list yet. Go to <span className="text-primary">Lead Lists</span> page, select leads and use "Assign to List".
+            </p>
+          ) : (
+            <div className="border border-border/50 rounded overflow-hidden">
+              <table className="w-full text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-border/50 bg-white/[0.02]">
+                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Name</th>
+                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Phone</th>
+                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Email</th>
+                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
+                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider">Added</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leads.map(lead => (
+                    <tr key={lead.id} className="border-b border-border/30 last:border-0 hover:bg-white/[0.02]">
+                      <td className="px-3 py-2 text-foreground">{lead.name}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{lead.phone}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{lead.email ?? "-"}</td>
+                      <td className="px-3 py-2">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider ${STATUS_COLORS[lead.status] ?? "bg-muted text-muted-foreground"}`}>
+                          {lead.status.replace("_", " ")}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground">{new Date(lead.createdAt).toLocaleDateString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 export default function ListsPage() {
   const { data: lists, isLoading } = useQuery<LeadList[]>({ queryKey: LISTS_KEY, queryFn: () => customFetch<LeadList[]>("/api/lists") });
   const { data: campaigns } = useListCampaigns();
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<LeadList | undefined>();
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const qc = useQueryClient();
   const { toast } = useToast();
 
@@ -123,6 +219,10 @@ export default function ListsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: LISTS_KEY }),
   });
 
+  const toggleExpand = (id: number) => {
+    setExpandedId(prev => prev === id ? null : id);
+  };
+
   return (
     <Layout>
       {showCreate && <CreateOrEditModal onClose={() => setShowCreate(false)} campaigns={campaigns ?? []} />}
@@ -143,12 +243,12 @@ export default function ListsPage() {
           <table className="w-full text-xs font-mono">
             <thead>
               <tr className="border-b border-border">
+                <th className="w-8 px-3 py-2.5"></th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">ID</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">List Name</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Description</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Leads Count</th>
+                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Leads</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Active</th>
-                <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Last Call</th>
                 <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Campaign</th>
                 <th className="text-right px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Modify</th>
               </tr>
@@ -161,44 +261,59 @@ export default function ListsPage() {
               ) : (lists ?? []).length === 0 ? (
                 <tr><td colSpan={8} className="px-4 py-12 text-center text-muted-foreground">No lists yet. Click <span className="text-primary">New List</span> to create one.</td></tr>
               ) : (lists ?? []).map(l => (
-                <tr key={l.id} className="border-b border-border/30 hover:bg-white/2 transition-colors">
-                  <td className="px-4 py-3 text-muted-foreground">#{l.id}</td>
-                  <td className="px-4 py-3 text-foreground font-medium">{l.name}</td>
-                  <td className="px-4 py-3 text-muted-foreground truncate max-w-xs">{l.description ?? "-"}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{l.leadsCount ?? 0}</td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wider ${l.active ? "bg-green-500/15 text-green-400" : "bg-muted text-muted-foreground"}`}>
-                      {l.active ? "Y" : "N"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{l.lastCalledAt ? new Date(l.lastCalledAt).toLocaleString() : "-"}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{l.campaignName ?? "-"}</td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="inline-flex items-center gap-1">
-                      <button
-                        title={l.active ? "Pause list" : "Activate list"}
-                        onClick={() => toggleActive.mutate(l)}
-                        className="p-1 rounded hover:bg-white/5 text-muted-foreground hover:text-foreground"
-                      >
-                        {l.active ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
-                      </button>
-                      <button
-                        title="Edit"
-                        onClick={() => setEditing(l)}
-                        className="p-1 rounded hover:bg-white/5 text-muted-foreground hover:text-foreground"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        title="Delete"
-                        onClick={() => { if (confirm(`Delete list "${l.name}"? Leads will be unassigned but kept.`)) del.mutate(l.id); }}
-                        className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+                <>
+                  <tr
+                    key={l.id}
+                    className={`border-b border-border/30 hover:bg-white/[0.02] transition-colors cursor-pointer ${expandedId === l.id ? "bg-white/[0.02]" : ""}`}
+                    onClick={() => toggleExpand(l.id)}
+                  >
+                    <td className="px-3 py-3 text-muted-foreground">
+                      {expandedId === l.id
+                        ? <ChevronDown className="w-3.5 h-3.5" />
+                        : <ChevronRight className="w-3.5 h-3.5" />}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">#{l.id}</td>
+                    <td className="px-4 py-3 text-foreground font-medium">{l.name}</td>
+                    <td className="px-4 py-3 text-muted-foreground truncate max-w-xs">{l.description ?? "-"}</td>
+                    <td className="px-4 py-3">
+                      <span className="text-primary font-semibold">{l.leadsCount ?? 0}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wider ${l.active ? "bg-green-500/15 text-green-400" : "bg-muted text-muted-foreground"}`}>
+                        {l.active ? "Y" : "N"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">{l.campaignName ?? "-"}</td>
+                    <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          title={l.active ? "Pause list" : "Activate list"}
+                          onClick={() => toggleActive.mutate(l)}
+                          className="p-1 rounded hover:bg-white/5 text-muted-foreground hover:text-foreground"
+                        >
+                          {l.active ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
+                          title="Edit"
+                          onClick={() => setEditing(l)}
+                          className="p-1 rounded hover:bg-white/5 text-muted-foreground hover:text-foreground"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          title="Delete"
+                          onClick={() => { if (confirm(`Delete list "${l.name}"? Leads will be unassigned but kept.`)) del.mutate(l.id); }}
+                          className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  {expandedId === l.id && (
+                    <LeadsPanel key={`panel-${l.id}`} listId={l.id} listName={l.name} />
+                  )}
+                </>
               ))}
             </tbody>
           </table>
