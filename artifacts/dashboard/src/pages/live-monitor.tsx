@@ -341,15 +341,15 @@ function LiveCallCard({
               {isListening ? "Listening" : "Listen"}
             </button>
           )}
-          {/* Barge-in (3-way) — bridge the supervisor's phone into the live call */}
+          {/* Barge-in / Whisper — bridge supervisor into Telnyx call, or whisper coaching to Vapi AI */}
           {call.callControlId && (
             <button
               onClick={onBargeIn}
-              title="Barge in: dial your phone and bridge into this call"
+              title={call.callControlId?.startsWith("vapi:") ? "Whisper: inject a coaching note into the AI's context (caller won't hear it)" : "Barge in: dial your phone and bridge into this call"}
               className="flex items-center gap-1 text-[9px] font-mono px-2 py-1 rounded border border-border/50 text-muted-foreground hover:text-orange-400 hover:border-orange-400/40 transition-all"
             >
               <Phone className="w-2.5 h-2.5" />
-              Barge
+              {call.callControlId?.startsWith("vapi:") ? "Whisper" : "Barge"}
             </button>
           )}
           {/* Drop — force-end this call */}
@@ -772,6 +772,33 @@ export default function LiveMonitorPage() {
   const successRate = totalToday > 0 ? Math.round((completedToday / totalToday) * 100) : 0;
 
   const bargeIn = useCallback(async (callControlId: string) => {
+    // Vapi calls: inject a supervisor coaching note into the AI's context
+    // (the caller never hears it; only the AI sees it).
+    if (callControlId.startsWith("vapi:")) {
+      const msg = window.prompt(
+        "Whisper coaching to the AI agent (the caller will NOT hear this):\nThe AI will receive your note as a system instruction mid-call.",
+        ""
+      );
+      if (!msg || !msg.trim()) return;
+      try {
+        const res = await customFetch(`/api/calls/${encodeURIComponent(callControlId)}/whisper`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: msg.trim() }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({})) as { error?: string };
+          alert(`Whisper failed: ${err.error || res.statusText}`);
+          return;
+        }
+        alert("Whisper sent — the AI will use your note immediately.");
+      } catch (e) {
+        alert(`Whisper failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return;
+    }
+
+    // Telnyx calls: dial supervisor phone and bridge into the call (3-way)
     const saved = typeof window !== "undefined" ? window.localStorage.getItem("supervisor_phone") : "";
     const to = window.prompt(
       "Enter your phone number in E.164 format (e.g. +14155551234). We will dial you and bridge you into the call.",
@@ -792,7 +819,7 @@ export default function LiveMonitorPage() {
         body: JSON.stringify({ to: trimmed }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
+        const err = await res.json().catch(() => ({})) as { error?: string };
         alert(`Barge failed: ${err.error || res.statusText}`);
         return;
       }

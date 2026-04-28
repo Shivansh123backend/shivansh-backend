@@ -162,6 +162,15 @@ export function buildAssistant(payload: VapiCallPayload) {
     // we can authenticate the request. Falls back to empty if not set
     // (dev only — production must set VAPI_WEBHOOK_SECRET).
     serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET ?? "",
+    // Explicitly opt in to every webhook type we consume. Without this list
+    // Vapi only sends end-of-call-report by default — transcripts are dropped.
+    serverMessages: [
+      "status-update",
+      "transcript",
+      "end-of-call-report",
+      "hang",
+      "function-call",
+    ],
     // Live supervisor support: ask Vapi to expose listen + control URLs in
     // the call response. We persist them in Redis so the dashboard's
     // `listen:join` can find them later (see services/vapiMonitor.ts and

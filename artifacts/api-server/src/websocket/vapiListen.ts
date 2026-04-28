@@ -2,18 +2,21 @@
  * Vapi live-listen bridge.
  *
  * Vapi exposes a per-call `monitor.listenUrl` (wss://) that streams the live
- * conversation audio as raw PCM 16-bit, 16 kHz, mono. Our supervisor UI on
- * the dashboard already speaks the Telnyx fork format: µ-law 8 kHz frames
- * delivered as `call:audio` Socket.IO events to the room `listen:<callId>`.
+ * conversation audio as raw PCM 16-bit, 8 kHz, mono (telephone quality).
+ * Our supervisor UI speaks the same format: µ-law 8 kHz frames delivered as
+ * `call:audio` Socket.IO events to the room `listen:<callId>`.
  *
  * This module bridges the two: when a supervisor asks to listen on a Vapi
  * call (callControlId starts with `vapi:`), we open the listenUrl WebSocket,
- * convert each incoming PCM16/16k buffer to µ-law/8k, base64-encode, and
+ * convert each incoming PCM16/8k buffer to µ-law/8k, base64-encode, and
  * emit it to the same room — so the existing dashboard player works without
  * any frontend change.
  *
  * One bridge per call. Reference-counted by the supervisor count in the room
  * (managed in websocket/index.ts).
+ *
+ * NOTE: Vapi streams at 8 kHz — do NOT decimate. Earlier code decimated by 2×
+ * assuming 16 kHz input, which produced half-speed ("slow motion") audio.
  */
 
 import WebSocket from "ws";
@@ -46,15 +49,15 @@ function pcm16ToMulawByte(sample: number): number {
   return ~(sign | (exponent << 4) | mantissa) & 0xff;
 }
 
-/** Decimate 16 kHz → 8 kHz (every other sample) and convert to µ-law. */
-function pcm16_16kToMulaw8k(buf: Buffer): Buffer {
-  // buf is little-endian PCM16 samples at 16 kHz.
+/**
+ * Convert PCM16 LE 8 kHz → µ-law 8 kHz (one byte per sample, no decimation).
+ * Vapi's listenUrl streams at 8 kHz — we only need to re-encode, not resample.
+ */
+function pcm16_8kToMulaw8k(buf: Buffer): Buffer {
   const inSamples = Math.floor(buf.length / 2);
-  const outLen = Math.floor(inSamples / 2);
-  const out = Buffer.allocUnsafe(outLen);
-  for (let i = 0, j = 0; j < outLen; i += 2, j++) {
-    const s = buf.readInt16LE(i * 2);
-    out[j] = pcm16ToMulawByte(s);
+  const out = Buffer.allocUnsafe(inSamples);
+  for (let i = 0; i < inSamples; i++) {
+    out[i] = pcm16ToMulawByte(buf.readInt16LE(i * 2));
   }
   return out;
 }
@@ -96,7 +99,7 @@ export async function startVapiListen(callControlId: string): Promise<void> {
     if (!isBinary) return; // ignore JSON control frames
     try {
       const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
-      const mulaw = pcm16_16kToMulaw8k(buf);
+      const mulaw = pcm16_8kToMulaw8k(buf);
       const payload = mulaw.toString("base64");
       try {
         getIO().to(room).emit("call:audio", { callControlId, payload, side: "caller" as const });

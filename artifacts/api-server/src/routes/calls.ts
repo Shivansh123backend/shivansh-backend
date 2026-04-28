@@ -833,6 +833,74 @@ router.post("/calls/:callControlId/conference", authenticate, requireRole("admin
   }
 });
 
+// ── POST /calls/:callControlId/whisper ────────────────────────────────────────
+// Inject a real-time supervisor note into the AI's context via Vapi's control
+// WebSocket. The message is added as a "system" role turn so only the AI sees
+// it — the caller never hears it. This is the Vapi equivalent of whisper-coaching.
+// Body: { message: string }
+router.post("/calls/:callControlId/whisper", authenticate, requireRole("admin", "supervisor"), async (req, res): Promise<void> => {
+  const { callControlId } = req.params as { callControlId: string };
+  const { message } = req.body as { message?: string };
+
+  if (!message || typeof message !== "string" || !message.trim()) {
+    res.status(400).json({ error: "message is required" });
+    return;
+  }
+
+  if (!callControlId.startsWith("vapi:")) {
+    res.status(400).json({ error: "Whisper is only supported for Vapi calls (callControlId must start with vapi:)" });
+    return;
+  }
+
+  const vapiCallId = callControlId.slice("vapi:".length);
+  const vapiApiKey = process.env.VAPI_API_KEY;
+  if (!vapiApiKey) { res.status(503).json({ error: "VAPI_API_KEY not configured" }); return; }
+
+  const { getVapiMonitorUrls } = await import("../services/vapiMonitor.js");
+  const urls = await getVapiMonitorUrls(vapiCallId);
+
+  if (!urls?.controlUrl) {
+    logger.warn({ callControlId, vapiCallId }, "Whisper: no controlUrl on file — call may have ended");
+    res.status(404).json({ error: "No control URL found for this call — it may have ended or monitoring is disabled" });
+    return;
+  }
+
+  // Open a short-lived WebSocket to Vapi's control endpoint and send the message.
+  // Vapi's controlUrl accepts: { type: "add-message", message: { role, content } }
+  // This injects a system-role turn into the AI's context mid-call.
+  try {
+    const { default: WebSocket } = await import("ws");
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(urls.controlUrl as string, { perMessageDeflate: false });
+      const timeout = setTimeout(() => {
+        try { ws.close(); } catch { /**/ }
+        reject(new Error("controlUrl WebSocket timed out (5s)"));
+      }, 5000);
+
+      ws.once("open", () => {
+        ws.send(JSON.stringify({
+          type: "add-message",
+          message: { role: "system", content: message.trim() },
+        }));
+        clearTimeout(timeout);
+        setTimeout(() => { try { ws.close(); } catch { /**/ } resolve(); }, 200);
+      });
+
+      ws.once("error", (err: Error) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
+
+    logger.info({ callControlId, msg: message.trim() }, "Whisper sent to Vapi call");
+    res.json({ ok: true, message: "Whisper injected into call context" });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ callControlId, err: msg }, "Whisper WebSocket delivery failed");
+    res.status(502).json({ error: "Whisper delivery failed", detail: msg });
+  }
+});
+
 // ── POST /calls/:callControlId/hangup ─────────────────────────────────────────
 // Force-end an in-progress call. Supports both Vapi calls (callControlId starts
 // with "vapi:") and legacy Telnyx calls. Used by supervisors and the softphone.
