@@ -93,18 +93,23 @@ function useCallTimer(running: boolean) {
 }
 
 // ── Vapi status badge ──────────────────────────────────────────────────────────
-function VapiBadge({ state }: { state: BrowserCallState }) {
-  const cfg: Record<BrowserCallState, { color: string; label: string }> = {
-    idle:       { color: "bg-violet-400/60",              label: "Vapi Ready"      },
-    connecting: { color: "bg-yellow-400 animate-pulse",   label: "Connecting…"     },
-    active:     { color: "bg-green-400 animate-pulse",    label: "Browser Session" },
-    error:      { color: "bg-red-400",                    label: "Error"           },
-  };
-  const { color, label } = cfg[state];
+function VapiBadge({ state, sdkReady }: { state: BrowserCallState; sdkReady: boolean }) {
+  const label =
+    state === "active"     ? "Browser Session" :
+    state === "connecting" ? "Connecting…"     :
+    state === "error"      ? "Error"           :
+    sdkReady               ? "Online"          : "Offline";
+
+  const color =
+    state === "active"     ? "bg-green-400 animate-pulse" :
+    state === "connecting" ? "bg-yellow-400 animate-pulse":
+    state === "error"      ? "bg-red-400"                 :
+    sdkReady               ? "bg-green-400"               : "bg-white/30";
+
   return (
     <span className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
       <span className={cn("w-1.5 h-1.5 rounded-full", color)} />
-      {label}
+      Vapi · {label}
     </span>
   );
 }
@@ -118,6 +123,7 @@ export default function DialerPage() {
   const [muted, setMuted]                       = useState(false);
   const [agentSpeaking, setAgentSpeaking]       = useState(false);
   const [heldCallIds, setHeldCallIds]           = useState<Set<string>>(new Set());
+  const [vapiSdkReady, setVapiSdkReady]         = useState(false);
   const vapiRef = useRef<Vapi | null>(null);
   const { toast } = useToast();
   const browserTimer = useCallTimer(browserState === "active");
@@ -180,8 +186,11 @@ export default function DialerPage() {
         instance.on("speech-end",   () => setAgentSpeaking(false));
 
         vapiRef.current = instance;
+        setVapiSdkReady(true);
       })
-      .catch(() => {/* key not available – browser session disabled */});
+      .catch(() => {
+        setVapiSdkReady(false);
+      });
 
     return () => {
       instance?.stop();
@@ -308,7 +317,7 @@ export default function DialerPage() {
       <PageHeader
         title="Softphone"
         subtitle="Vapi AI"
-        action={<VapiBadge state={browserState} />}
+        action={<VapiBadge state={browserState} sdkReady={vapiSdkReady} />}
       />
       <div className="p-6 flex justify-center">
         <div className="w-full max-w-sm space-y-4">
@@ -376,7 +385,7 @@ export default function DialerPage() {
           </div>
 
           {/* ── Browser session card ─────────────────────────────────────── */}
-          {vapiRef.current !== undefined && (
+          {vapiSdkReady && (
             <div className={cn(
               "bg-card border rounded-lg p-4 transition-all",
               browserState === "active" ? "border-violet-500/50" : "border-border",

@@ -19,9 +19,9 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, X, RefreshCw, CheckCircle2 } from "lucide-react";
 
 const PROVIDER_STYLES: Record<string, string> = {
-  voip: "border-blue-500/30 text-blue-400 bg-blue-500/5",
-  telnyx: "border-purple-500/30 text-purple-400 bg-purple-500/5",
-  twilio: "border-red-500/30 text-red-400 bg-red-500/5",
+  voip:  "border-blue-500/30 text-blue-400 bg-blue-500/5",
+  vapi:  "border-violet-500/30 text-violet-400 bg-violet-500/5",
+  twilio:"border-red-500/30 text-red-400 bg-red-500/5",
 };
 
 function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
@@ -36,7 +36,7 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     addNumber.mutate(
-      { data: { phoneNumber, provider: provider as "voip" | "telnyx" | "twilio", campaignId: campaignId && campaignId !== "__none__" ? parseInt(campaignId) : undefined, priority: parseInt(priority) } },
+      { data: { phoneNumber, provider: provider as "voip" | "vapi" | "twilio", campaignId: campaignId && campaignId !== "__none__" ? parseInt(campaignId) : undefined, priority: parseInt(priority) } },
       {
         onSuccess: () => {
           qc.invalidateQueries({ queryKey: getListNumbersQueryKey() });
@@ -67,7 +67,7 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
                 <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="voip">VoIP</SelectItem>
-                  <SelectItem value="telnyx">Telnyx</SelectItem>
+                  <SelectItem value="vapi">Vapi</SelectItem>
                   <SelectItem value="twilio">Twilio</SelectItem>
                 </SelectContent>
               </Select>
@@ -173,7 +173,6 @@ export default function NumbersPage() {
   const { data: numbers, isLoading } = useListNumbers();
   const { data: campaigns } = useListCampaigns();
   const [showCreate, setShowCreate] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   const [syncingVapi, setSyncingVapi] = useState(false);
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -203,19 +202,6 @@ export default function NumbersPage() {
     }
   };
 
-  const handleSyncFromTelnyx = async () => {
-    setSyncing(true);
-    try {
-      const result = await customFetch<{ synced: number; total: number; message: string }>("/api/numbers/sync-from-telnyx", { method: "POST" });
-      await qc.invalidateQueries({ queryKey: getListNumbersQueryKey() });
-      toast({ title: result.message ?? `Synced ${result.synced} numbers from Telnyx` });
-    } catch {
-      toast({ title: "Sync failed — check that TELNYX_API_KEY is configured correctly", variant: "destructive" });
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   return (
     <Layout>
       {showCreate && <CreateModal onClose={() => setShowCreate(false)} campaigns={campaigns ?? []} />}
@@ -228,19 +214,9 @@ export default function NumbersPage() {
               size="sm"
               variant="outline"
               className="font-mono text-xs uppercase tracking-wider h-7 px-3 border-primary/40 text-primary hover:bg-primary/10"
-              onClick={handleSyncFromTelnyx}
-              disabled={syncing}
-            >
-              <RefreshCw className={`w-3 h-3 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
-              {syncing ? "Syncing…" : "Sync from Telnyx"}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="font-mono text-xs uppercase tracking-wider h-7 px-3 border-primary/40 text-primary hover:bg-primary/10"
               onClick={handleSyncToVapi}
               disabled={syncingVapi}
-              title="Register all Telnyx numbers with Vapi (one-time per number) so Vapi-routed campaigns can use them"
+              title="Register numbers with Vapi so Vapi-routed campaigns can use them"
             >
               <RefreshCw className={`w-3 h-3 mr-1.5 ${syncingVapi ? "animate-spin" : ""}`} />
               {syncingVapi ? "Registering…" : "Sync to Vapi"}
