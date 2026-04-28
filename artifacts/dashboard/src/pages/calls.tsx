@@ -275,13 +275,8 @@ function DeleteButton({
   const handleDelete = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem("auth_token");
       const url = endpoint === "calls" ? `/api/calls/${id}` : `/api/call-logs/${id}`;
-      const res = await fetch(url, {
-        method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+      await customFetch(url, { method: "DELETE" });
       toast({ title: "Record removed from history" });
       onDeleted();
     } catch {
@@ -406,14 +401,12 @@ export default function CallsPage() {
   const handleMassDelete = async () => {
     if (selectedIds.size === 0) return;
     setMassDeleting(true);
-    const token = localStorage.getItem("auth_token");
-    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
     const rows = (calls ?? []).filter((c) => selectedIds.has(c.id));
     const results = await Promise.allSettled(
       rows.map((c) => {
-        const numId = parseInt(c.id.replace(/^[cl]-/, ""));
+        const numId = parseInt(c.id.replace(/^[cl]-/, ""), 10);
         const endpoint = c.source === "call_logs" ? "call-logs" : "calls";
-        return fetch(`/api/${endpoint}/${numId}`, { method: "DELETE", headers });
+        return customFetch(`/api/${endpoint}/${numId}`, { method: "DELETE" });
       }),
     );
     const failed = results.filter((r) => r.status === "rejected").length;
