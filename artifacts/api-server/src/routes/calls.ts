@@ -834,18 +834,79 @@ router.post("/calls/:callControlId/conference", authenticate, requireRole("admin
 });
 
 // ── POST /calls/:callControlId/hangup ─────────────────────────────────────────
-// Force-end an in-progress call. Used by supervisors and the softphone.
-// We aggressively clean up local state immediately so the dashboard reflects
-// the hangup within ~1s instead of waiting for Telnyx's webhook to arrive
-// (which sometimes drops on retries / network blips, leaving ghost rows).
+// Force-end an in-progress call. Supports both Vapi calls (callControlId starts
+// with "vapi:") and legacy Telnyx calls. Used by supervisors and the softphone.
 router.post("/calls/:callControlId/hangup", authenticate, requireRole("admin", "supervisor", "agent"), async (req, res): Promise<void> => {
   const { callControlId } = req.params as { callControlId: string };
+
+  // ── Vapi call (callControlId = "vapi:{vapiCallId}") ──────────────────────
+  if (callControlId.startsWith("vapi:")) {
+    const vapiCallId = callControlId.slice(5); // strip "vapi:" prefix
+    const vapiApiKey = process.env.VAPI_API_KEY;
+    if (!vapiApiKey) { res.status(503).json({ error: "VAPI_API_KEY not configured" }); return; }
+
+    // Verify we know about this call (IDOR protection)
+    const [logRow] = await db
+      .select({ id: callLogsTable.id })
+      .from(callLogsTable)
+      .where(eq(callLogsTable.callControlId, vapiCallId))
+      .limit(1);
+    if (!logRow) {
+      // Not in DB yet (call just started) — still attempt hangup via Vapi API
+      // so the call doesn't ring forever. Log it and proceed.
+      logger.warn({ vapiCallId }, "Hangup requested for unknown Vapi call — attempting anyway");
+    }
+
+    // Tell Vapi to end the call. 4xx means already ended → clean up. 5xx → fail.
+    let vapiOk = false;
+    let vapiFatal = false;
+    try {
+      await axios.delete(`https://api.vapi.ai/call/${encodeURIComponent(vapiCallId)}`, {
+        headers: { Authorization: `Bearer ${vapiApiKey}` },
+      });
+      vapiOk = true;
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status && status >= 400 && status < 500) {
+        // Call already ended on Vapi's side — safe to clean up locally.
+        vapiOk = true;
+      } else {
+        vapiFatal = true;
+        logger.warn({ vapiCallId, err: String(err) }, "Vapi hangup failed (5xx/network) — leaving local state intact");
+      }
+    }
+
+    if (vapiFatal) {
+      res.status(502).json({ error: "Vapi hangup failed — call may still be active" });
+      return;
+    }
+
+    // Clean up: mark log row completed + drop from Redis
+    try {
+      await db
+        .update(callLogsTable)
+        .set({ status: "completed" })
+        .where(eq(callLogsTable.callControlId, vapiCallId));
+    } catch (err) { logger.warn({ vapiCallId, err: String(err) }, "Vapi hangup DB cleanup failed"); }
+
+    try { await removeActiveCall(callControlId); } catch { /* non-fatal */ }
+    try { await removeActiveCall(vapiCallId); } catch { /* non-fatal */ }
+
+    try {
+      emitToSupervisors("call:ended", { id: logRow?.id, callControlId, disposition: "manual_drop" });
+      emitToSupervisors("call_update", { callId: logRow?.id, call_id: callControlId, status: "completed", is_terminal: true });
+    } catch { /* non-fatal */ }
+
+    logger.info({ vapiCallId }, "Vapi call hung up via API");
+    res.json({ ok: true });
+    return;
+  }
+
+  // ── Legacy Telnyx call ────────────────────────────────────────────────────
   const apiKey = process.env.TELNYX_API_KEY;
   if (!apiKey) { res.status(503).json({ error: "Telnyx not configured" }); return; }
 
-  // 1. Verify the callControlId matches a known call in our system. Without
-  //    this, an authenticated low-priv account could terminate arbitrary
-  //    Telnyx calls by guessing/replaying call_control_ids (IDOR).
+  // 1. Verify the callControlId matches a known call (IDOR protection).
   const [callRow] = await db
     .select({ id: callsTable.id, status: callsTable.status })
     .from(callsTable)
@@ -857,9 +918,7 @@ router.post("/calls/:callControlId/hangup", authenticate, requireRole("admin", "
     return;
   }
 
-  // 2. Tell Telnyx to hang up. Treat 4xx (call already ended) as success and
-  //    do full cleanup. On 5xx / network errors the call may still be live —
-  //    skip terminal state changes so we don't desync from the provider.
+  // 2. Tell Telnyx to hang up.
   let telnyxOk = false;
   let telnyxFatal = false;
   try {
@@ -872,11 +931,8 @@ router.post("/calls/:callControlId/hangup", authenticate, requireRole("admin", "
   } catch (err: unknown) {
     const status = (err as { response?: { status?: number } })?.response?.status;
     if (status && status >= 400 && status < 500) {
-      // Call doesn't exist on Telnyx anymore (already ended). Safe to clean up.
       telnyxOk = true;
     } else {
-      // 5xx or network failure — provider state is unknown. Don't touch local
-      // state; the periodic webhook / 2-min ringing GC will reconcile.
       telnyxFatal = true;
       logger.warn({ callControlId, err: String(err) }, "Telnyx hangup failed (5xx/network) — leaving local state intact");
     }
@@ -887,11 +943,10 @@ router.post("/calls/:callControlId/hangup", authenticate, requireRole("admin", "
     return;
   }
 
-  // 3. Close the in-memory bridge so getAllActiveBridges() stops returning it.
+  // 3. Close in-memory bridge.
   try { closeBridge(callControlId); } catch { /* not active */ }
 
-  // 4. Mark the call row completed in DB so /supervisor/live-calls drops it
-  //    immediately. We also stamp ended_at so duration columns calculate sanely.
+  // 4. Mark completed in DB.
   try {
     await db
       .update(callsTable)
@@ -901,24 +956,13 @@ router.post("/calls/:callControlId/hangup", authenticate, requireRole("admin", "
     logger.warn({ callControlId, err: String(err) }, "Hangup DB cleanup failed");
   }
 
-  // 5. Drop from Redis active_calls so /dashboard/live-calls stops returning it.
+  // 5. Drop from Redis.
   try { await removeActiveCall(callControlId); } catch { /* non-fatal */ }
 
-  // 6. Notify all dashboards via WebSocket. We emit `call:ended` (which the
-  //    live-monitor uses to prune its local Map) with both the DB id and the
-  //    callControlId. We also emit `call_update` for legacy listeners.
+  // 6. Notify dashboards.
   try {
-    emitToSupervisors("call:ended", {
-      id: callRow?.id,
-      callControlId,
-      disposition: "manual_drop",
-    });
-    emitToSupervisors("call_update", {
-      callId: callRow?.id,
-      call_id: callControlId,
-      status: "completed",
-      is_terminal: true,
-    });
+    emitToSupervisors("call:ended", { id: callRow?.id, callControlId, disposition: "manual_drop" });
+    emitToSupervisors("call_update", { callId: callRow?.id, call_id: callControlId, status: "completed", is_terminal: true });
   } catch { /* non-fatal */ }
 
   res.json({ ok: true });
