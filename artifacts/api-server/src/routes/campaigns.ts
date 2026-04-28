@@ -895,21 +895,14 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
     const callFromNumber = allocation.phoneNumber;
     const vapiPhoneNumberIdForCall = allocation.vapiPhoneNumberId ?? undefined;
 
-    // No synced numbers in the Vapi pool — fail this lead with a clear,
-    // actionable error and stop here (number was never marked busy).
+    // No synced numbers in the Vapi pool — skip this lead and stop here.
+    // Leave status as "pending" so it can be retried once the user registers
+    // their phone numbers with Vapi (Phone Numbers → Sync to Vapi).
     if (useVapiForThisCall && !vapiPhoneNumberIdForCall) {
       logger.warn(
         { leadId: lead.id, campaignId },
         "Vapi campaign has no numbers registered with Vapi — open Phone Numbers and click 'Sync to Vapi'"
       );
-      await db
-        .update(leadsTable)
-        .set({
-          status: "failed",
-          lastError:
-            "No phone numbers in this campaign are registered with Vapi. Go to Phone Numbers → click 'Sync to Vapi'.",
-        })
-        .where(eq(leadsTable.id, lead.id));
       return;
     }
 

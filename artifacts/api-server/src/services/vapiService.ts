@@ -129,6 +129,10 @@ export function buildAssistant(payload: VapiCallPayload) {
       temperature: 0.7,
       maxTokens: 250,
       messages: [{ role: "system", content: systemPrompt }],
+      // transferCall must live inside model.tools for inline assistants.
+      // Placing it at the assistant top-level causes Vapi to reject the
+      // entire call with 400 "assistant.property tools should not exist".
+      ...(tools ? { tools } : {}),
     },
     voice: {
       provider: voiceProvider,
@@ -208,10 +212,6 @@ export function buildAssistant(payload: VapiCallPayload) {
       listenEnabled: true,
       controlEnabled: true,
     },
-    // Only include the tools array when a transfer number is configured.
-    // Spreading undefined is a no-op — keeps the config clean for calls
-    // that don't need a transfer destination.
-    ...(tools ? { tools } : {}),
   };
 }
 
