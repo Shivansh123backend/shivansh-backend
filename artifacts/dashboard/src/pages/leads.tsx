@@ -20,11 +20,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 type LeadList = { id: number; name: string; description: string | null; campaignId: number | null; active: boolean; campaignName: string | null; leadsCount: number };
 
 // ── Single-lead modal ──────────────────────────────────────────────────────────
-function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
+function CreateModal({ onClose, campaigns, lists }: { onClose: () => void; campaigns: { id: number; name: string }[]; lists: LeadList[] }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [campaignId, setCampaignId] = useState("");
+  const [listId, setListId] = useState("__none__");
   const qc = useQueryClient();
   const { toast } = useToast();
 
@@ -38,11 +39,13 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
           phone_number: phone,
           email: email || undefined,
           campaign_id: parseInt(campaignId),
+          list_id: listId === "__none__" ? undefined : parseInt(listId),
         }),
       });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      qc.invalidateQueries({ queryKey: ["/api/lists"] });
       toast({ title: "Lead added successfully" });
       onClose();
     },
@@ -89,6 +92,16 @@ function CreateModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
               </SelectContent>
             </Select>
           </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">List <span className="text-muted-foreground/50 normal-case">(optional)</span></Label>
+            <Select value={listId} onValueChange={setListId}>
+              <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="No list" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— No list —</SelectItem>
+                {lists.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
           <Button type="submit" className="w-full font-mono text-xs uppercase tracking-wider" disabled={addLead.isPending}>
             {addLead.isPending ? "Adding..." : "Add Lead"}
           </Button>
@@ -107,8 +120,9 @@ type UploadResult = {
   dnc_skipped: number;
 };
 
-function UploadModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
+function UploadModal({ onClose, campaigns, lists }: { onClose: () => void; campaigns: { id: number; name: string }[]; lists: LeadList[] }) {
   const [campaignId, setCampaignId] = useState("");
+  const [listId, setListId] = useState("__none__");
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [result, setResult] = useState<UploadResult | null>(null);
@@ -123,6 +137,7 @@ function UploadModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("campaign_id", campaignId);
+      if (listId !== "__none__") fd.append("list_id", listId);
       const res = await fetch("/api/leads/upload", {
         method: "POST",
         headers: {
@@ -138,6 +153,7 @@ function UploadModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
     },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      qc.invalidateQueries({ queryKey: ["/api/lists"] });
       setResult(data);
     },
     onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
@@ -178,6 +194,18 @@ function UploadModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
                 {campaigns.map(c => (
                   <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* List selector */}
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">List <span className="text-muted-foreground/50 normal-case">(optional)</span></Label>
+            <Select value={listId} onValueChange={setListId}>
+              <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="No list" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— No list —</SelectItem>
+                {lists.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -273,8 +301,9 @@ function UploadModal({ onClose, campaigns }: { onClose: () => void; campaigns: {
 }
 
 // ── Paste phone numbers modal ─────────────────────────────────────────────────
-function PasteModal({ onClose, campaigns }: { onClose: () => void; campaigns: { id: number; name: string }[] }) {
+function PasteModal({ onClose, campaigns, lists }: { onClose: () => void; campaigns: { id: number; name: string }[]; lists: LeadList[] }) {
   const [campaignId, setCampaignId] = useState("");
+  const [listId, setListId] = useState("__none__");
   const [text, setText] = useState("");
   const [result, setResult] = useState<UploadResult | null>(null);
   const qc = useQueryClient();
@@ -294,6 +323,7 @@ function PasteModal({ onClose, campaigns }: { onClose: () => void; campaigns: { 
       const fd = new FormData();
       fd.append("file", blob, "leads.csv");
       fd.append("campaign_id", campaignId);
+      if (listId !== "__none__") fd.append("list_id", listId);
       const res = await fetch("/api/leads/upload", {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("auth_token") ?? ""}` },
@@ -307,6 +337,7 @@ function PasteModal({ onClose, campaigns }: { onClose: () => void; campaigns: { 
     },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: getListLeadsQueryKey() });
+      qc.invalidateQueries({ queryKey: ["/api/lists"] });
       setResult(data);
     },
     onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
@@ -329,6 +360,16 @@ function PasteModal({ onClose, campaigns }: { onClose: () => void; campaigns: { 
                 {campaigns.map(c => (
                   <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">List <span className="text-muted-foreground/50 normal-case">(optional)</span></Label>
+            <Select value={listId} onValueChange={setListId}>
+              <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="No list" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— No list —</SelectItem>
+                {lists.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -444,6 +485,7 @@ function AssignListModal({ ids, onClose, lists }: { ids: number[]; onClose: () =
 export default function LeadsPage() {
   const [filterCampaign, setFilterCampaign] = useState("__all__");
   const [filterStatus, setFilterStatus] = useState("__all__");
+  const [filterList, setFilterList] = useState("__all__");
   const { data: leads, isLoading } = useListLeads({
     campaignId: filterCampaign !== "__all__" ? parseInt(filterCampaign) : undefined,
     status: filterStatus !== "__all__" ? filterStatus : undefined,
@@ -464,7 +506,14 @@ export default function LeadsPage() {
 
   const campaignMap = Object.fromEntries((campaigns ?? []).map((c: { id: number; name: string }) => [c.id, c.name]));
   const listMap = Object.fromEntries(lists.map(l => [l.id, l.name]));
-  const visibleLeads = leads ?? [];
+  const allLeads = leads ?? [];
+  const visibleLeads = filterList === "__all__"
+    ? allLeads
+    : allLeads.filter((l: { listId?: number | null; list_id?: number | null }) => {
+        const lid = l.listId ?? l.list_id;
+        if (filterList === "__none__") return lid == null;
+        return lid === parseInt(filterList);
+      });
   const allChecked = visibleLeads.length > 0 && visibleLeads.every((l: { id: number }) => selected.has(l.id));
 
   const toggleAll = () => {
@@ -495,14 +544,14 @@ export default function LeadsPage() {
 
   return (
     <Layout>
-      {showCreate && <CreateModal onClose={() => setShowCreate(false)} campaigns={campaigns ?? []} />}
-      {showUpload && <UploadModal onClose={() => setShowUpload(false)} campaigns={campaigns ?? []} />}
-      {showPaste && <PasteModal onClose={() => setShowPaste(false)} campaigns={campaigns ?? []} />}
+      {showCreate && <CreateModal onClose={() => setShowCreate(false)} campaigns={campaigns ?? []} lists={lists} />}
+      {showUpload && <UploadModal onClose={() => setShowUpload(false)} campaigns={campaigns ?? []} lists={lists} />}
+      {showPaste && <PasteModal onClose={() => setShowPaste(false)} campaigns={campaigns ?? []} lists={lists} />}
       {showAssign && <AssignListModal ids={Array.from(selected)} onClose={() => setShowAssign(false)} lists={lists} />}
 
       <PageHeader
         title="Lead Lists"
-        subtitle={`${(leads ?? []).length} leads total`}
+        subtitle={`${visibleLeads.length}${filterList !== "__all__" ? ` of ${allLeads.length}` : ""} leads`}
         action={
           <div className="flex items-center gap-2">
             <Button
@@ -555,10 +604,10 @@ export default function LeadsPage() {
         </div>
       )}
 
-      <div className="px-6 py-3 border-b border-border flex items-center gap-3">
+      <div className="px-6 py-3 border-b border-border flex items-center gap-3 flex-wrap">
         <Filter className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
         <Select value={filterCampaign} onValueChange={setFilterCampaign}>
-          <SelectTrigger className="font-mono text-xs h-7 w-48">
+          <SelectTrigger className="font-mono text-xs h-7 w-44">
             <SelectValue placeholder="All campaigns" />
           </SelectTrigger>
           <SelectContent>
@@ -568,8 +617,18 @@ export default function LeadsPage() {
             ))}
           </SelectContent>
         </Select>
+        <Select value={filterList} onValueChange={setFilterList}>
+          <SelectTrigger className="font-mono text-xs h-7 w-44">
+            <SelectValue placeholder="All lists" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All lists</SelectItem>
+            <SelectItem value="__none__">No list</SelectItem>
+            {lists.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <Select value={filterStatus} onValueChange={setFilterStatus}>
-          <SelectTrigger className="font-mono text-xs h-7 w-40">
+          <SelectTrigger className="font-mono text-xs h-7 w-36">
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
           <SelectContent>

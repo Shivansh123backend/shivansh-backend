@@ -41,7 +41,7 @@ async function fetchDncSet(): Promise<Set<string>> {
 
 /** Insert rows in batches of BATCH_SIZE with BATCH_DELAY_MS between each batch. */
 async function batchInsert(
-  rows: Array<{ name: string; phone: string; email: string | null; campaignId: number; source: "manual" | "csv" | "sheet" }>,
+  rows: Array<{ name: string; phone: string; email: string | null; campaignId: number; listId?: number | null; source: "manual" | "csv" | "sheet" }>,
 ): Promise<number> {
   let inserted = 0;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
@@ -150,11 +150,14 @@ const addLeadSchema = z.object({
   email: z.string().email().optional().nullable(),
   campaign_id: z.coerce.number().int().positive().optional(),
   campaignId: z.coerce.number().int().positive().optional(),
+  list_id: z.coerce.number().int().positive().optional().nullable(),
+  listId: z.coerce.number().int().positive().optional().nullable(),
 }).transform((d) => ({
   name: d.name,
   phone_number: d.phone_number ?? d.phone ?? d.phoneNumber ?? "",
   email: d.email,
   campaign_id: d.campaign_id ?? d.campaignId ?? 0,
+  list_id: d.list_id ?? d.listId ?? null,
 }));
 
 async function handleAddLead(
@@ -167,7 +170,7 @@ async function handleAddLead(
     return;
   }
 
-  const { name, phone_number, email, campaign_id } = parsed.data;
+  const { name, phone_number, email, campaign_id, list_id } = parsed.data;
 
   if (!campaign_id) {
     res.status(400).json({ error: "campaign_id is required" });
@@ -186,6 +189,11 @@ async function handleAddLead(
     return;
   }
 
+  if (list_id) {
+    const [list] = await db.select({ id: leadListsTable.id }).from(leadListsTable).where(eq(leadListsTable.id, list_id)).limit(1);
+    if (!list) { res.status(404).json({ error: "List not found" }); return; }
+  }
+
   const [dup] = await db
     .select({ id: leadsTable.id })
     .from(leadsTable)
@@ -198,7 +206,7 @@ async function handleAddLead(
 
   const [lead] = await db
     .insert(leadsTable)
-    .values({ name, phone, email: email ?? null, campaignId: campaign_id, source: "manual" })
+    .values({ name, phone, email: email ?? null, campaignId: campaign_id, listId: list_id ?? null, source: "manual" })
     .returning();
 
   res.status(201).json({
@@ -235,6 +243,8 @@ router.post(
       res.status(400).json({ error: "campaign_id is required" });
       return;
     }
+    const listIdRaw = req.body.list_id ?? req.body.listId;
+    const listId: number | null = listIdRaw ? parseInt(listIdRaw, 10) : null;
 
     if (!req.file) {
       // No file — if the body has JSON lead fields, handle as a single lead add
@@ -251,6 +261,11 @@ router.post(
     if (!campaign) {
       res.status(404).json({ error: "Campaign not found" });
       return;
+    }
+
+    if (listId) {
+      const [list] = await db.select({ id: leadListsTable.id }).from(leadListsTable).where(eq(leadListsTable.id, listId)).limit(1);
+      if (!list) { res.status(404).json({ error: "List not found" }); return; }
     }
 
     // Detect format by MIME type or original name
@@ -312,7 +327,7 @@ router.post(
 
     // Batch insert — 50 rows per batch, 500 ms between batches
     const totalInserted = await batchInsert(
-      valid.map(r => ({ name: r.name, phone: r.phone, email: r.email, campaignId, source: "csv" as const }))
+      valid.map(r => ({ name: r.name, phone: r.phone, email: r.email, campaignId, listId: listId ?? null, source: "csv" as const }))
     );
 
     logger.info(
