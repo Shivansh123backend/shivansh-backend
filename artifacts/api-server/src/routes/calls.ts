@@ -614,10 +614,28 @@ router.patch("/calls/:id", authenticate, async (req, res): Promise<void> => {
 });
 
 // ── DELETE /calls/:id — remove a CDR entry from history ──────────────────────
+// Accepts plain numeric IDs (123), calls-table prefixed (c-123), or
+// call_logs-table prefixed (l-123) so any frontend variant works.
 router.delete("/calls/:id", authenticate, async (req, res): Promise<void> => {
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const id = parseInt(rawId, 10);
+
+  let useCallLogs = false;
+  let numericStr = rawId;
+  if (rawId.startsWith("l-")) { useCallLogs = true; numericStr = rawId.slice(2); }
+  else if (rawId.startsWith("c-")) { numericStr = rawId.slice(2); }
+
+  const id = parseInt(numericStr, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid call ID" }); return; }
+
+  if (useCallLogs) {
+    const [deleted] = await db
+      .delete(callLogsTable)
+      .where(eq(callLogsTable.id, id))
+      .returning({ id: callLogsTable.id });
+    if (!deleted) { res.status(404).json({ error: "Call not found" }); return; }
+    res.json({ ok: true, id: `l-${deleted.id}` });
+    return;
+  }
 
   const [deleted] = await db
     .delete(callsTable)
@@ -626,7 +644,7 @@ router.delete("/calls/:id", authenticate, async (req, res): Promise<void> => {
 
   if (!deleted) { res.status(404).json({ error: "Call not found" }); return; }
 
-  res.json({ ok: true, id: deleted.id });
+  res.json({ ok: true, id: `c-${deleted.id}` });
 });
 
 // Transfer to human agent
