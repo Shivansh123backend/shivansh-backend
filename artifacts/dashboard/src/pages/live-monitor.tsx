@@ -172,7 +172,7 @@ interface CallAudioPlayer {
 
 const _callPlayers = new Map<string, CallAudioPlayer>();
 
-/** G.711 µ-law → normalised float32 samples (8 kHz mono) */
+/** G.711 µ-law → normalised float32 samples */
 function decodeMulaw(b64: string): Float32Array {
   const raw = atob(b64);
   const samples = new Float32Array(raw.length);
@@ -188,10 +188,26 @@ function decodeMulaw(b64: string): Float32Array {
   return samples;
 }
 
-function getOrCreatePlayer(callControlId: string): CallAudioPlayer | null {
+/** Signed 16-bit PCM little-endian → normalised float32 samples */
+function decodePcm16le(b64: string): Float32Array {
+  const raw = atob(b64);
+  const byteLen = raw.length;
+  const sampleCount = Math.floor(byteLen / 2);
+  const samples = new Float32Array(sampleCount);
+  for (let i = 0; i < sampleCount; i++) {
+    const lo = raw.charCodeAt(i * 2);
+    const hi = raw.charCodeAt(i * 2 + 1);
+    let v = (hi << 8) | lo;
+    if (v >= 0x8000) v -= 0x10000; // sign-extend to signed int16
+    samples[i] = v / 32768;
+  }
+  return samples;
+}
+
+function getOrCreatePlayer(callControlId: string, sampleRate = 8000): CallAudioPlayer | null {
   if (_callPlayers.has(callControlId)) return _callPlayers.get(callControlId)!;
   try {
-    const ctx = new AudioContext({ sampleRate: 8000 });
+    const ctx = new AudioContext({ sampleRate });
     const gainCaller = ctx.createGain(); gainCaller.gain.value = 1.0;
     const gainAgent  = ctx.createGain(); gainAgent.gain.value  = 0.9;
     gainCaller.connect(ctx.destination);
@@ -209,16 +225,24 @@ function destroyPlayer(callControlId: string): void {
   _callPlayers.delete(callControlId);
 }
 
-function enqueueAudioChunk(callControlId: string, b64: string, side: "caller" | "agent"): void {
-  const player = getOrCreatePlayer(callControlId);
+function enqueueAudioChunk(
+  callControlId: string,
+  b64: string,
+  side: "caller" | "agent",
+  format: "mulaw" | "pcm16le" = "mulaw",
+  sampleRate = 8000,
+): void {
+  const player = getOrCreatePlayer(callControlId, sampleRate);
   if (!player) return;
   const { ctx } = player;
   if (ctx.state === "suspended") ctx.resume().catch(() => {});
 
-  const samples = decodeMulaw(b64);
+  const samples = format === "pcm16le" ? decodePcm16le(b64) : decodeMulaw(b64);
   if (samples.length === 0) return;
 
-  const buf = ctx.createBuffer(1, samples.length, 8000);
+  // createBuffer with the source's actual sampleRate; the AudioContext will
+  // resample if its own rate differs (handles any browser-imposed minimum).
+  const buf = ctx.createBuffer(1, samples.length, sampleRate);
   buf.copyToChannel(samples, 0);
 
   const src = ctx.createBufferSource();
@@ -708,9 +732,9 @@ export default function LiveMonitorPage() {
     });
 
     // ── Live audio streaming ──────────────────────────────────────────────
-    socket.on("call:audio", (data: { callControlId: string; payload: string; side: "caller" | "agent" }) => {
+    socket.on("call:audio", (data: { callControlId: string; payload: string; side: "caller" | "agent"; format?: "mulaw" | "pcm16le"; sampleRate?: number }) => {
       if (listeningRef.current !== data.callControlId) return; // not listening to this call
-      enqueueAudioChunk(data.callControlId, data.payload, data.side);
+      enqueueAudioChunk(data.callControlId, data.payload, data.side, data.format ?? "mulaw", data.sampleRate ?? 8000);
     });
 
     socket.on("call:transcription", (data: { callId?: number; callControlId?: string; speaker?: "caller" | "agent"; text?: string; ts?: number }) => {

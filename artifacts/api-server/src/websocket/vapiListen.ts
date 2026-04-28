@@ -1,22 +1,22 @@
 /**
  * Vapi live-listen bridge.
  *
- * Vapi exposes a per-call `monitor.listenUrl` (wss://) that streams the live
- * conversation audio as raw PCM 16-bit, 8 kHz, mono (telephone quality).
- * Our supervisor UI speaks the same format: µ-law 8 kHz frames delivered as
- * `call:audio` Socket.IO events to the room `listen:<callId>`.
+ * Vapi exposes a per-call `monitor.listenUrl` (wss://) that streams the
+ * live conversation audio as signed 16-bit little-endian PCM (Linear16).
  *
- * This module bridges the two: when a supervisor asks to listen on a Vapi
- * call (callControlId starts with `vapi:`), we open the listenUrl WebSocket,
- * convert each incoming PCM16/8k buffer to µ-law/8k, base64-encode, and
- * emit it to the same room — so the existing dashboard player works without
- * any frontend change.
+ * The exact sample rate Vapi uses depends on its internal audio pipeline
+ * (typically 8 kHz for PSTN/SIP phone calls). Rather than converting to
+ * µ-law on the backend (which requires knowing the sample rate upfront and
+ * introduces a lossy re-encoding step), we pass the raw PCM16 bytes through
+ * as base64 and attach `format: "pcm16le"` + `sampleRate` metadata on the
+ * socket event. The dashboard player decodes Int16 → Float32 directly and
+ * creates the AudioBuffer at the declared sample rate.
+ *
+ * Vapi chunk size is logged on the first frame so the actual sample rate
+ * can be inferred: 160 bytes = 10 ms at 8 kHz; 320 bytes = 10 ms at 16 kHz.
  *
  * One bridge per call. Reference-counted by the supervisor count in the room
  * (managed in websocket/index.ts).
- *
- * NOTE: Vapi streams at 8 kHz — do NOT decimate. Earlier code decimated by 2×
- * assuming 16 kHz input, which produced half-speed ("slow motion") audio.
  */
 
 import WebSocket from "ws";
@@ -24,42 +24,14 @@ import { logger } from "../lib/logger.js";
 import { getIO } from "./index.js";
 import { getVapiMonitorUrls } from "../services/vapiMonitor.js";
 
+// Phone-call PSTN audio: 8 kHz (ITU-T G.711 standard). Change to 16000 if
+// Vapi is confirmed to send wideband audio on this call path.
+const VAPI_SAMPLE_RATE = 8000;
+
 const activeBridges = new Map<string, WebSocket>(); // callControlId → ws to Vapi
 
 function listenRoom(callControlId: string): string {
   return `listen:${callControlId}`;
-}
-
-// ── PCM16 → µ-law conversion ──────────────────────────────────────────────────
-// Standard ITU-T G.711 µ-law encoder. Input is signed 16-bit PCM samples;
-// output is one µ-law byte per sample.
-const MU_LAW_BIAS = 0x84;
-const MU_LAW_CLIP = 32635;
-
-function pcm16ToMulawByte(sample: number): number {
-  let s = sample;
-  const sign = (s >> 8) & 0x80;
-  if (sign) s = -s;
-  if (s > MU_LAW_CLIP) s = MU_LAW_CLIP;
-  s += MU_LAW_BIAS;
-
-  let exponent = 7;
-  for (let mask = 0x4000; (s & mask) === 0 && exponent > 0; mask >>= 1) exponent--;
-  const mantissa = (s >> (exponent + 3)) & 0x0f;
-  return ~(sign | (exponent << 4) | mantissa) & 0xff;
-}
-
-/**
- * Convert PCM16 LE 8 kHz → µ-law 8 kHz (one byte per sample, no decimation).
- * Vapi's listenUrl streams at 8 kHz — we only need to re-encode, not resample.
- */
-function pcm16_8kToMulaw8k(buf: Buffer): Buffer {
-  const inSamples = Math.floor(buf.length / 2);
-  const out = Buffer.allocUnsafe(inSamples);
-  for (let i = 0; i < inSamples; i++) {
-    out[i] = pcm16ToMulawByte(buf.readInt16LE(i * 2));
-  }
-  return out;
 }
 
 /**
@@ -91,23 +63,44 @@ export async function startVapiListen(callControlId: string): Promise<void> {
   activeBridges.set(callControlId, ws);
   const room = listenRoom(callControlId);
 
+  let firstFrame = true;
+
   ws.on("open", () => {
     logger.info({ callControlId }, "Vapi listen bridge opened");
   });
 
   ws.on("message", (raw: WebSocket.RawData, isBinary: boolean) => {
-    if (!isBinary) return; // ignore JSON control frames
+    // Vapi may send a text JSON frame first (e.g. {"type":"start","encoding":"linear16",...})
+    // before binary PCM data. Log it and skip.
+    if (!isBinary) {
+      const text = raw.toString();
+      logger.info({ callControlId, frame: text.slice(0, 200) }, "Vapi listen bridge: text frame (control)");
+      return;
+    }
     try {
       const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
-      const mulaw = pcm16_8kToMulaw8k(buf);
-      const payload = mulaw.toString("base64");
+      // Log the first frame's byte length so we can infer the sample rate:
+      //   160 bytes = 10 ms @ 8 kHz  |  320 bytes = 10 ms @ 16 kHz
+      if (firstFrame) {
+        logger.info({ callControlId, bytes: buf.length, sampleRate: VAPI_SAMPLE_RATE }, "Vapi listen bridge: first audio frame");
+        firstFrame = false;
+      }
+      // Pass raw PCM16 LE bytes through — no lossy re-encoding.
+      // The frontend decodes Int16 → Float32 and creates the AudioBuffer at VAPI_SAMPLE_RATE.
+      const payload = buf.toString("base64");
       try {
-        getIO().to(room).emit("call:audio", { callControlId, payload, side: "caller" as const });
+        getIO().to(room).emit("call:audio", {
+          callControlId,
+          payload,
+          side: "caller" as const,
+          format: "pcm16le",
+          sampleRate: VAPI_SAMPLE_RATE,
+        });
       } catch {
         /* IO not initialised — ignore */
       }
     } catch (err) {
-      logger.warn({ err: String(err), callControlId }, "Vapi listen bridge: frame conversion failed");
+      logger.warn({ err: String(err), callControlId }, "Vapi listen bridge: frame relay failed");
     }
   });
 
