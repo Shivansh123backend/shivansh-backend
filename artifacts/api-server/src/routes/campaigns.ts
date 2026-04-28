@@ -995,7 +995,12 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       campaign_name: campaign.name,
       background_sound: backgroundSound !== "none" ? backgroundSound : undefined,
       hold_music_url: holdMusicUrl ?? undefined,
-      amd_enabled: campaign.amdEnabled ? "true" : undefined,
+      // Vapi-side answering-machine detection. Defaults ON so the agent never
+      // pitches a voicemail box. Explicit `false` on the campaign opts out.
+      amd_enabled: campaign.amdEnabled !== false,
+      // VM message Vapi will leave when the answering machine is detected.
+      // Falls back to silent hang-up when the campaign hasn't configured one.
+      vm_drop_message: liveCampaign?.vmDropMessage ?? campaign.vmDropMessage ?? undefined,
       use_vapi: liveCampaign?.useVapi ?? false,
       vapi_phone_number_id: vapiPhoneNumberIdForCall,
       knowledge_base: liveCampaign?.knowledgeBase ?? undefined,
@@ -1515,11 +1520,23 @@ router.post("/campaigns/:id/reset-leads", authenticate, requireRole("admin"), as
     return;
   }
 
+  // Include leads from any list assigned to this campaign so the user's
+  // single click resets every dialable lead, not just direct uploads.
+  const assignedLists = await db
+    .select({ id: leadListsTable.id })
+    .from(leadListsTable)
+    .where(eq(leadListsTable.campaignId, id));
+  const assignedListIds = assignedLists.map(r => r.id);
+
+  const sourceFilter = assignedListIds.length > 0
+    ? or(eq(leadsTable.campaignId, id), inArray(leadsTable.listId, assignedListIds))
+    : eq(leadsTable.campaignId, id);
+
   const result = await db
     .update(leadsTable)
-    .set({ status: "pending" })
+    .set({ status: "pending", retryCount: 0 })
     .where(and(
-      eq(leadsTable.campaignId, id),
+      sourceFilter,
       inArray(leadsTable.status, ["called", "callback", "completed"]),
     ))
     .returning({ id: leadsTable.id });
@@ -1623,27 +1640,38 @@ async function getCampaignOrFail(id: number, res: import("express").Response): P
   return campaign;
 }
 
-/** Ensures there are pending leads to dial. Auto-resets called/completed leads if none are pending. */
+/** Ensures there are pending leads to dial. Auto-resets called/completed leads if none are pending.
+ *  Counts leads from the campaign directly AND from any list assigned to it. */
 async function guardPendingLeads(id: number, campaign: typeof campaignsTable.$inferSelect, res: import("express").Response): Promise<boolean> {
   if (campaign.type === "inbound") return true;
 
+  const assignedLists = await db
+    .select({ id: leadListsTable.id })
+    .from(leadListsTable)
+    .where(eq(leadListsTable.campaignId, id));
+  const assignedListIds = assignedLists.map(r => r.id);
+
+  const sourceFilter = assignedListIds.length > 0
+    ? or(eq(leadsTable.campaignId, id), inArray(leadsTable.listId, assignedListIds))
+    : eq(leadsTable.campaignId, id);
+
   const [pendingRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable)
-    .where(and(eq(leadsTable.campaignId, id), eq(leadsTable.status, "pending")));
+    .where(and(sourceFilter, eq(leadsTable.status, "pending")));
   if (Number(pendingRow?.count ?? 0) > 0) return true;
 
   const [totalRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable)
-    .where(eq(leadsTable.campaignId, id));
+    .where(sourceFilter);
   if (Number(totalRow?.count ?? 0) === 0) {
     res.status(400).json({ error: "No leads added yet. Add leads before launching.", code: "no_leads" });
     return false;
   }
 
-  // Auto-reset previously called leads so they can be dialled again
+  // Auto-reset previously called leads (across direct + list-assigned)
   await db
     .update(leadsTable)
     .set({ status: "pending", retryCount: 0 })
     .where(and(
-      eq(leadsTable.campaignId, id),
+      sourceFilter,
       inArray(leadsTable.status, ["called", "completed"]),
     ));
   return true;

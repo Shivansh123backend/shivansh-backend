@@ -40,6 +40,14 @@ export interface VapiCallPayload {
   // number pool, not a single global number.
   vapi_phone_number_id?: string;
   background_sound?: string;
+  // Voicemail handling: when Vapi detects an answering machine, it plays this
+  // message and ends the call. When undefined/empty, Vapi just hangs up on VM.
+  vm_drop_message?: string;
+  // Enable Vapi's built-in answering-machine detection. When true, Vapi runs
+  // its own AMD; when false, the assistant just talks to whoever (or whatever)
+  // picks up. Default: true — VM detection is the safer behaviour for
+  // outbound campaigns.
+  amd_enabled?: boolean;
 }
 
 export interface VapiCallResult {
@@ -214,6 +222,27 @@ export function buildAssistant(payload: VapiCallPayload) {
       listenEnabled: true,
       controlEnabled: true,
     },
+    // ── Voicemail / answering-machine handling ─────────────────────────────
+    // Vapi's built-in detection. When it concludes the line is a machine,
+    // it skips the conversational assistant and either plays
+    // `voicemailMessage` (when set) and hangs up, or just hangs up.
+    // Default: ON. Disable per-campaign by setting amdEnabled = false.
+    ...(payload.amd_enabled !== false ? {
+      voicemailDetection: {
+        provider: "vapi",
+        backoffPlan: { startAtSeconds: 5, frequencySeconds: 5, maxRetries: 6 },
+        beepMaxAwaitSeconds: 10,
+      },
+      // Message Vapi will speak after the beep, then hang up. When the
+      // campaign hasn't configured one we leave it undefined so Vapi just
+      // hangs up silently (better than playing nothing weird).
+      ...(payload.vm_drop_message?.trim()
+        ? { voicemailMessage: payload.vm_drop_message.trim() }
+        : {}),
+      // Let the model issue an end-call tool when the conversation finishes
+      // naturally — required for the post-VM hang-up to take effect.
+      endCallFunctionEnabled: true,
+    } : {}),
   };
 }
 
