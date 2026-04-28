@@ -565,13 +565,27 @@ router.delete("/leads", authenticate, requireRole("admin"), async (req, res): Pr
 });
 
 // ── GET /leads/:campaign_id ─────────────────────────────────────────────────
-// List leads for a campaign. Optional ?source=manual|csv|sheet filter.
+// List leads for a campaign. Includes leads directly on the campaign AND leads
+// belonging to any list that is assigned to this campaign.
+// Optional ?source=manual|csv|sheet filter.
 router.get("/leads/:campaign_id", authenticate, async (req, res): Promise<void> => {
   const campaignId = parseInt(req.params.campaign_id, 10);
   if (isNaN(campaignId)) {
     res.status(400).json({ error: "Invalid campaign_id" });
     return;
   }
+
+  // Collect IDs of lists assigned to this campaign
+  const assignedLists = await db
+    .select({ id: leadListsTable.id })
+    .from(leadListsTable)
+    .where(eq(leadListsTable.campaignId, campaignId));
+  const assignedListIds = assignedLists.map(r => r.id);
+
+  // Build the WHERE clause: direct campaign leads OR leads from assigned lists
+  const campaignFilter = assignedListIds.length > 0
+    ? or(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.listId, assignedListIds))
+    : eq(leadsTable.campaignId, campaignId);
 
   const sourceFilter = req.query.source as string | undefined;
   const allowedSources = ["manual", "csv", "sheet"] as const;
@@ -581,16 +595,13 @@ router.get("/leads/:campaign_id", authenticate, async (req, res): Promise<void> 
     leads = await db
       .select()
       .from(leadsTable)
-      .where(and(
-        eq(leadsTable.campaignId, campaignId),
-        eq(leadsTable.source, sourceFilter as typeof allowedSources[number])
-      ))
+      .where(and(campaignFilter, eq(leadsTable.source, sourceFilter as typeof allowedSources[number])))
       .orderBy(leadsTable.createdAt);
   } else {
     leads = await db
       .select()
       .from(leadsTable)
-      .where(eq(leadsTable.campaignId, campaignId))
+      .where(campaignFilter)
       .orderBy(leadsTable.createdAt);
   }
 
@@ -599,11 +610,20 @@ router.get("/leads/:campaign_id", authenticate, async (req, res): Promise<void> 
       id: l.id,
       name: l.name,
       phone_number: l.phone,
+      phone: l.phone,
       email: l.email,
       campaign_id: l.campaignId,
+      campaignId: l.campaignId,
+      listId: l.listId,
+      list_id: l.listId,
       source: l.source,
       status: l.status,
+      spamScore: l.rankScore,
+      spam_score: l.rankScore,
+      callbackAt: l.callbackAt,
+      callback_at: l.callbackAt,
       created_at: l.createdAt,
+      createdAt: l.createdAt,
     }))
   );
 });
@@ -614,10 +634,24 @@ router.get("/leads", authenticate, async (req, res): Promise<void> => {
   const statusRaw = req.query.status ? String(req.query.status) : undefined;
 
   const conditions = [];
+
   if (campaignIdRaw) {
     const campaignId = parseInt(String(campaignIdRaw), 10);
-    if (!isNaN(campaignId)) conditions.push(eq(leadsTable.campaignId, campaignId));
+    if (!isNaN(campaignId)) {
+      // Include leads directly on campaign AND leads from lists assigned to it
+      const assignedLists = await db
+        .select({ id: leadListsTable.id })
+        .from(leadListsTable)
+        .where(eq(leadListsTable.campaignId, campaignId));
+      const assignedListIds = assignedLists.map(r => r.id);
+      if (assignedListIds.length > 0) {
+        conditions.push(or(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.listId, assignedListIds)));
+      } else {
+        conditions.push(eq(leadsTable.campaignId, campaignId));
+      }
+    }
   }
+
   if (statusRaw) {
     conditions.push(eq(leadsTable.status, statusRaw as "pending" | "called" | "callback" | "do_not_call" | "completed"));
   }
