@@ -960,6 +960,8 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
         voiceProvider: campaignsTable.voiceProvider,
         useVapi: campaignsTable.useVapi,
         knowledgeBase: campaignsTable.knowledgeBase,
+        vmDropMessage: campaignsTable.vmDropMessage,
+        amdEnabled: campaignsTable.amdEnabled,
       })
       .from(campaignsTable)
       .where(eq(campaignsTable.id, campaignId))

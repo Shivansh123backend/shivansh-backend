@@ -27,7 +27,10 @@ export interface EnqueueCallPayload {
   campaign_name?: string;
   background_sound?: string;
   hold_music_url?: string;
-  amd_enabled?: string;
+  amd_enabled?: boolean;
+  // Voicemail drop message: when Vapi detects an answering machine, it speaks
+  // this message and ends the call. Empty/undefined ⇒ silent hang-up on VM.
+  vm_drop_message?: string;
   // When true, route this call through Vapi instead of Telnyx+custom pipeline
   use_vapi?: boolean;
   // Vapi phone-number ID to originate from (resolved from the allocated
@@ -93,6 +96,8 @@ async function vapiCallFallback(payload: EnqueueCallPayload): Promise<TriggerCal
     first_message: payload.first_message,
     vapi_phone_number_id: vapiPhoneNumberId ?? undefined,
     background_sound: payload.background_sound,
+    amd_enabled: payload.amd_enabled,
+    vm_drop_message: payload.vm_drop_message,
   });
 }
 

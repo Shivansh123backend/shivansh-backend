@@ -279,7 +279,8 @@ export async function startCallbackScheduler(): Promise<void> {
             transfer_number: campaign.transferNumber ?? undefined,
             campaign_id:     String(lead.campaignId),
             campaign_name:   campaign.name,
-            amd_enabled:     campaign.amdEnabled ? "true" : undefined,
+            amd_enabled:     campaign.amdEnabled !== false,
+            vm_drop_message: campaign.vmDropMessage ?? undefined,
           });
           dialOk = result?.success === true;
           if (!dialOk) dialErr = result?.error ?? "enqueueCall returned success=false";
