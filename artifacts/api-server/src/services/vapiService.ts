@@ -85,11 +85,40 @@ export function buildAssistant(payload: VapiCallPayload) {
   const baseScript = payload.knowledge_base
     ? `${payload.agent_prompt}\n\n--- KNOWLEDGE BASE (use this as your source of truth) ---\n${payload.knowledge_base}`
     : payload.agent_prompt;
-  const systemPrompt = `${NATURAL_CONVERSATION_PREAMBLE}${baseScript}`;
+
+  // Append transfer instructions to the prompt when a transfer number is
+  // configured so the AI knows exactly when and how to hand off the call.
+  const transferInstructions = payload.transfer_number
+    ? `\n\n--- TRANSFER INSTRUCTIONS ---\nIf the caller expresses clear interest, agrees to proceed, requests to speak with a human, or asks any question you cannot answer, immediately transfer the call by using the transferCall tool. Say "Let me connect you with our team now" and use the transfer tool right away — do not ask for confirmation.`
+    : "";
+
+  const systemPrompt = `${NATURAL_CONVERSATION_PREAMBLE}${baseScript}${transferInstructions}`;
 
   const firstMessage =
     payload.first_message ??
     `Hi${payload.lead_name ? `, am I speaking with ${payload.lead_name}` : " there"}?`;
+
+  // ── Vapi transferCall tool ─────────────────────────────────────────────────
+  // When a transfer_number is configured this tool is added to the assistant.
+  // Vapi's AI will call it autonomously when the conversation warrants a
+  // hand-off. Without this tool entry the AI has no action to execute even if
+  // it says "I'll transfer you now" — the call simply stays connected.
+  const tools = payload.transfer_number
+    ? [
+        {
+          type: "transferCall",
+          destinations: [
+            {
+              type: "number",
+              number: payload.transfer_number,
+              message: "Please hold for just a moment while I connect you now.",
+              description:
+                "Transfer the caller to a live human agent. Use this when the caller is interested, agrees to move forward, asks to speak with a person, or has a question you cannot answer.",
+            },
+          ],
+        },
+      ]
+    : undefined;
 
   return {
     model: {
@@ -179,6 +208,10 @@ export function buildAssistant(payload: VapiCallPayload) {
       listenEnabled: true,
       controlEnabled: true,
     },
+    // Only include the tools array when a transfer number is configured.
+    // Spreading undefined is a no-op — keeps the config clean for calls
+    // that don't need a transfer destination.
+    ...(tools ? { tools } : {}),
   };
 }
 
