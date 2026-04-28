@@ -636,7 +636,8 @@ export default function LiveMonitorPage() {
     const token = localStorage.getItem("auth_token");
     if (!token) return;
 
-    const socket = io(window.location.origin, {
+    const apiOrigin = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") || window.location.origin;
+    const socket = io(apiOrigin, {
       path: "/api/ws",
       auth: { token },
       transports: ["websocket", "polling"],

@@ -159,6 +159,25 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
 
     if (type === "status-update") {
       const status: string = envelope.status ?? call.status ?? "";
+      if ((status === "in-progress" || status === "in_progress") && callId) {
+        // Emit call:started so live monitor picks up calls that started before
+        // the supervisor opened the page (complements the /calls/live poll)
+        const customerNumber: string = call.customer?.number ?? "";
+        const calledNumber: string = call?.phoneNumber?.number ?? "";
+        const existing = await db
+          .select({ id: callLogsTable.id })
+          .from(callLogsTable)
+          .where(eq(callLogsTable.callControlId, callId))
+          .limit(1);
+        emitToSupervisors("call:started", {
+          id: existing[0]?.id,
+          callControlId: `vapi:${callId}`,
+          phoneNumber: customerNumber,
+          selectedNumber: calledNumber,
+          campaignId,
+          providerUsed: "vapi",
+        });
+      }
       if (status === "ended" && callId) {
         await removeActiveCall(`vapi:${callId}`).catch(() => {});
       }

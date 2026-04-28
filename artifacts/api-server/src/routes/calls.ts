@@ -369,6 +369,7 @@ router.get("/calls/cdr", authenticate, async (req, res): Promise<void> => {
 
 // ── GET /calls/live — active calls snapshot ───────────────────────────────────
 // Combines bridge-based in-progress calls (real-time) with queued calls from DB
+// and active Vapi calls from call_logs
 router.get("/calls/live", authenticate, async (req, res): Promise<void> => {
   // Bridge-based calls: actively connected via ElevenLabs ConvAI
   const bridgeCalls = getAllActiveBridges().map(b => {
@@ -384,7 +385,7 @@ router.get("/calls/live", authenticate, async (req, res): Promise<void> => {
       agentName: b.agentName ?? null,
       leadId: b.leadId,
       phoneNumber: b.callerNumber,
-      direction: b.direction ?? "outbound",       // ← added so the softphone can badge inbound vs outbound
+      direction: b.direction ?? "outbound",
       providerUsed: "telnyx",
       status: "in_progress",
       startedAt: b.startedAt.toISOString(),
@@ -392,9 +393,6 @@ router.get("/calls/live", authenticate, async (req, res): Promise<void> => {
   });
 
   // DB-queued calls not yet answered (ringing / queued).
-  // Tight 90 s window — staleCallSweeper actively flips anything older to
-  // 'failed' every 30 s, so this acts as belt-and-suspenders for the gap
-  // between sweeps. Anything older than 90 s is presumed dead.
   const queuedCalls = await db
     .select()
     .from(callsTable)
@@ -402,11 +400,34 @@ router.get("/calls/live", authenticate, async (req, res): Promise<void> => {
     .orderBy(desc(callsTable.createdAt))
     .limit(50);
 
-  // Deduplicate: if DB has an in-progress call for same phone+campaign, bridge version wins
-  const bridgePhones = new Set(bridgeCalls.map(b => b.phoneNumber));
-  const filtered = queuedCalls.filter(c => !bridgePhones.has(c.selectedNumber ?? ""));
+  // Vapi in-progress calls: call_logs rows with 'initiated' status from last 10 min
+  // (Vapi calls are never updated to in_progress — they go initiated → completed/failed)
+  const vapiCalls = await db
+    .select()
+    .from(callLogsTable)
+    .where(sql`status = 'initiated' AND timestamp > NOW() - INTERVAL '10 minutes'`)
+    .orderBy(desc(callLogsTable.timestamp))
+    .limit(50);
 
-  res.json([...bridgeCalls, ...filtered]);
+  const vapiLiveCalls = vapiCalls.map(row => ({
+    id: row.id,
+    callControlId: row.callControlId ? `vapi:${row.callControlId}` : undefined,
+    campaignId: row.campaignId,
+    phoneNumber: row.phoneNumber,
+    direction: row.direction,
+    providerUsed: "vapi",
+    status: "initiated",
+    startedAt: row.timestamp.toISOString(),
+  }));
+
+  // Deduplicate: bridge version wins over DB rows for same phone
+  const bridgePhones = new Set(bridgeCalls.map(b => b.phoneNumber));
+  const vapiPhones = new Set(vapiLiveCalls.map(v => v.phoneNumber));
+  const filtered = queuedCalls.filter(c =>
+    !bridgePhones.has(c.selectedNumber ?? "") && !vapiPhones.has(c.selectedNumber ?? ""),
+  );
+
+  res.json([...bridgeCalls, ...vapiLiveCalls, ...filtered]);
 });
 
 // ── GET /calls/stats/today — today's call stats ───────────────────────────────
