@@ -8,18 +8,16 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
   Phone, PhoneOff, Mic, MicOff, Delete, Loader2,
-  Radio, AlertCircle, PhoneIncoming, PhoneCall,
-  Pause, Play, UserPlus, ArrowRightLeft, Clock,
-  Sparkles, PhoneForwarded,
+  PhoneIncoming, PhoneCall, Pause, Play, UserPlus,
+  ArrowRightLeft, Clock, Sparkles, Radio, Volume2, VolumeX,
 } from "lucide-react";
-// @ts-expect-error — Telnyx SDK types bundled internally
-import { TelnyxRTC } from "@telnyx/webrtc";
+import Vapi from "@vapi-ai/web";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type SipState = "disconnected" | "connecting" | "connected" | "error";
-type CallState = "idle" | "calling" | "ringing" | "active" | "held";
+type BrowserCallState = "idle" | "connecting" | "active" | "error";
 
 type PhoneNumber = { id: number; number: string; friendlyName?: string | null };
+type Campaign    = { id: number; name: string };
 
 type LiveCall = {
   id: number | string;
@@ -31,6 +29,16 @@ type LiveCall = {
   campaignName?: string | null;
   agentName?: string | null;
   direction?: "inbound" | "outbound";
+  providerUsed?: string;
+};
+
+type CdrCall = {
+  id: number | string;
+  phoneNumber?: string | null;
+  direction?: string;
+  status?: string;
+  duration?: number | null;
+  timestamp?: string | null;
 };
 
 function elapsedSince(iso?: string): string {
@@ -42,15 +50,6 @@ function elapsedSince(iso?: string): string {
   const s = total % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
-
-type CdrCall = {
-  id: number | string;
-  phoneNumber?: string | null;
-  direction?: string;
-  status?: string;
-  duration?: number | null;
-  timestamp?: string | null;
-};
 
 function formatTime(iso?: string | null) {
   if (!iso) return "—";
@@ -67,7 +66,7 @@ function formatDuration(s?: number | null) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-// ── Dial-pad digits ──────────────────────────────────────────────────────────
+// ── Dial-pad digits ────────────────────────────────────────────────────────────
 const NUMPAD = [
   ["1", "2", "3"],
   ["4", "5", "6"],
@@ -75,24 +74,7 @@ const NUMPAD = [
   ["*", "0", "#"],
 ];
 
-// ── Helper: SIP status badge ──────────────────────────────────────────────────
-function SipBadge({ state }: { state: SipState }) {
-  const cfg: Record<SipState, { color: string; label: string }> = {
-    disconnected: { color: "bg-gray-400", label: "SIP: Offline" },
-    connecting:   { color: "bg-yellow-400 animate-pulse", label: "SIP: Connecting…" },
-    connected:    { color: "bg-green-400", label: "SIP: Ready" },
-    error:        { color: "bg-red-400", label: "SIP: Error" },
-  };
-  const { color, label } = cfg[state];
-  return (
-    <span className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
-      <span className={cn("w-1.5 h-1.5 rounded-full", color)} />
-      {label}
-    </span>
-  );
-}
-
-// ── Call timer ────────────────────────────────────────────────────────────────
+// ── Call timer ─────────────────────────────────────────────────────────────────
 function useCallTimer(running: boolean) {
   const [elapsed, setElapsed] = useState(0);
   const ref = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -110,262 +92,165 @@ function useCallTimer(running: boolean) {
   return `${mm}:${ss}`;
 }
 
-type Campaign = { id: number; name: string };
+// ── Vapi status badge ──────────────────────────────────────────────────────────
+function VapiBadge({ state }: { state: BrowserCallState }) {
+  const cfg: Record<BrowserCallState, { color: string; label: string }> = {
+    idle:       { color: "bg-violet-400/60",              label: "Vapi Ready"      },
+    connecting: { color: "bg-yellow-400 animate-pulse",   label: "Connecting…"     },
+    active:     { color: "bg-green-400 animate-pulse",    label: "Browser Session" },
+    error:      { color: "bg-red-400",                    label: "Error"           },
+  };
+  const { color, label } = cfg[state];
+  return (
+    <span className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
+      <span className={cn("w-1.5 h-1.5 rounded-full", color)} />
+      {label}
+    </span>
+  );
+}
 
-// ── Main Dialer Component ─────────────────────────────────────────────────────
+// ── Main Dialer Component ──────────────────────────────────────────────────────
 export default function DialerPage() {
-  // "telnyx" = browser WebRTC via Telnyx SIP, "vapi" = AI-initiated outbound via Vapi
-  const [providerMode, setProviderMode] = useState<"telnyx" | "vapi">("vapi");
-  const [sipState, setSipState] = useState<SipState>("disconnected");
-  const [callState, setCallState] = useState<CallState>("idle");
-  const [phone, setPhone] = useState("");
-  const [callerId, setCallerId] = useState("");
-  const [muted, setMuted] = useState(false);
-  const [activeCallPhone, setActiveCallPhone] = useState("");
-  const [vapiCampaignId, setVapiCampaignId] = useState<number | "">("");
-  const [vapiCalling, setVapiCalling] = useState(false);
-  const clientRef = useRef<InstanceType<typeof TelnyxRTC> | null>(null);
-  const callRef = useRef<ReturnType<InstanceType<typeof TelnyxRTC>["newCall"]> | null>(null);
+  const [phone, setPhone]                       = useState("");
+  const [campaignId, setCampaignId]             = useState<number | "">("");
+  const [outboundCalling, setOutboundCalling]   = useState(false);
+  const [browserState, setBrowserState]         = useState<BrowserCallState>("idle");
+  const [muted, setMuted]                       = useState(false);
+  const [agentSpeaking, setAgentSpeaking]       = useState(false);
+  const [heldCallIds, setHeldCallIds]           = useState<Set<string>>(new Set());
+  const vapiRef = useRef<Vapi | null>(null);
   const { toast } = useToast();
-  const callTimer = useCallTimer(callState === "active");
+  const browserTimer = useCallTimer(browserState === "active");
 
-  // Fetch available phone numbers for caller ID selection
+  // 1-second tick to drive live elapsed timers in the active calls panel
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(t);
+  }, []);
+  void now;
+
+  // ── Fetch data ──────────────────────────────────────────────────────────────
   const { data: numbers = [] } = useQuery<PhoneNumber[]>({
     queryKey: ["phone-numbers"],
     queryFn: () => customFetch("/api/numbers") as Promise<PhoneNumber[]>,
+    staleTime: 60_000,
   });
 
-  // Campaigns list for Vapi mode context selector
   const { data: campaigns = [] } = useQuery<Campaign[]>({
     queryKey: ["campaigns-list"],
     queryFn: () => customFetch("/api/campaigns?limit=100") as Promise<Campaign[]>,
     staleTime: 60_000,
   });
 
-  // ── Active AI calls (poll every 2s) — to render live call controls ─────────
   const { data: liveCalls = [], refetch: refetchLive } = useQuery<LiveCall[]>({
     queryKey: ["calls-live"],
     queryFn: () => customFetch("/api/calls/live") as Promise<LiveCall[]>,
     refetchInterval: 2_000,
   });
 
-  // 1-second tick to drive per-call elapsed timers without re-fetching
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(t);
-  }, []);
-  void now;  // referenced only to trigger re-render; elapsed read inside JSX
-
-  // ── Recent inbound calls (poll every 8s) — "who called" panel ──────────────
   const { data: recentCdr = [], refetch: refetchCdr } = useQuery<CdrCall[]>({
     queryKey: ["calls-cdr-inbound"],
     queryFn: () => customFetch("/api/calls/cdr?direction=inbound&limit=10") as Promise<CdrCall[]>,
     refetchInterval: 8_000,
   });
 
-  // Track which calls are on hold so the UI knows whether to show Hold or Resume
-  const [heldCallIds, setHeldCallIds] = useState<Set<string>>(new Set());
-
-  // ── Live-call action helpers ───────────────────────────────────────────────
-  const callAction = useCallback(async (callControlId: string, action: "hangup" | "hold" | "unhold", body?: object) => {
-    try {
-      await customFetch(`/api/calls/${encodeURIComponent(callControlId)}/${action}`, {
-        method: "POST",
-        body: body ? JSON.stringify(body) : undefined,
-        headers: body ? { "Content-Type": "application/json" } : undefined,
-      });
-      if (action === "hold") setHeldCallIds(s => new Set(s).add(callControlId));
-      if (action === "unhold") setHeldCallIds(s => { const n = new Set(s); n.delete(callControlId); return n; });
-      toast({ title: action === "hangup" ? "Call ended" : action === "hold" ? "On hold" : "Resumed" });
-      refetchLive();
-    } catch (err: unknown) {
-      toast({
-        title: `${action} failed`,
-        description: err instanceof Error ? err.message : "Unknown error",
-        variant: "destructive",
-      });
-    }
-  }, [toast, refetchLive]);
-
-  const promptAndAct = useCallback(async (callControlId: string, kind: "transfer" | "conference") => {
-    const target = window.prompt(`Enter destination phone (E.164, e.g. +12035551234) for ${kind}:`);
-    if (!target) return;
-    if (!/^\+[1-9]\d{6,14}$/.test(target.trim())) {
-      toast({ title: "Invalid number", description: "Must be E.164 format like +12035551234", variant: "destructive" });
-      return;
-    }
-    try {
-      await customFetch(`/api/calls/${encodeURIComponent(callControlId)}/${kind}`, {
-        method: "POST",
-        body: JSON.stringify({ to: target.trim() }),
-        headers: { "Content-Type": "application/json" },
-      });
-      toast({ title: kind === "transfer" ? "Transferring…" : "Bridging in…", description: target.trim() });
-      refetchLive();
-      refetchCdr();
-    } catch (err: unknown) {
-      toast({
-        title: `${kind} failed`,
-        description: err instanceof Error ? err.message : "Unknown error",
-        variant: "destructive",
-      });
-    }
-  }, [toast, refetchLive, refetchCdr]);
-
-  // Set default caller ID once numbers load
+  // ── Init Vapi Web SDK (browser session) ─────────────────────────────────────
   useEffect(() => {
-    if (numbers.length > 0 && !callerId) {
-      setCallerId(numbers[0].number);
-    }
-  }, [numbers, callerId]);
+    let instance: Vapi | null = null;
+    customFetch("/api/vapi/web-key")
+      .then((data) => {
+        const { publicKey } = data as { publicKey: string };
+        if (!publicKey) return;
+        instance = new Vapi(publicKey);
 
-  // ── Connect to Telnyx SIP ────────────────────────────────────────────────
-  const connect = useCallback(async () => {
-    if (sipState === "connecting" || sipState === "connected") return;
-    setSipState("connecting");
-
-    // Step 1: Request mic permission FIRST (mobile browsers need user gesture).
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Release the test stream — Telnyx SDK will request its own.
-      stream.getTracks().forEach(t => t.stop());
-    } catch (err: unknown) {
-      setSipState("error");
-      const msg = err instanceof Error ? err.message : "Microphone access denied";
-      toast({
-        title: "Microphone blocked",
-        description: msg.includes("Permission") || msg.includes("denied")
-          ? "Tap the lock icon → Site Settings → Microphone → Allow, then reload."
-          : msg,
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      // Step 2: Get a fresh Telnyx JWT.
-      const { token } = await customFetch("/api/calls/webrtc-token") as { token: string };
-
-      // Step 3: Build SDK with mobile-friendly opts (UDP/RTC over wss only).
-      const client = new TelnyxRTC({
-        login_token: token,
-        ringtoneFile: undefined,
-        ringbackFile: undefined,
-      });
-      clientRef.current = client;
-
-      client.on("telnyx.ready", () => {
-        console.info("[Telnyx] SIP ready");
-        setSipState("connected");
-      });
-
-      client.on("telnyx.error", (err: unknown) => {
-        console.error("[Telnyx] error:", err);
-        setSipState("error");
-        const e = err as { error?: string; message?: string; cause?: string };
-        toast({
-          title: "SIP Error",
-          description: e?.cause ?? e?.message ?? e?.error ?? "WebRTC negotiation failed — check network/firewall.",
-          variant: "destructive",
+        instance.on("call-start", () => {
+          setBrowserState("active");
         });
-      });
+        instance.on("call-end", () => {
+          setBrowserState("idle");
+          setMuted(false);
+          setAgentSpeaking(false);
+        });
+        instance.on("error", (e: unknown) => {
+          console.error("[Vapi] browser error:", e);
+          setBrowserState("error");
+        });
+        instance.on("speech-start", () => setAgentSpeaking(true));
+        instance.on("speech-end",   () => setAgentSpeaking(false));
 
-      client.on("telnyx.socket.close", () => {
-        setSipState("disconnected");
-        setCallState("idle");
-        callRef.current = null;
-      });
+        vapiRef.current = instance;
+      })
+      .catch(() => {/* key not available – browser session disabled */});
 
-      client.on("telnyx.notification", (notification: { type: string; call: Record<string, unknown> }) => {
-        if (notification.type !== "callUpdate") return;
-        const call = notification.call as {
-          state: string;
-          id: string;
-          remoteCallerNumber?: string;
-          answer: () => void;
-          hangup: () => void;
-          muteAudio: () => void;
-          unmuteAudio: () => void;
-        };
-        callRef.current = call as ReturnType<InstanceType<typeof TelnyxRTC>["newCall"]>;
-
-        switch (call.state) {
-          case "ringing":
-            setCallState("ringing");
-            setActiveCallPhone(call.remoteCallerNumber ?? "Unknown");
-            break;
-          case "active":
-            setCallState("active");
-            break;
-          case "held":
-            setCallState("held");
-            break;
-          case "hangup":
-          case "destroy":
-          case "purge":
-            setCallState("idle");
-            setActiveCallPhone("");
-            setMuted(false);
-            callRef.current = null;
-            break;
-        }
-      });
-
-      client.connect();
-    } catch (err: unknown) {
-      setSipState("error");
-      toast({
-        title: "Connection Failed",
-        description: err instanceof Error ? err.message : "Could not get WebRTC credentials",
-        variant: "destructive",
-      });
-    }
-  }, [sipState, toast]);
-
-  // Auto-connect on desktop only — mobile browsers (iOS Safari, mobile Chrome)
-  // require a user gesture before getUserMedia / WebRTC, so we wait for tap.
-  useEffect(() => {
-    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    if (!isMobile) connect();
     return () => {
-      if (clientRef.current) {
-        clientRef.current.disconnect();
-        clientRef.current = null;
-      }
+      instance?.stop();
+      vapiRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Dial pad ──────────────────────────────────────────────────────────────
-  const dial = (digit: string) => {
-    setPhone(p => (p + digit).slice(0, 16));
-    // DTMF during active call
-    if (callRef.current && callState === "active") {
-      try { (callRef.current as unknown as { dtmf: (d: string) => void }).dtmf(digit); } catch { /* ignore */ }
+  // ── Browser session (Vapi Web SDK) ─────────────────────────────────────────
+  const startBrowserSession = useCallback(async () => {
+    if (!vapiRef.current || browserState !== "idle") return;
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      toast({ title: "Mic blocked", description: "Allow microphone access and try again.", variant: "destructive" });
+      return;
     }
-  };
+    setBrowserState("connecting");
+    try {
+      // Inline (transient) assistant — no stored assistant needed
+      await vapiRef.current.start({
+        name: "Shivansh AI",
+        firstMessage: "Hello! I'm Shivansh AI. How can I help you today?",
+        model: {
+          provider: "openai" as const,
+          model: "gpt-4o-mini",
+          messages: [{ role: "system" as const, content: "You are a friendly, professional AI assistant for Shivansh. Help the agent test and verify the AI script." }],
+        },
+        voice: { provider: "11labs" as const, voiceId: "21m00Tcm4TlvDq8ikWAM" },
+      });
+    } catch (err: unknown) {
+      setBrowserState("error");
+      toast({ title: "Connection failed", description: err instanceof Error ? err.message : "Could not start Vapi session", variant: "destructive" });
+    }
+  }, [browserState, toast]);
 
-  // ── Make Vapi call (backend-initiated outbound AI call) ───────────────────
-  const makeVapiCall = useCallback(async () => {
+  const stopBrowserSession = useCallback(() => {
+    vapiRef.current?.stop();
+    setBrowserState("idle");
+    setMuted(false);
+    setAgentSpeaking(false);
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    if (!vapiRef.current || browserState !== "active") return;
+    const next = !muted;
+    vapiRef.current.setMuted(next);
+    setMuted(next);
+  }, [muted, browserState]);
+
+  // ── Outbound: server-triggered Vapi call ───────────────────────────────────
+  const makeOutboundCall = useCallback(async () => {
     if (!phone.trim()) {
       toast({ title: "Enter a number first", variant: "destructive" });
       return;
     }
-    setVapiCalling(true);
+    setOutboundCalling(true);
     try {
       await customFetch("/api/calls/manual", {
         method: "POST",
         body: JSON.stringify({
           phone: phone.trim(),
-          campaignId: vapiCampaignId || undefined,
+          campaignId: campaignId || undefined,
           provider: "vapi",
         }),
         headers: { "Content-Type": "application/json" },
       });
       toast({
-        title: "Vapi call initiated",
-        description: `AI is calling ${phone.trim()} — watch the Active Calls panel below.`,
+        title: "Call initiated",
+        description: `Vapi AI is calling ${phone.trim()} — see Active Calls below.`,
       });
       setPhone("");
       refetchLive();
@@ -376,162 +261,79 @@ export default function DialerPage() {
         variant: "destructive",
       });
     } finally {
-      setVapiCalling(false);
+      setOutboundCalling(false);
     }
-  }, [phone, vapiCampaignId, toast, refetchLive]);
+  }, [phone, campaignId, toast, refetchLive]);
 
-  // ── Make call ─────────────────────────────────────────────────────────────
-  const makeCall = () => {
-    if (!clientRef.current || sipState !== "connected") {
-      toast({ title: "Not connected", description: "SIP client is not ready yet", variant: "destructive" });
-      return;
-    }
-    if (!phone.trim()) {
-      toast({ title: "Enter a number first", variant: "destructive" });
-      return;
-    }
+  // ── Live-call action helpers ────────────────────────────────────────────────
+  const callAction = useCallback(async (callControlId: string, action: "hangup" | "hold" | "unhold") => {
     try {
-      const call = clientRef.current.newCall({
-        destinationNumber: phone.trim(),
-        callerNumber: callerId || undefined,
-      });
-      callRef.current = call;
-      setCallState("calling");
-      setActiveCallPhone(phone.trim());
+      await customFetch(`/api/calls/${encodeURIComponent(callControlId)}/${action}`, { method: "POST" });
+      if (action === "hold")   setHeldCallIds(s => new Set(s).add(callControlId));
+      if (action === "unhold") setHeldCallIds(s => { const n = new Set(s); n.delete(callControlId); return n; });
+      toast({ title: action === "hangup" ? "Call ended" : action === "hold" ? "On hold" : "Resumed" });
+      refetchLive();
     } catch (err: unknown) {
-      toast({ title: "Call failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+      toast({ title: `${action} failed`, description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
     }
-  };
+  }, [toast, refetchLive]);
 
-  // ── Hangup ────────────────────────────────────────────────────────────────
-  const hangup = () => {
-    try { callRef.current?.hangup(); } catch { /* ignore */ }
-    setCallState("idle");
-    setActiveCallPhone("");
-    setMuted(false);
-    callRef.current = null;
-  };
-
-  // ── Answer (incoming) ────────────────────────────────────────────────────
-  const answer = () => {
-    try { callRef.current?.answer(); } catch { /* ignore */ }
-  };
-
-  // ── Mute toggle ───────────────────────────────────────────────────────────
-  const toggleMute = () => {
-    if (!callRef.current) return;
+  const promptAndAct = useCallback(async (callControlId: string, kind: "transfer" | "conference") => {
+    const target = window.prompt(`Enter destination (E.164, e.g. +12035551234) for ${kind}:`);
+    if (!target) return;
+    if (!/^\+[1-9]\d{6,14}$/.test(target.trim())) {
+      toast({ title: "Invalid number", description: "Must be E.164 like +12035551234", variant: "destructive" });
+      return;
+    }
     try {
-      if (muted) callRef.current.unmuteAudio();
-      else callRef.current.muteAudio();
-      setMuted(m => !m);
-    } catch { /* ignore */ }
-  };
+      await customFetch(`/api/calls/${encodeURIComponent(callControlId)}/${kind}`, {
+        method: "POST",
+        body: JSON.stringify({ to: target.trim() }),
+        headers: { "Content-Type": "application/json" },
+      });
+      toast({ title: kind === "transfer" ? "Transferring…" : "Bridging in…", description: target.trim() });
+      refetchLive(); refetchCdr();
+    } catch (err: unknown) {
+      toast({ title: `${kind} failed`, description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+    }
+  }, [toast, refetchLive, refetchCdr]);
 
-  const inCall = callState === "calling" || callState === "ringing" || callState === "active" || callState === "held";
+  // ── Dial pad digit ─────────────────────────────────────────────────────────
+  const dial = (digit: string) => setPhone(p => (p + digit).slice(0, 16));
+
+  const activeLiveCalls = liveCalls.filter(c => c.callControlId);
 
   return (
     <Layout>
       <PageHeader
-        title="Dialer"
-        subtitle={providerMode === "vapi" ? "Vapi AI Calls" : "Telnyx WebRTC Softphone"}
-        action={providerMode === "telnyx" ? <SipBadge state={sipState} /> : (
-          <span className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-400" />
-            Vapi Ready
-          </span>
-        )}
+        title="Softphone"
+        subtitle="Vapi AI"
+        action={<VapiBadge state={browserState} />}
       />
       <div className="p-6 flex justify-center">
         <div className="w-full max-w-sm space-y-4">
 
-          {/* Provider mode toggle */}
-          <div className="flex rounded-lg border border-border overflow-hidden">
-            <button
-              onClick={() => setProviderMode("vapi")}
-              className={cn(
-                "flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-mono transition-colors",
-                providerMode === "vapi"
-                  ? "bg-violet-600 text-white"
-                  : "bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10"
-              )}
+          {/* ── Campaign context ─────────────────────────────────────────── */}
+          <div>
+            <label className="text-[10px] font-mono uppercase text-muted-foreground block mb-1">Campaign (optional)</label>
+            <select
+              value={campaignId}
+              onChange={e => setCampaignId(e.target.value ? Number(e.target.value) : "")}
+              className="w-full bg-background border border-border rounded px-3 py-2 text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             >
-              <Sparkles className="w-3 h-3" />Vapi AI
-            </button>
-            <button
-              onClick={() => setProviderMode("telnyx")}
-              className={cn(
-                "flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-mono transition-colors",
-                providerMode === "telnyx"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10"
-              )}
-            >
-              <Radio className="w-3 h-3" />Telnyx SIP
-            </button>
+              <option value="">— Ad-hoc call —</option>
+              {campaigns.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
           </div>
 
-          {/* Vapi mode: campaign context selector */}
-          {providerMode === "vapi" && (
-            <div>
-              <label className="text-[10px] font-mono uppercase text-muted-foreground block mb-1">Campaign (optional)</label>
-              <select
-                value={vapiCampaignId}
-                onChange={e => setVapiCampaignId(e.target.value ? Number(e.target.value) : "")}
-                className="w-full bg-background border border-border rounded px-3 py-2 text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option value="">— Ad-hoc (no campaign) —</option>
-                {campaigns.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* Telnyx mode: Caller ID selector */}
-          {providerMode === "telnyx" && (
-            <div>
-              <label className="text-[10px] font-mono uppercase text-muted-foreground block mb-1">Caller ID</label>
-              <select
-                value={callerId}
-                onChange={e => setCallerId(e.target.value)}
-                disabled={inCall}
-                className="w-full bg-background border border-border rounded px-3 py-2 text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                {numbers.map(n => (
-                  <option key={n.id} value={n.number}>{n.number}{n.friendlyName ? ` — ${n.friendlyName}` : ""}</option>
-                ))}
-                {numbers.length === 0 && <option value="">No numbers configured</option>}
-              </select>
-            </div>
-          )}
-
-          {/* Active call overlay */}
-          {inCall && (
-            <div className={cn(
-              "rounded-lg border p-4 text-center",
-              callState === "active" ? "border-green-500/40 bg-green-500/5" :
-              callState === "ringing" ? "border-yellow-500/40 bg-yellow-500/5 animate-pulse" :
-              "border-border bg-white/[0.02]"
-            )}>
-              <div className="flex items-center justify-center gap-2 mb-1">
-                {callState === "calling" && <Loader2 className="w-3.5 h-3.5 text-primary animate-spin" />}
-                {callState === "ringing" && <PhoneIncoming className="w-3.5 h-3.5 text-yellow-400" />}
-                {callState === "active" && <PhoneCall className="w-3.5 h-3.5 text-green-400" />}
-                <span className="font-mono text-xs capitalize text-muted-foreground">{callState}</span>
-              </div>
-              <p className="font-mono text-lg text-foreground">{activeCallPhone}</p>
-              {callState === "active" && (
-                <p className="font-mono text-xl text-green-400 mt-1">{callTimer}</p>
-              )}
-            </div>
-          )}
-
-          {/* Dial pad card */}
+          {/* ── Dial pad card ────────────────────────────────────────────── */}
           <div className="bg-card border border-border rounded-lg p-4">
             {/* Number display */}
             <div className="flex items-center gap-2 min-h-[44px] mb-4">
               <span className="flex-1 text-xl font-mono text-foreground tracking-widest text-center">
-                {phone || <span className="text-muted-foreground text-base">Enter number...</span>}
+                {phone || <span className="text-muted-foreground text-base">Enter number…</span>}
               </span>
               {phone && (
                 <button type="button" onClick={() => setPhone(p => p.slice(0, -1))}
@@ -545,8 +347,7 @@ export default function DialerPage() {
             <div className="grid grid-cols-3 gap-2 mb-3">
               {NUMPAD.flat().map(digit => (
                 <button key={digit} type="button" onClick={() => dial(digit)}
-                  disabled={callState === "ringing"}
-                  className="h-12 rounded-lg bg-white/5 hover:bg-white/10 border border-border/50 hover:border-border font-mono text-lg text-foreground transition-all active:scale-95 disabled:opacity-40">
+                  className="h-12 rounded-lg bg-white/5 hover:bg-white/10 border border-border/50 hover:border-border font-mono text-lg text-foreground transition-all active:scale-95">
                   {digit}
                 </button>
               ))}
@@ -556,100 +357,115 @@ export default function DialerPage() {
             <Input
               value={phone}
               onChange={e => setPhone(e.target.value.slice(0, 16))}
-              disabled={inCall}
               className="font-mono text-sm text-center mb-4"
               placeholder="+1XXXXXXXXXX"
             />
 
-            {/* Call controls */}
-            {!inCall ? (
-              providerMode === "vapi" ? (
-                <Button
-                  className="w-full h-12 bg-violet-600 hover:bg-violet-700 text-white font-mono uppercase tracking-wider text-sm"
-                  onClick={makeVapiCall}
-                  disabled={vapiCalling || !phone.trim()}
-                >
-                  {vapiCalling ? (
-                    <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Initiating…</span>
-                  ) : (
-                    <span className="flex items-center gap-2"><PhoneForwarded className="w-4 h-4" />Call via Vapi AI</span>
-                  )}
-                </Button>
+            {/* Outbound call button */}
+            <Button
+              className="w-full h-12 bg-violet-600 hover:bg-violet-700 text-white font-mono uppercase tracking-wider text-sm"
+              onClick={makeOutboundCall}
+              disabled={outboundCalling || !phone.trim()}
+            >
+              {outboundCalling ? (
+                <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Initiating…</span>
               ) : (
-              <Button
-                className="w-full h-12 bg-green-600 hover:bg-green-700 text-white font-mono uppercase tracking-wider text-sm"
-                onClick={makeCall}
-                disabled={sipState !== "connected" || !phone.trim()}
-              >
-                {sipState === "connecting" ? (
-                  <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Connecting SIP…</span>
-                ) : (
-                  <span className="flex items-center gap-2"><Phone className="w-4 h-4" />Call</span>
-                )}
-              </Button>
-              )
-            ) : (
-              <div className="flex gap-2">
-                {/* Mute */}
-                <button onClick={toggleMute} disabled={callState !== "active"}
-                  className={cn(
-                    "flex-1 h-12 rounded-lg border font-mono text-xs flex items-center justify-center gap-1.5 transition-all",
-                    muted
-                      ? "border-red-500/50 bg-red-500/10 text-red-400"
-                      : "border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10",
-                    callState !== "active" && "opacity-40 cursor-not-allowed"
-                  )}>
-                  {muted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                  {muted ? "Unmute" : "Mute"}
-                </button>
-
-                {/* Answer (if ringing) */}
-                {callState === "ringing" && (
-                  <button onClick={answer}
-                    className="flex-1 h-12 rounded-lg border border-green-500/40 bg-green-500/10 text-green-400 hover:bg-green-500/20 font-mono text-xs flex items-center justify-center gap-1.5 transition-all">
-                    <Phone className="w-4 h-4" />Answer
-                  </button>
-                )}
-
-                {/* Hangup */}
-                <button onClick={hangup}
-                  className="flex-1 h-12 rounded-lg bg-red-600 hover:bg-red-700 text-white font-mono text-xs flex items-center justify-center gap-1.5 transition-all">
-                  <PhoneOff className="w-4 h-4" />Hang Up
-                </button>
-              </div>
-            )}
+                <span className="flex items-center gap-2"><Phone className="w-4 h-4" />Call via Vapi AI</span>
+              )}
+            </Button>
           </div>
 
-          {/* ── Active AI Calls (always visible, with live timer + controls) ── */}
+          {/* ── Browser session card ─────────────────────────────────────── */}
+          {vapiRef.current !== undefined && (
+            <div className={cn(
+              "bg-card border rounded-lg p-4 transition-all",
+              browserState === "active" ? "border-violet-500/50" : "border-border",
+            )}>
+              <div className="flex items-center gap-2 mb-3">
+                <Radio className={cn("w-3.5 h-3.5", browserState === "active" ? "text-violet-400" : "text-muted-foreground")} />
+                <h3 className="text-xs font-mono uppercase tracking-wider text-foreground">Browser AI Session</h3>
+                <span className="ml-auto text-[10px] font-mono text-muted-foreground">
+                  Talk to Vapi AI from browser
+                </span>
+              </div>
+
+              {browserState === "active" ? (
+                <>
+                  {/* Active session display */}
+                  <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 mb-3 text-center">
+                    <div className="flex items-center justify-center gap-2 mb-1">
+                      {agentSpeaking
+                        ? <Volume2 className="w-3.5 h-3.5 text-violet-400 animate-pulse" />
+                        : <VolumeX className="w-3.5 h-3.5 text-muted-foreground" />}
+                      <span className="text-xs font-mono text-muted-foreground">
+                        {agentSpeaking ? "AI speaking…" : "Listening…"}
+                      </span>
+                    </div>
+                    <p className="font-mono text-2xl text-violet-400">{browserTimer}</p>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button onClick={toggleMute}
+                      className={cn(
+                        "flex-1 h-10 rounded-lg border font-mono text-xs flex items-center justify-center gap-1.5 transition-all",
+                        muted
+                          ? "border-red-500/50 bg-red-500/10 text-red-400"
+                          : "border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10"
+                      )}>
+                      {muted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                      {muted ? "Unmute" : "Mute"}
+                    </button>
+                    <button onClick={stopBrowserSession}
+                      className="flex-1 h-10 rounded-lg bg-red-600 hover:bg-red-700 text-white font-mono text-xs flex items-center justify-center gap-1.5 transition-all">
+                      <PhoneOff className="w-3.5 h-3.5" />End Session
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <button
+                  onClick={startBrowserSession}
+                  disabled={browserState === "connecting" || !vapiRef.current}
+                  className={cn(
+                    "w-full h-10 rounded-lg border font-mono text-xs flex items-center justify-center gap-2 transition-all",
+                    browserState === "error"
+                      ? "border-red-500/30 bg-red-500/5 text-red-400"
+                      : "border-violet-500/30 bg-violet-500/5 text-violet-300 hover:bg-violet-500/10"
+                  )}
+                >
+                  {browserState === "connecting"
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />Connecting…</>
+                    : browserState === "error"
+                    ? <><Sparkles className="w-3.5 h-3.5" />Retry Session</>
+                    : <><Sparkles className="w-3.5 h-3.5" />Start Browser Session</>}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ── Active AI Calls ──────────────────────────────────────────── */}
           <div className="bg-card border border-border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-3">
-              <PhoneCall className={cn(
-                "w-3.5 h-3.5",
-                liveCalls.filter(c => c.callControlId).length > 0 ? "text-green-400" : "text-muted-foreground"
-              )} />
+              <PhoneCall className={cn("w-3.5 h-3.5", activeLiveCalls.length > 0 ? "text-green-400" : "text-muted-foreground")} />
               <h3 className="text-xs font-mono uppercase tracking-wider text-foreground">Active AI Calls</h3>
               <span className="ml-auto text-[10px] font-mono text-muted-foreground">
-                {liveCalls.filter(c => c.callControlId).length} live
+                {activeLiveCalls.length} live
               </span>
             </div>
-            {liveCalls.filter(c => c.callControlId).length === 0 ? (
+            {activeLiveCalls.length === 0 ? (
               <div className="py-6 text-center">
                 <div className="w-10 h-10 mx-auto mb-2 rounded-full border border-border/50 flex items-center justify-center">
                   <PhoneIncoming className="w-4 h-4 text-muted-foreground/50" />
                 </div>
-                <p className="text-[11px] font-mono text-muted-foreground">
-                  Waiting for calls…
-                </p>
-                <p className="text-[10px] font-mono text-muted-foreground/60 mt-1">
-                  Inbound + outbound AI calls appear here in real time
-                </p>
+                <p className="text-[11px] font-mono text-muted-foreground">Waiting for calls…</p>
+                <p className="text-[10px] font-mono text-muted-foreground/60 mt-1">Vapi calls appear here in real time</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {liveCalls.filter(c => c.callControlId).map(c => {
+                {activeLiveCalls.map(c => {
                   const cid = c.callControlId!;
                   const held = heldCallIds.has(cid);
                   const isInbound = c.direction === "inbound";
+                  const isVapi = c.providerUsed === "vapi" || cid.startsWith("vapi:");
                   return (
                     <div key={cid} className={cn(
                       "rounded-lg border p-3 transition-all",
@@ -659,7 +475,6 @@ export default function DialerPage() {
                           ? "border-blue-500/30 bg-blue-500/5"
                           : "border-green-500/30 bg-green-500/5"
                     )}>
-                      {/* Top row: direction badge + phone + status */}
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className={cn(
@@ -668,10 +483,12 @@ export default function DialerPage() {
                           )}>
                             {isInbound ? "IN" : "OUT"}
                           </span>
-                          <span className={cn(
-                            "w-1.5 h-1.5 rounded-full shrink-0",
-                            held ? "bg-yellow-400" : "bg-green-400 animate-pulse"
-                          )} />
+                          {isVapi && (
+                            <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 shrink-0">
+                              Vapi
+                            </span>
+                          )}
+                          <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", held ? "bg-yellow-400" : "bg-green-400 animate-pulse")} />
                           <span className="font-mono text-sm text-foreground truncate">{c.phoneNumber || "Unknown"}</span>
                         </div>
                         <span className="text-[10px] font-mono uppercase text-muted-foreground shrink-0 ml-2">
@@ -679,7 +496,6 @@ export default function DialerPage() {
                         </span>
                       </div>
 
-                      {/* Big live timer + campaign / agent context */}
                       <div className="flex items-baseline justify-between mb-3">
                         <div className="min-w-0">
                           {c.campaignName && (
@@ -688,15 +504,11 @@ export default function DialerPage() {
                             </div>
                           )}
                         </div>
-                        <div className={cn(
-                          "font-mono text-xl tabular-nums",
-                          held ? "text-yellow-400" : "text-green-400"
-                        )}>
+                        <div className={cn("font-mono text-xl tabular-nums", held ? "text-yellow-400" : "text-green-400")}>
                           {elapsedSince(c.startedAt)}
                         </div>
                       </div>
 
-                      {/* Action buttons */}
                       <div className="grid grid-cols-4 gap-1.5">
                         <button onClick={() => callAction(cid, held ? "unhold" : "hold")}
                           className={cn(
@@ -704,30 +516,22 @@ export default function DialerPage() {
                             held
                               ? "border-green-500/40 bg-green-500/10 text-green-400 hover:bg-green-500/20"
                               : "border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10"
-                          )}
-                          title={held ? "Resume call" : "Hold call"}
-                        >
+                          )}>
                           {held ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
                           <span>{held ? "Resume" : "Hold"}</span>
                         </button>
                         <button onClick={() => promptAndAct(cid, "transfer")}
-                          className="h-10 rounded border border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all"
-                          title="Blind transfer to another number"
-                        >
+                          className="h-10 rounded border border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all">
                           <ArrowRightLeft className="w-3 h-3" />
                           <span>Transfer</span>
                         </button>
                         <button onClick={() => promptAndAct(cid, "conference")}
-                          className="h-10 rounded border border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all"
-                          title="Bridge a third party into this call"
-                        >
+                          className="h-10 rounded border border-border bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10 font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all">
                           <UserPlus className="w-3 h-3" />
                           <span>Conf</span>
                         </button>
                         <button onClick={() => callAction(cid, "hangup")}
-                          className="h-10 rounded bg-red-600 hover:bg-red-700 text-white font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all"
-                          title="End this call"
-                        >
+                          className="h-10 rounded bg-red-600 hover:bg-red-700 text-white font-mono text-[10px] flex flex-col items-center justify-center gap-0.5 transition-all">
                           <PhoneOff className="w-3 h-3" />
                           <span>End</span>
                         </button>
@@ -739,32 +543,24 @@ export default function DialerPage() {
             )}
           </div>
 
-          {/* ── Recent Inbound Calls (who has called) ─────────────────────── */}
+          {/* ── Recent Inbound ───────────────────────────────────────────── */}
           <div className="bg-card border border-border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-3">
               <PhoneIncoming className="w-3.5 h-3.5 text-blue-400" />
               <h3 className="text-xs font-mono uppercase tracking-wider text-foreground">Recent Inbound</h3>
-              <span className="ml-auto text-[10px] font-mono text-muted-foreground">
-                {recentCdr.length}
-              </span>
+              <span className="ml-auto text-[10px] font-mono text-muted-foreground">{recentCdr.length}</span>
             </div>
             {recentCdr.length === 0 ? (
-              <p className="text-[11px] font-mono text-muted-foreground text-center py-4">
-                No inbound calls yet
-              </p>
+              <p className="text-[11px] font-mono text-muted-foreground text-center py-4">No inbound calls yet</p>
             ) : (
               <div className="space-y-1 max-h-[280px] overflow-y-auto">
                 {recentCdr.map(c => (
-                  <button
-                    key={c.id}
+                  <button key={c.id}
                     onClick={() => c.phoneNumber && setPhone(c.phoneNumber)}
                     className="w-full flex items-center gap-2 px-2 py-2 rounded hover:bg-white/5 transition-colors text-left"
-                    title="Tap to dial back"
-                  >
+                    title="Tap to call back via Vapi">
                     <div className="flex-1 min-w-0">
-                      <div className="font-mono text-xs text-foreground truncate">
-                        {c.phoneNumber || "Unknown"}
-                      </div>
+                      <div className="font-mono text-xs text-foreground truncate">{c.phoneNumber || "Unknown"}</div>
                       <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground">
                         <Clock className="w-2.5 h-2.5" />
                         <span>{formatTime(c.timestamp)}</span>
@@ -788,32 +584,21 @@ export default function DialerPage() {
             )}
           </div>
 
-          {/* Reconnect button if error/disconnected — only in Telnyx mode */}
-          {providerMode === "telnyx" && (sipState === "error" || sipState === "disconnected") && (
-            <button onClick={connect}
-              className="w-full flex items-center justify-center gap-2 py-2 rounded border border-border text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all">
-              <Radio className="w-3 h-3" />Reconnect SIP
-            </button>
-          )}
-
-          {providerMode === "telnyx" && sipState === "error" && (
-            <div className="flex items-start gap-2 bg-red-500/5 border border-red-500/20 rounded px-3 py-2">
-              <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-              <p className="text-[10px] font-mono text-red-300">
-                SIP connection failed. Check your network and click Reconnect.
-              </p>
+          {/* ── Numbers reference ────────────────────────────────────────── */}
+          {numbers.length > 0 && (
+            <div className="rounded border border-border/50 px-3 py-2">
+              <p className="text-[10px] font-mono text-muted-foreground mb-1 uppercase tracking-wider">Your Numbers</p>
+              {numbers.slice(0, 3).map(n => (
+                <p key={n.id} className="font-mono text-[11px] text-foreground/80">
+                  {n.number}{n.friendlyName ? ` — ${n.friendlyName}` : ""}
+                </p>
+              ))}
+              {numbers.length > 3 && (
+                <p className="font-mono text-[10px] text-muted-foreground/60 mt-0.5">+{numbers.length - 3} more</p>
+              )}
             </div>
           )}
 
-          {/* Vapi mode info tip */}
-          {providerMode === "vapi" && (
-            <div className="flex items-start gap-2 bg-violet-500/5 border border-violet-500/20 rounded px-3 py-2">
-              <Sparkles className="w-3.5 h-3.5 text-violet-400 shrink-0 mt-0.5" />
-              <p className="text-[10px] font-mono text-violet-300">
-                Vapi AI will call the number on your behalf. The call appears in the Active AI Calls panel once connected.
-              </p>
-            </div>
-          )}
         </div>
       </div>
     </Layout>

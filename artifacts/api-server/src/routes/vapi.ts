@@ -325,6 +325,20 @@ router.post("/vapi/test-call", authenticate, requireRole("admin"), async (req: R
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /api/vapi/web-key — returns the Vapi public key for the browser SDK.
+// Uses VAPI_PUBLIC_KEY if set, falls back to VAPI_API_KEY (works on most
+// Vapi plans where private == public key).
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/vapi/web-key", authenticate, (_req: Request, res: Response) => {
+  const key = process.env.VAPI_PUBLIC_KEY ?? process.env.VAPI_API_KEY ?? "";
+  if (!key) {
+    res.status(503).json({ error: "VAPI_API_KEY not configured" });
+    return;
+  }
+  res.json({ publicKey: key });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/vapi/status — admin-only health check (Vapi config sanity)
 // ─────────────────────────────────────────────────────────────────────────────
 router.get("/vapi/status", authenticate, requireRole("admin"), (_req: Request, res: Response) => {
