@@ -23,6 +23,9 @@ export interface EnqueueCallPayload {
   voice: string;
   voice_provider?: string;
   transfer_number?: string;
+  // "blind" → AI hangs up the moment the call is bridged.
+  // "warm"  → AI greets the human agent first, then bridges the lead.
+  transfer_mode?: "blind" | "warm";
   campaign_id: string;
   campaign_name?: string;
   background_sound?: string;
@@ -90,6 +93,7 @@ async function vapiCallFallback(payload: EnqueueCallPayload): Promise<TriggerCal
     campaign_id: payload.campaign_id,
     campaign_name: payload.campaign_name,
     transfer_number: payload.transfer_number,
+    transfer_mode: payload.transfer_mode,
     knowledge_base: payload.knowledge_base,
     lead_id: payload.lead_id,
     lead_name: payload.lead_name,

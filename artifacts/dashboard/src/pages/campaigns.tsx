@@ -194,9 +194,20 @@ function FileUploadArea({
   const handleFile = async (file: File) => {
     setBusy(true);
     try {
-      if (file.type.startsWith("audio/")) {
-        onContent(`[Audio recording: ${file.name}]\nKey insights from this recording should be extracted and applied to the agent's behavior.`, file.name);
-        toast({ title: `Attached ${file.name}` });
+      if (file.type.startsWith("audio/") || file.type.startsWith("video/")) {
+        // Stream the audio to the backend, which forwards to Deepgram and
+        // returns a clean transcript that becomes the script body.
+        toast({ title: `Transcribing ${file.name}…`, description: "This can take up to a minute." });
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await customFetch(`/api/uploads/transcribe`, {
+          method: "POST",
+          body: fd,
+        });
+        const data = (await res.json()) as { transcript?: string; error?: string };
+        if (!data.transcript) throw new Error(data.error || "Empty transcript");
+        onContent(data.transcript, file.name);
+        toast({ title: `Transcribed ${file.name}`, description: `${data.transcript.length} characters extracted.` });
         return;
       }
 
@@ -752,6 +763,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const [backgroundSound, setBackgroundSound] = useState("none");
   const [holdMusic, setHoldMusic] = useState("none");
   const [transferNumber, setTransferNumber] = useState("");
+  const [transferMode, setTransferMode] = useState<"blind" | "warm">("blind");
 
   // Step 4 — Dialing Engine
   const [dialingMode, setDialingMode] = useState("progressive");
@@ -800,6 +812,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           backgroundSound: backgroundSound as "none" | "office",
           holdMusic: holdMusic as "none" | "jazz" | "corporate" | "smooth" | "classical",
           transferNumber: transferNumber || undefined,
+          transferMode,
           humanLike,
           dialingMode: dialingMode as "manual" | "progressive" | "predictive" | "preview",
           dialingRatio: parseInt(dialingRatio) || 1,
@@ -1081,6 +1094,20 @@ function CreateModal({ onClose }: { onClose: () => void }) {
                 />
                 <p className="text-[10px] font-mono text-muted-foreground">When the AI completes its script it will transfer the caller to this number</p>
               </div>
+
+              {transferNumber && (
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-mono uppercase text-muted-foreground">Transfer Mode</Label>
+                  <Select value={transferMode} onValueChange={v => setTransferMode(v as "blind" | "warm")}>
+                    <SelectTrigger className="text-sm h-9 font-mono"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="blind">Blind — Drop AI immediately, bridge caller</SelectItem>
+                      <SelectItem value="warm">Warm — AI briefs human agent before bridging</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] font-mono text-muted-foreground">Warm transfers add ~5–10s of agent context before the caller is connected</p>
+                </div>
+              )}
             </>
           )}
 
@@ -1176,6 +1203,9 @@ function LaunchModal({
   const [backgroundSound, setBackgroundSound] = useState(campaign.backgroundSound ?? "none");
   const [holdMusic, setHoldMusic] = useState(campaign.holdMusic ?? "none");
   const [transferNumber, setTransferNumber] = useState(campaign.transferNumber ?? "");
+  const [transferMode, setTransferMode] = useState<"blind" | "warm">(
+    ((campaign as Record<string, unknown>).transferMode as "blind" | "warm" | undefined) ?? "blind"
+  );
   const [humanLike, setHumanLike] = useState(campaign.humanLike ?? "true");
   const [showDialingEngine, setShowDialingEngine] = useState(false);
 
@@ -1216,6 +1246,7 @@ function LaunchModal({
       backgroundSound,
       holdMusic,
       transferNumber: transferNumber || undefined,
+      transferMode,
       humanLike,
       dialingMode,
       dialingRatio: parseInt(dialingRatio) || 1,
@@ -1454,6 +1485,21 @@ function LaunchModal({
             />
             <p className="text-[10px] font-mono text-muted-foreground">AI transfers the caller here after completing the script. Required for live transfer to work.</p>
           </div>
+
+          {/* Transfer Mode (only relevant when a transfer number is set) */}
+          {transferNumber && (
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-mono uppercase text-muted-foreground">Transfer Mode</Label>
+              <Select value={transferMode} onValueChange={v => setTransferMode(v as "blind" | "warm")}>
+                <SelectTrigger className="text-sm h-9 font-mono"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="blind">Blind — Drop AI immediately, bridge caller</SelectItem>
+                  <SelectItem value="warm">Warm — AI briefs human agent before bridging</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] font-mono text-muted-foreground">Warm transfers add ~5–10s of agent context before the caller is connected</p>
+            </div>
+          )}
 
           {/* Human-like toggle */}
           <div className="flex items-center justify-between rounded border border-border px-3 py-2.5">

@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, X, Filter, Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ClipboardList, Trash2, FolderInput, MoreVertical, Phone, ArrowRightLeft, Ban } from "lucide-react";
+import { Plus, X, Filter, Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ClipboardList, Trash2, FolderInput, MoreVertical, Phone, ArrowRightLeft, Ban, CalendarClock } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 type LeadList = { id: number; name: string; description: string | null; campaignId: number | null; active: boolean; campaignName: string | null; leadsCount: number };
@@ -720,6 +720,7 @@ function LeadActionsMenu({ leadId, leadName }: { leadId: number; leadName: strin
   const qc = useQueryClient();
   const { toast } = useToast();
   const [showReassign, setShowReassign] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
   const { data: campaigns } = useListCampaigns();
 
   const patchLead = (body: Record<string, unknown>, successMsg: string) =>
@@ -768,15 +769,27 @@ function LeadActionsMenu({ leadId, leadName }: { leadId: number; leadName: strin
         />
       )}
 
+      {showSchedule && (
+        <ScheduleCallbackModal
+          leadId={leadId}
+          leadName={leadName}
+          onClose={() => setShowSchedule(false)}
+          onScheduled={() => qc.invalidateQueries({ queryKey: getListLeadsQueryKey() })}
+        />
+      )}
+
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button className="p-1.5 rounded hover:bg-muted/60 transition-colors">
             <MoreVertical className="w-4 h-4 text-muted-foreground" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuContent align="end" className="w-52">
           <DropdownMenuItem onClick={() => callBack.mutate()} disabled={callBack.isPending}>
-            <Phone className="w-3.5 h-3.5 mr-2" /> Call Back
+            <Phone className="w-3.5 h-3.5 mr-2" /> Call Back (Now)
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setShowSchedule(true)}>
+            <CalendarClock className="w-3.5 h-3.5 mr-2" /> Schedule Callback…
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => setShowReassign(true)}>
             <ArrowRightLeft className="w-3.5 h-3.5 mr-2" /> Reassign Campaign
@@ -801,6 +814,100 @@ function LeadActionsMenu({ leadId, leadName }: { leadId: number; leadName: strin
         </DropdownMenuContent>
       </DropdownMenu>
     </>
+  );
+}
+
+// ── Schedule callback sub-modal ─────────────────────────────────────────────────
+function ScheduleCallbackModal({
+  leadId, leadName, onClose, onScheduled,
+}: {
+  leadId: number;
+  leadName: string;
+  onClose: () => void;
+  onScheduled: () => void;
+}) {
+  const { toast } = useToast();
+  // Default to "tomorrow at 10am" in the user's local time, formatted for
+  // <input type="datetime-local"> (YYYY-MM-DDTHH:mm, no timezone, no seconds).
+  const defaultWhen = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(10, 0, 0, 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  })();
+
+  const [when, setWhen] = useState(defaultWhen);
+  const [notes, setNotes] = useState("");
+
+  const schedule = useMutation({
+    mutationFn: async () => {
+      // datetime-local has no timezone — interpret it as the browser's local
+      // time and convert to ISO so the server stores an unambiguous instant.
+      const local = new Date(when);
+      if (isNaN(local.getTime())) throw new Error("Pick a valid date and time");
+      if (local.getTime() <= Date.now()) throw new Error("Pick a future date and time");
+      return customFetch("/api/callbacks/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leadId,
+          callbackAt: local.toISOString(),
+          notes: notes.trim() || undefined,
+        }),
+      });
+    },
+    onSuccess: () => {
+      toast({ title: `Callback scheduled for ${leadName || `#${leadId}`}` });
+      onScheduled();
+      onClose();
+    },
+    onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-lg w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <p className="text-sm font-semibold text-foreground">Schedule Callback</p>
+          <button onClick={onClose} className="p-1 rounded hover:bg-muted/60 transition-colors">
+            <X className="w-4 h-4 text-muted-foreground" />
+          </button>
+        </div>
+        <div className="p-4 space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Pick when you want the system to dial <span className="text-foreground font-medium">{leadName || "this lead"}</span> back. The dialer will pick it up automatically at the scheduled time.
+          </p>
+          <div className="space-y-1.5">
+            <Label className="text-[11px] text-muted-foreground uppercase tracking-wide">Callback time (your local time)</Label>
+            <input
+              type="datetime-local"
+              value={when}
+              onChange={e => setWhen(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm font-mono ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-[11px] text-muted-foreground uppercase tracking-wide">Notes (optional)</Label>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Reason for callback, what to mention, etc."
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 resize-none"
+            />
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={schedule.isPending}>
+            Cancel
+          </Button>
+          <Button size="sm" disabled={!when || schedule.isPending} onClick={() => schedule.mutate()}>
+            {schedule.isPending ? "Scheduling…" : "Schedule Callback"}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 

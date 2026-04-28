@@ -41,6 +41,7 @@ const createCampaignSchema = z.object({
   voice: z.string().nullish(),
   fromNumber: z.string().nullish(),
   transferNumber: z.string().nullish(),
+  transferMode: z.enum(["blind", "warm"]).default("blind"),
   backgroundSound: z.enum(["none", "office"]).default("none"),
   holdMusic: z.enum(["none", "jazz", "corporate", "smooth", "classical"]).default("none"),
   humanLike: z.string().default("true"),
@@ -115,6 +116,7 @@ const draftCampaignSchema = z.object({
   voiceProvider: z.enum(["elevenlabs", "deepgram", "cartesia"]).nullish(),
   fromNumber: z.string().nullish(),
   transferNumber: z.string().nullish(),
+  transferMode: z.enum(["blind", "warm"]).optional(),
   transferRules: z.string().nullish(),
   maxConcurrentCalls: z.number().min(1).max(100).optional(),
   backgroundSound: z.enum(["none", "office"]).optional(),
@@ -216,6 +218,7 @@ const updateCampaignSchema = z.object({
   voice: z.string().nullish(),
   fromNumber: z.string().nullish(),
   transferNumber: z.string().nullish(),
+  transferMode: z.enum(["blind", "warm"]).optional(),
   transferRules: z.string().nullish(),
   maxConcurrentCalls: z.number().min(1).max(100).optional(),
   backgroundSound: z.enum(["none", "office"]).optional(),
@@ -962,6 +965,7 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
         knowledgeBase: campaignsTable.knowledgeBase,
         vmDropMessage: campaignsTable.vmDropMessage,
         amdEnabled: campaignsTable.amdEnabled,
+        transferMode: campaignsTable.transferMode,
       })
       .from(campaignsTable)
       .where(eq(campaignsTable.id, campaignId))
@@ -993,6 +997,9 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       voice: liveVoice,
       voice_provider: liveVoiceProvider,
       transfer_number: transferNumber,
+      // Re-read from liveCampaign so edits made while the campaign is running
+      // take effect on the very next call (matches voice/vmDropMessage logic).
+      transfer_mode: ((liveCampaign?.transferMode ?? campaign.transferMode) === "warm" ? "warm" : "blind") as "blind" | "warm",
       campaign_id: String(campaignId),
       campaign_name: campaign.name,
       background_sound: backgroundSound !== "none" ? backgroundSound : undefined,
@@ -1484,6 +1491,7 @@ router.post("/campaigns/:id/test-call", authenticate, requireRole("admin"), asyn
     voice: voiceName,
     voice_provider: voiceProvider,
     transfer_number: transferNumber,
+    transfer_mode: (campaign.transferMode === "warm" ? "warm" : "blind") as "blind" | "warm",
     campaign_id: String(id),
     campaign_name: `[TEST] ${campaign.name}`,
     background_sound: backgroundSound !== "none" ? backgroundSound : undefined,

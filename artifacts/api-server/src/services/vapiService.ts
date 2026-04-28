@@ -30,6 +30,9 @@ export interface VapiCallPayload {
   campaign_id: string;
   campaign_name?: string;
   transfer_number?: string;
+  // "blind" → the AI hangs up the moment the call is bridged.
+  // "warm"  → the AI greets the human agent, summarizes the lead, then bridges.
+  transfer_mode?: "blind" | "warm";
   first_message?: string;   // Optional opening line (bot speaks first)
   lead_id?: string;
   lead_name?: string;
@@ -111,6 +114,7 @@ export function buildAssistant(payload: VapiCallPayload) {
   // Vapi's AI will call it autonomously when the conversation warrants a
   // hand-off. Without this tool entry the AI has no action to execute even if
   // it says "I'll transfer you now" — the call simply stays connected.
+  const isWarm = payload.transfer_mode === "warm";
   const tools = payload.transfer_number
     ? [
         {
@@ -121,9 +125,23 @@ export function buildAssistant(payload: VapiCallPayload) {
               number: payload.transfer_number,
               description:
                 "Transfer the caller to a live human agent. Use this when the caller is interested, agrees to move forward, asks to speak with a person, or has a question you cannot answer.",
-              transferPlan: {
-                mode: "blind-transfer",
-              },
+              transferPlan: isWarm
+                ? {
+                    // Warm transfer: AI stays on the line, summarizes the lead to
+                    // the human agent, then drops off. Vapi reads the message to
+                    // the human BEFORE bridging the customer in.
+                    mode: "warm-transfer-say-message",
+                    message: `Transferring an interested lead${
+                      payload.lead_name ? ` named ${payload.lead_name}` : ""
+                    }${
+                      payload.campaign_name ? ` from the ${payload.campaign_name} campaign` : ""
+                    }. They wanted to speak with a human. Connecting you now.`,
+                  }
+                : {
+                    // Blind transfer: Vapi hangs up the AI immediately and
+                    // bridges the customer straight to the human agent.
+                    mode: "blind-transfer",
+                  },
             },
           ],
         },
@@ -493,6 +511,7 @@ export async function buildInboundAssistantForNumber(
       campaign_id: String(campaign.id),
       campaign_name: campaign.name,
       transfer_number: campaign.transferNumber ?? undefined,
+      transfer_mode: (campaign.transferMode === "warm" ? "warm" : "blind") as "blind" | "warm",
       first_message: inboundFirstMessage,
       lead_name: callerName,
       knowledge_base: campaign.knowledgeBase ?? undefined,

@@ -30,6 +30,9 @@ export const campaignsTable = pgTable("campaigns", {
   useVapi: boolean("use_vapi").notNull().default(false),
   fromNumber: text("from_number"),
   transferNumber: text("transfer_number"),
+  // "blind" = drop the AI off, transfer the caller, AI hangs up.
+  // "warm"  = AI speaks a brief intro to the human agent first, then bridges.
+  transferMode: text("transfer_mode").default("blind"),
   backgroundSound: text("background_sound").default("none"),
   holdMusic: text("hold_music").default("none"),
   humanLike: text("human_like").default("true"),

@@ -277,6 +277,7 @@ export async function startCallbackScheduler(): Promise<void> {
             agent_prompt:    campaign.agentPrompt ?? "",
             voice:           campaign.voice ?? "default",
             transfer_number: campaign.transferNumber ?? undefined,
+            transfer_mode:   (campaign.transferMode === "warm" ? "warm" : "blind") as "blind" | "warm",
             campaign_id:     String(lead.campaignId),
             campaign_name:   campaign.name,
             amd_enabled:     campaign.amdEnabled !== false,
