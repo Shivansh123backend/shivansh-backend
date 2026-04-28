@@ -95,6 +95,16 @@ export default function SoftphonePage() {
   const [heldCalls, setHeldCalls]       = useState<Set<string>>(new Set());
   const [activeBrowserCall, setActiveBrowserCall] = useState<LiveCall | null>(null);
 
+  // Track WHICH kind of call is active so End-Call routes to the right teardown path
+  // "browser" = Vapi Web SDK session started locally
+  // "server"  = server-triggered Vapi call (no local SDK involvement)
+  const callModeRef    = useRef<"browser" | "server" | null>(null);
+  const [callMode, setCallModeState] = useState<"browser" | "server" | null>(null);
+  const serverCallPhoneRef = useRef<string>("");   // phone dialed for server calls
+
+  // Keep state and ref in sync so both callbacks (via ref) and render (via state) are correct
+  const setCallMode = (m: "browser" | "server" | null) => { callModeRef.current = m; setCallModeState(m); };
+
   const vapiRef  = useRef<Vapi | null>(null);
   const { toast } = useToast();
   const callTimer = useCallTimer(callState === "active");
@@ -150,13 +160,27 @@ export default function SoftphonePage() {
         if (vapiRef.current) { try { vapiRef.current.stop(); } catch { /* ignore */ } }
 
         const instance = new Vapi(publicKey);
-        instance.on("call-start", ()  => { setCallState("active"); });
-        instance.on("call-end",   ()  => { setCallState("idle"); setMuted(false); setSpeaking(false); });
-        instance.on("speech-start",() => setSpeaking(true));
-        instance.on("speech-end",  () => setSpeaking(false));
+        // Only respond to SDK lifecycle events when WE started a browser session.
+        // Server-triggered calls have no SDK involvement — ignoring these events
+        // for that mode prevents spurious state resets (mid-call drop bug).
+        instance.on("call-start", () => {
+          if (callModeRef.current === "browser") setCallState("active");
+        });
+        instance.on("call-end", () => {
+          if (callModeRef.current === "browser") {
+            setCallMode(null);
+            setCallState("idle");
+            setMuted(false);
+            setSpeaking(false);
+          }
+        });
+        instance.on("speech-start", () => setSpeaking(true));
+        instance.on("speech-end",   () => setSpeaking(false));
         instance.on("error", (e: unknown) => {
           console.error("[Vapi SDK]", e);
-          setSdkStatus("error");
+          // Don't flip to error status if a server call is underway; SDK errors
+          // during server calls are unrelated to the active call.
+          if (callModeRef.current !== "server") setSdkStatus("error");
         });
         vapiRef.current = instance;
         setSdkStatus("online");
@@ -176,23 +200,27 @@ export default function SoftphonePage() {
   // ── Outbound: server-triggered Vapi call ──────────────────────────────────
   const makeCall = useCallback(async () => {
     if (!phone.trim()) { toast({ title: "Enter a number first", variant: "destructive" }); return; }
+    const dialedPhone = phone.trim();
     setCallState("calling");
     try {
       await customFetch("/api/calls/manual", {
         method: "POST",
         body: JSON.stringify({
-          phone: phone.trim(),
+          phone: dialedPhone,
           campaignId: campaignId || undefined,
           provider: "vapi",
           fromNumber: callerId || undefined,
         }),
         headers: { "Content-Type": "application/json" },
       });
-      toast({ title: "Call initiated via Vapi", description: `Calling ${phone.trim()}` });
+      setCallMode("server");
+      serverCallPhoneRef.current = dialedPhone;
+      toast({ title: "Call initiated via Vapi", description: `Calling ${dialedPhone}` });
       setPhone("");
       setCallState("active");
       refetchLive();
     } catch (err) {
+      setCallMode(null);
       setCallState("idle");
       toast({ title: "Call failed", description: err instanceof Error ? err.message : "Check Vapi config", variant: "destructive" });
     }
@@ -203,6 +231,7 @@ export default function SoftphonePage() {
     if (!vapiRef.current || sdkStatus !== "online") return;
     try { await navigator.mediaDevices.getUserMedia({ audio: true }); }
     catch { toast({ title: "Mic blocked", description: "Allow microphone access", variant: "destructive" }); return; }
+    setCallMode("browser");
     setCallState("calling");
     try {
       await vapiRef.current.start({
@@ -216,17 +245,57 @@ export default function SoftphonePage() {
         voice: { provider: "11labs" as const, voiceId: "21m00Tcm4TlvDq8ikWAM" },
       });
     } catch (err) {
+      setCallMode(null);
       setCallState("idle");
       toast({ title: "Session failed", description: err instanceof Error ? err.message : "Could not connect", variant: "destructive" });
     }
   }, [sdkStatus, toast]);
 
+  // End a local browser SDK session
   const endBrowserSession = useCallback(() => {
-    vapiRef.current?.stop();
+    setCallMode(null);
+    try { vapiRef.current?.stop(); } catch { /* ignore */ }
     setCallState("idle");
     setMuted(false);
     setSpeaking(false);
   }, []);
+
+  // End a server-triggered call — find its callControlId in liveCalls and hang up via API.
+  // liveCalls is captured via a ref so the callback always has the freshest value.
+  const liveCallsRef = useRef<LiveCall[]>([]);
+  useEffect(() => { liveCallsRef.current = liveCalls; }, [liveCalls]);
+
+  const endServerCall = useCallback(async () => {
+    setCallMode(null);
+    setCallState("idle");
+    setMuted(false);
+
+    // Find the call in the live list — match by phone number (digits only)
+    const digits = (s?: string | null) => (s || "").replace(/\D/g, "");
+    const target = digits(serverCallPhoneRef.current);
+    const match = liveCallsRef.current.find(c => c.callControlId && digits(c.phoneNumber) === target);
+
+    if (match?.callControlId) {
+      try {
+        await customFetch(`/api/calls/${encodeURIComponent(match.callControlId)}/hangup`, { method: "POST" });
+        toast({ title: "Call ended" });
+      } catch {
+        toast({ title: "Call ended (locally)", description: "Could not confirm hangup with server" });
+      }
+    } else {
+      // Call not yet visible in live list — still reset UI. Vapi will clean it up on timeout.
+      toast({ title: "Call ended" });
+    }
+    serverCallPhoneRef.current = "";
+    refetchLive();
+    refetchCdr();
+  }, [toast, refetchLive, refetchCdr]);
+
+  // Single dispatcher — routes End Call to the correct teardown based on call mode
+  const handleEndCall = useCallback(() => {
+    if (callModeRef.current === "server") endServerCall();
+    else endBrowserSession();
+  }, [endServerCall, endBrowserSession]);
 
   const toggleMute = useCallback(() => {
     if (!vapiRef.current || callState !== "active") return;
@@ -442,13 +511,13 @@ export default function SoftphonePage() {
                 <Loader2 className="w-4 h-4 animate-spin" />Connecting…
               </button>
             ) : (
-              <button onClick={endBrowserSession}
+              <button onClick={handleEndCall}
                 className="w-full h-11 rounded-lg bg-red-600 hover:bg-red-700 text-white font-mono text-sm flex items-center justify-center gap-2 transition-all">
                 <PhoneOff className="w-4 h-4" />End Call
               </button>
             )}
 
-            {/* Browser AI session */}
+            {/* Browser AI session — only show when idle or when a browser session is active */}
             <div className="pt-1 border-t border-border/40">
               <p className="text-[9px] font-mono uppercase text-muted-foreground mb-1.5 tracking-wider">Browser AI Session</p>
               {callState === "idle" ? (
@@ -456,7 +525,7 @@ export default function SoftphonePage() {
                   className="w-full h-9 rounded border border-violet-500/30 bg-violet-500/5 hover:bg-violet-500/10 disabled:opacity-40 disabled:cursor-not-allowed text-violet-300 font-mono text-xs flex items-center justify-center gap-2 transition-all">
                   <Headphones className="w-3.5 h-3.5" />Connect Browser
                 </button>
-              ) : callState === "active" ? (
+              ) : callMode === "browser" && callState === "active" ? (
                 <div className="space-y-1.5">
                   <div className="rounded border border-violet-500/30 bg-violet-500/5 p-2 text-center">
                     <div className="flex items-center justify-center gap-1.5 mb-1">
