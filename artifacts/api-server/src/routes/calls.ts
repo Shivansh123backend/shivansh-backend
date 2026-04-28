@@ -459,35 +459,92 @@ router.get("/calls/stats/today", authenticate, async (req, res): Promise<void> =
 
 // ── Telnyx WebRTC token — must be before /:id ──────────────────────────────
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
-const TELNYX_WEBRTC_CONNECTION_ID = "2935198916355818730"; // aiagentshivansh credential connection
+// Dedicated WebRTC credential connection — overridable via env so it can be
+// changed without a redeploy if the Telnyx account is restructured.
+const TELNYX_WEBRTC_CONNECTION_ID =
+  process.env.TELNYX_WEBRTC_CONNECTION_ID ??
+  process.env.TELNYX_SIP_CONNECTION_ID ??
+  "2935198916355818730"; // aiagentshivansh credential connection
 
 router.get("/calls/webrtc-token", authenticate, async (req, res): Promise<void> => {
   if (!TELNYX_API_KEY) {
     res.status(503).json({ error: "TELNYX_API_KEY not configured" });
     return;
   }
-  try {
+
+  // Try creating a credential with the WebRTC connection ID, then fall back to
+  // the main TELNYX_CONNECTION_ID if that fails (e.g. connection type mismatch).
+  const connectionIds = [
+    TELNYX_WEBRTC_CONNECTION_ID,
+    process.env.TELNYX_CONNECTION_ID,
+  ].filter(Boolean) as string[];
+
+  // De-duplicate (in case both env vars point to same ID)
+  const uniqueIds = [...new Set(connectionIds)];
+
+  let credId: string | null = null;
+  let lastTelnyxError = "Failed to create Telnyx credential";
+
+  for (const connId of uniqueIds) {
     const credRes = await fetch("https://api.telnyx.com/v2/telephony_credentials", {
       method: "POST",
       headers: { Authorization: `Bearer ${TELNYX_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        connection_id: TELNYX_WEBRTC_CONNECTION_ID,
-        name: `nexuscall-agent-${req.user!.userId}-${Date.now()}`,
+        connection_id: connId,
+        name: `shivansh-agent-${req.user!.userId}-${Date.now()}`,
       }),
     });
-    if (!credRes.ok) {
-      const err = await credRes.json() as { errors?: Array<{ detail: string }> };
-      res.status(502).json({ error: err.errors?.[0]?.detail ?? "Failed to create Telnyx credential" });
-      return;
-    }
-    const credData = await credRes.json() as { data: { id: string } };
-    const credId = credData.data.id;
 
+    if (credRes.ok) {
+      const credData = await credRes.json() as { data: { id: string } };
+      credId = credData.data.id;
+      break;
+    }
+
+    // Log the actual Telnyx error so it's visible in PM2 logs
+    let errBody: unknown;
+    try { errBody = await credRes.json(); } catch { errBody = await credRes.text().catch(() => credRes.status); }
+    logger.warn({ connId, status: credRes.status, body: errBody }, "webrtc-token: Telnyx credential creation failed — trying next connection ID");
+    const errDetail = (errBody as { errors?: Array<{ detail: string }> })?.errors?.[0]?.detail;
+    lastTelnyxError = errDetail ?? `Telnyx returned ${credRes.status}`;
+  }
+
+  // Fallback: if dynamic credential creation failed, try to get a token for a
+  // pre-existing telephony credential looked up by SIP username from env.
+  if (!credId) {
+    const sipUsername = process.env.TELNYX_SIP_USERNAME;
+    if (sipUsername) {
+      try {
+        const listRes = await fetch(
+          `https://api.telnyx.com/v2/telephony_credentials?filter[sip_username]=${encodeURIComponent(sipUsername)}&page[size]=1`,
+          { headers: { Authorization: `Bearer ${TELNYX_API_KEY}` } },
+        );
+        if (listRes.ok) {
+          const listData = await listRes.json() as { data?: Array<{ id: string }> };
+          if (listData.data?.[0]?.id) {
+            credId = listData.data[0].id;
+            logger.info({ credId, sipUsername }, "webrtc-token: using pre-existing SIP credential");
+          }
+        }
+      } catch (lookupErr) {
+        logger.warn({ lookupErr }, "webrtc-token: SIP credential lookup failed");
+      }
+    }
+  }
+
+  if (!credId) {
+    res.status(502).json({ error: lastTelnyxError });
+    return;
+  }
+
+  try {
     const tokenRes = await fetch(`https://api.telnyx.com/v2/telephony_credentials/${credId}/token`, {
       method: "POST",
       headers: { Authorization: `Bearer ${TELNYX_API_KEY}` },
     });
     if (!tokenRes.ok) {
+      const body = await tokenRes.text().catch(() => "");
+      logger.warn({ credId, status: tokenRes.status, body }, "webrtc-token: Telnyx token fetch failed");
       res.status(502).json({ error: "Failed to get Telnyx WebRTC token" });
       return;
     }
