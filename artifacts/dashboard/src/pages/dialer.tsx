@@ -10,6 +10,7 @@ import {
   Phone, PhoneOff, Mic, MicOff, Delete, Loader2,
   Radio, AlertCircle, PhoneIncoming, PhoneCall,
   Pause, Play, UserPlus, ArrowRightLeft, Clock,
+  Sparkles, PhoneForwarded,
 } from "lucide-react";
 // @ts-expect-error — Telnyx SDK types bundled internally
 import { TelnyxRTC } from "@telnyx/webrtc";
@@ -109,14 +110,20 @@ function useCallTimer(running: boolean) {
   return `${mm}:${ss}`;
 }
 
+type Campaign = { id: number; name: string };
+
 // ── Main Dialer Component ─────────────────────────────────────────────────────
 export default function DialerPage() {
+  // "telnyx" = browser WebRTC via Telnyx SIP, "vapi" = AI-initiated outbound via Vapi
+  const [providerMode, setProviderMode] = useState<"telnyx" | "vapi">("vapi");
   const [sipState, setSipState] = useState<SipState>("disconnected");
   const [callState, setCallState] = useState<CallState>("idle");
   const [phone, setPhone] = useState("");
   const [callerId, setCallerId] = useState("");
   const [muted, setMuted] = useState(false);
   const [activeCallPhone, setActiveCallPhone] = useState("");
+  const [vapiCampaignId, setVapiCampaignId] = useState<number | "">("");
+  const [vapiCalling, setVapiCalling] = useState(false);
   const clientRef = useRef<InstanceType<typeof TelnyxRTC> | null>(null);
   const callRef = useRef<ReturnType<InstanceType<typeof TelnyxRTC>["newCall"]> | null>(null);
   const { toast } = useToast();
@@ -126,6 +133,13 @@ export default function DialerPage() {
   const { data: numbers = [] } = useQuery<PhoneNumber[]>({
     queryKey: ["phone-numbers"],
     queryFn: () => customFetch("/api/numbers") as Promise<PhoneNumber[]>,
+  });
+
+  // Campaigns list for Vapi mode context selector
+  const { data: campaigns = [] } = useQuery<Campaign[]>({
+    queryKey: ["campaigns-list"],
+    queryFn: () => customFetch("/api/campaigns?limit=100") as Promise<Campaign[]>,
+    staleTime: 60_000,
   });
 
   // ── Active AI calls (poll every 2s) — to render live call controls ─────────
@@ -332,6 +346,40 @@ export default function DialerPage() {
     }
   };
 
+  // ── Make Vapi call (backend-initiated outbound AI call) ───────────────────
+  const makeVapiCall = useCallback(async () => {
+    if (!phone.trim()) {
+      toast({ title: "Enter a number first", variant: "destructive" });
+      return;
+    }
+    setVapiCalling(true);
+    try {
+      await customFetch("/api/calls/manual", {
+        method: "POST",
+        body: JSON.stringify({
+          phone: phone.trim(),
+          campaignId: vapiCampaignId || undefined,
+          provider: "vapi",
+        }),
+        headers: { "Content-Type": "application/json" },
+      });
+      toast({
+        title: "Vapi call initiated",
+        description: `AI is calling ${phone.trim()} — watch the Active Calls panel below.`,
+      });
+      setPhone("");
+      refetchLive();
+    } catch (err: unknown) {
+      toast({
+        title: "Call failed",
+        description: err instanceof Error ? err.message : "Check Vapi config / phone number setup",
+        variant: "destructive",
+      });
+    } finally {
+      setVapiCalling(false);
+    }
+  }, [phone, vapiCampaignId, toast, refetchLive]);
+
   // ── Make call ─────────────────────────────────────────────────────────────
   const makeCall = () => {
     if (!clientRef.current || sipState !== "connected") {
@@ -385,27 +433,77 @@ export default function DialerPage() {
     <Layout>
       <PageHeader
         title="Dialer"
-        subtitle="Telnyx WebRTC Softphone"
-        action={<SipBadge state={sipState} />}
+        subtitle={providerMode === "vapi" ? "Vapi AI Calls" : "Telnyx WebRTC Softphone"}
+        action={providerMode === "telnyx" ? <SipBadge state={sipState} /> : (
+          <span className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-400" />
+            Vapi Ready
+          </span>
+        )}
       />
       <div className="p-6 flex justify-center">
         <div className="w-full max-w-sm space-y-4">
 
-          {/* Caller ID selector */}
-          <div>
-            <label className="text-[10px] font-mono uppercase text-muted-foreground block mb-1">Caller ID</label>
-            <select
-              value={callerId}
-              onChange={e => setCallerId(e.target.value)}
-              disabled={inCall}
-              className="w-full bg-background border border-border rounded px-3 py-2 text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          {/* Provider mode toggle */}
+          <div className="flex rounded-lg border border-border overflow-hidden">
+            <button
+              onClick={() => setProviderMode("vapi")}
+              className={cn(
+                "flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-mono transition-colors",
+                providerMode === "vapi"
+                  ? "bg-violet-600 text-white"
+                  : "bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10"
+              )}
             >
-              {numbers.map(n => (
-                <option key={n.id} value={n.number}>{n.number}{n.friendlyName ? ` — ${n.friendlyName}` : ""}</option>
-              ))}
-              {numbers.length === 0 && <option value="">No numbers configured</option>}
-            </select>
+              <Sparkles className="w-3 h-3" />Vapi AI
+            </button>
+            <button
+              onClick={() => setProviderMode("telnyx")}
+              className={cn(
+                "flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-mono transition-colors",
+                providerMode === "telnyx"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-white/5 text-muted-foreground hover:text-foreground hover:bg-white/10"
+              )}
+            >
+              <Radio className="w-3 h-3" />Telnyx SIP
+            </button>
           </div>
+
+          {/* Vapi mode: campaign context selector */}
+          {providerMode === "vapi" && (
+            <div>
+              <label className="text-[10px] font-mono uppercase text-muted-foreground block mb-1">Campaign (optional)</label>
+              <select
+                value={vapiCampaignId}
+                onChange={e => setVapiCampaignId(e.target.value ? Number(e.target.value) : "")}
+                className="w-full bg-background border border-border rounded px-3 py-2 text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="">— Ad-hoc (no campaign) —</option>
+                {campaigns.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Telnyx mode: Caller ID selector */}
+          {providerMode === "telnyx" && (
+            <div>
+              <label className="text-[10px] font-mono uppercase text-muted-foreground block mb-1">Caller ID</label>
+              <select
+                value={callerId}
+                onChange={e => setCallerId(e.target.value)}
+                disabled={inCall}
+                className="w-full bg-background border border-border rounded px-3 py-2 text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {numbers.map(n => (
+                  <option key={n.id} value={n.number}>{n.number}{n.friendlyName ? ` — ${n.friendlyName}` : ""}</option>
+                ))}
+                {numbers.length === 0 && <option value="">No numbers configured</option>}
+              </select>
+            </div>
+          )}
 
           {/* Active call overlay */}
           {inCall && (
@@ -465,6 +563,19 @@ export default function DialerPage() {
 
             {/* Call controls */}
             {!inCall ? (
+              providerMode === "vapi" ? (
+                <Button
+                  className="w-full h-12 bg-violet-600 hover:bg-violet-700 text-white font-mono uppercase tracking-wider text-sm"
+                  onClick={makeVapiCall}
+                  disabled={vapiCalling || !phone.trim()}
+                >
+                  {vapiCalling ? (
+                    <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Initiating…</span>
+                  ) : (
+                    <span className="flex items-center gap-2"><PhoneForwarded className="w-4 h-4" />Call via Vapi AI</span>
+                  )}
+                </Button>
+              ) : (
               <Button
                 className="w-full h-12 bg-green-600 hover:bg-green-700 text-white font-mono uppercase tracking-wider text-sm"
                 onClick={makeCall}
@@ -476,6 +587,7 @@ export default function DialerPage() {
                   <span className="flex items-center gap-2"><Phone className="w-4 h-4" />Call</span>
                 )}
               </Button>
+              )
             ) : (
               <div className="flex gap-2">
                 {/* Mute */}
@@ -676,19 +788,29 @@ export default function DialerPage() {
             )}
           </div>
 
-          {/* Reconnect button if error/disconnected */}
-          {(sipState === "error" || sipState === "disconnected") && (
+          {/* Reconnect button if error/disconnected — only in Telnyx mode */}
+          {providerMode === "telnyx" && (sipState === "error" || sipState === "disconnected") && (
             <button onClick={connect}
               className="w-full flex items-center justify-center gap-2 py-2 rounded border border-border text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all">
               <Radio className="w-3 h-3" />Reconnect SIP
             </button>
           )}
 
-          {sipState === "error" && (
+          {providerMode === "telnyx" && sipState === "error" && (
             <div className="flex items-start gap-2 bg-red-500/5 border border-red-500/20 rounded px-3 py-2">
               <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
               <p className="text-[10px] font-mono text-red-300">
                 SIP connection failed. Check your network and click Reconnect.
+              </p>
+            </div>
+          )}
+
+          {/* Vapi mode info tip */}
+          {providerMode === "vapi" && (
+            <div className="flex items-start gap-2 bg-violet-500/5 border border-violet-500/20 rounded px-3 py-2">
+              <Sparkles className="w-3.5 h-3.5 text-violet-400 shrink-0 mt-0.5" />
+              <p className="text-[10px] font-mono text-violet-300">
+                Vapi AI will call the number on your behalf. The call appears in the Active AI Calls panel once connected.
               </p>
             </div>
           )}

@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { campaignsTable, aiAgentsTable, voicesTable, phoneNumbersTable } from "@workspace/db";
-import { eq, and, asc, desc } from "drizzle-orm";
+import { eq, and, asc, desc, sql } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { triggerCall } from "../services/workerService.js";
 import { normalisePhone } from "../lib/phone.js";
@@ -17,10 +17,13 @@ const manualCallSchema = z.object({
   // Optional caller ID override (softphone dialpad)
   from: z.string().optional().nullable(),
   fromNumber: z.string().optional().nullable(),
+  // Force a specific telephony provider ("vapi" | "telnyx")
+  provider: z.string().optional().nullable(),
 }).transform((data) => ({
   phone: data.phone,
   campaign_id: Number(data.campaign_id ?? data.campaignId ?? 0) || 0,
   fromOverride: data.from ?? data.fromNumber ?? null,
+  provider: data.provider ?? null,
 }));
 
 const DEFAULT_AGENT_SCRIPT = `You are making a quick, friendly outbound call. Keep it warm and human — short sentences, not a script.
@@ -44,7 +47,8 @@ async function handleManualCall(req: import("express").Request, res: import("exp
     return;
   }
 
-  const { phone: rawPhone, campaign_id, fromOverride } = parsed.data;
+  const { phone: rawPhone, campaign_id, fromOverride, provider } = parsed.data;
+  const useVapi = provider === "vapi";
 
   // Normalise the dialed number to E.164 so Telnyx accepts any common
   // user-entered format (e.g. "813-872-4841", "8138724841", "(813) 872-4841").
@@ -116,14 +120,32 @@ async function handleManualCall(req: import("express").Request, res: import("exp
   }
 
   // Final fallback: any active number in the pool (works for ad-hoc dials too)
+  // When using Vapi, prefer numbers that have a vapiPhoneNumberId set.
+  let vapiPhoneNumberId: string | undefined;
   if (!fromNumber) {
     const [anyRow] = await db
       .select()
       .from(phoneNumbersTable)
-      .where(eq(phoneNumbersTable.status, "active"))
+      .where(
+        useVapi
+          ? and(eq(phoneNumbersTable.status, "active"), sql`${phoneNumbersTable.vapiPhoneNumberId} IS NOT NULL`)
+          : eq(phoneNumbersTable.status, "active"),
+      )
       .orderBy(asc(phoneNumbersTable.priority), desc(phoneNumbersTable.id))
       .limit(1);
-    if (anyRow) fromNumber = anyRow.phoneNumber;
+    if (anyRow) {
+      fromNumber = anyRow.phoneNumber;
+      vapiPhoneNumberId = anyRow.vapiPhoneNumberId ?? undefined;
+    }
+  }
+  // If Vapi mode but vapiPhoneNumberId not yet resolved, look it up from the selected fromNumber
+  if (useVapi && !vapiPhoneNumberId && fromNumber) {
+    const [numRow] = await db
+      .select({ vapiPhoneNumberId: phoneNumbersTable.vapiPhoneNumberId })
+      .from(phoneNumbersTable)
+      .where(eq(phoneNumbersTable.phoneNumber, fromNumber))
+      .limit(1);
+    vapiPhoneNumberId = numRow?.vapiPhoneNumberId ?? undefined;
   }
   if (!fromNumber) fromNumber = process.env.DEFAULT_FROM_NUMBER ?? null;
 
@@ -134,6 +156,7 @@ async function handleManualCall(req: import("express").Request, res: import("exp
     voice: voiceName,
     transfer_number: transferNumber,
     campaign_id,
+    ...(useVapi && { use_vapi: true, vapi_phone_number_id: vapiPhoneNumberId }),
   });
 
   if (result.success) {
