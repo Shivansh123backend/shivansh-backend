@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
 import axios from "axios";
 import { db } from "@workspace/db";
 import { leadsTable, campaignsTable, dncListTable, leadListsTable } from "@workspace/db";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, or } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { logger } from "../lib/logger.js";
 import { z } from "zod";
