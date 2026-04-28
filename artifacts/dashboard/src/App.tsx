@@ -21,6 +21,7 @@ import AnalyticsPage from "@/pages/analytics";
 import SettingsPage from "@/pages/settings";
 import VoicesPage from "@/pages/voices";
 import DialerPage from "@/pages/dialer";
+import SoftphonePage from "@/pages/softphone";
 import CallbacksPage from "@/pages/callbacks";
 import DncPage from "@/pages/dnc";
 import ComingSoonPage from "@/pages/coming-soon";
@@ -135,7 +136,7 @@ function Router() {
         <ProtectedRoute component={() => <ComingSoonPage title="SMS Logs" />} adminOnly />
       </Route>
       <Route path="/softphone">
-        <ProtectedRoute component={() => <ComingSoonPage title="Softphone" />} adminOnly />
+        <ProtectedRoute component={SoftphonePage} adminOnly />
       </Route>
       <Route path="/ai-optimizer">
         <ProtectedRoute component={() => <ComingSoonPage title="AI Optimizer" />} adminOnly />
