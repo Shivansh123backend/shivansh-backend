@@ -12,6 +12,7 @@ import LeadsPage from "@/pages/leads";
 import ListsPage from "@/pages/lists";
 import DispositionsPage from "@/pages/dispositions";
 import UsersPage from "@/pages/users";
+import HumanAgentsPage from "@/pages/human-agents";
 import QueuesPage from "@/pages/queues";
 import LiveMonitorPage from "@/pages/live-monitor";
 import NumbersPage from "@/pages/numbers";
@@ -127,7 +128,7 @@ function Router() {
         <ProtectedRoute component={() => <ComingSoonPage title="Bulk Upload" />} adminOnly />
       </Route>
       <Route path="/human-agents">
-        <ProtectedRoute component={() => <ComingSoonPage title="Human Agents" />} adminOnly />
+        <ProtectedRoute component={HumanAgentsPage} adminOnly />
       </Route>
       <Route path="/send-sms">
         <ProtectedRoute component={() => <ComingSoonPage title="Send SMS" />} adminOnly />

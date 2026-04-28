@@ -3,8 +3,9 @@ import { db } from "@workspace/db";
 import { humanAgentsTable, callsTable } from "@workspace/db";
 import { eq, gte, and, sql, isNotNull } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
-import { getAgentStatus, setAgentStatus } from "../lib/redis.js";
+import { getAgentStatus, setAgentStatus, getRedisClient } from "../lib/redis.js";
 import { emitToSupervisors } from "../websocket/index.js";
+import { logger } from "../lib/logger.js";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -190,6 +191,36 @@ router.get("/agents/available", authenticate, async (req, res): Promise<void> =>
     status: agent.status,
     available: true,
   });
+});
+
+// DELETE /agents/:id — remove a human agent from the pool (admin only)
+router.delete("/agents/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid agent id" });
+    return;
+  }
+
+  const [deleted] = await db
+    .delete(humanAgentsTable)
+    .where(eq(humanAgentsTable.id, id))
+    .returning({ id: humanAgentsTable.id, name: humanAgentsTable.name });
+
+  if (!deleted) {
+    res.status(404).json({ error: "Agent not found" });
+    return;
+  }
+
+  // Best-effort: clear Redis presence and notify supervisors. Failures are
+  // logged but do not block the delete (the row is already gone in the DB).
+  try {
+    await getRedisClient().del(`agent_status:${id}`);
+  } catch (err) {
+    logger.warn({ err, agentId: id }, "Redis clear on agent delete failed");
+  }
+  emitToSupervisors("agent_removed", { agent_id: id, name: deleted.name });
+
+  res.json({ ok: true, id: deleted.id, name: deleted.name });
 });
 
 // GET /agents — list all human agents with live Redis status + current_call
