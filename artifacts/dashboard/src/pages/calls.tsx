@@ -10,7 +10,7 @@ import { StatusBadge, DispositionBadge } from "./dashboard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Filter, ChevronDown, Phone, FileText, Download, Tag, Play, ExternalLink, RefreshCw, PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { Filter, ChevronDown, Phone, FileText, Download, Tag, Play, ExternalLink, RefreshCw, PhoneIncoming, PhoneOutgoing, Trash2 } from "lucide-react";
 
 function formatDuration(seconds?: number | null) {
   if (!seconds) return "-";
@@ -258,6 +258,73 @@ function RecordingButton({ row, onRefreshed }: { row: CdrRow; onRefreshed: () =>
   );
 }
 
+// ── Delete button — permanently removes a record from history ─────────────────
+function DeleteButton({
+  id,
+  endpoint,
+  onDeleted,
+}: {
+  id: number;
+  endpoint: "calls" | "call-logs";
+  onDeleted: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const { toast } = useToast();
+
+  const handleDelete = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem("auth_token");
+      const url = endpoint === "calls" ? `/api/calls/${id}` : `/api/call-logs/${id}`;
+      const res = await fetch(url, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+      toast({ title: "Record removed from history" });
+      onDeleted();
+    } catch {
+      toast({ title: "Failed to delete record", variant: "destructive" });
+    } finally {
+      setLoading(false);
+      setConfirming(false);
+    }
+  };
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="text-[10px] font-mono text-red-400">Remove this record?</span>
+        <button
+          onClick={handleDelete}
+          disabled={loading}
+          className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono rounded border border-red-500/40 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+        >
+          {loading ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : "Yes, remove"}
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          className="px-2 py-1 text-[10px] font-mono rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setConfirming(true)}
+      className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono rounded border border-border text-muted-foreground hover:text-red-400 hover:border-red-500/30 transition-colors"
+      title="Remove from history"
+    >
+      <Trash2 className="w-2.5 h-2.5" />
+      Remove
+    </button>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function CallsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("cdr");
@@ -468,7 +535,7 @@ export default function CallsPage() {
                         <tr key={`${c.id}-expanded`} className="border-b border-border/30 bg-white/2">
                           <td colSpan={9} className="px-6 py-4 space-y-3">
                             {/* Actions row */}
-                            <div className="flex items-center gap-4 pb-2 border-b border-border/30">
+                            <div className="flex items-center gap-4 pb-2 border-b border-border/30 flex-wrap">
                               <DispositionUpdater
                                 id={parseInt(c.id.replace(/^[cl]-/, ""))}
                                 current={c.disposition}
@@ -480,6 +547,13 @@ export default function CallsPage() {
                                 id={parseInt(c.id.replace(/^[cl]-/, ""))}
                               />
                               <RecordingButton row={c} onRefreshed={refetchCalls} />
+                              <div className="ml-auto">
+                                <DeleteButton
+                                  id={parseInt(c.id.replace(/^[cl]-/, ""))}
+                                  endpoint={c.source === "call_logs" ? "call-logs" : "calls"}
+                                  onDeleted={refetchCalls}
+                                />
+                              </div>
                             </div>
 
                             {c.summary && (
@@ -589,7 +663,7 @@ export default function CallsPage() {
                         <tr key={`log-${log.id}-expanded`} className="border-b border-border/30 bg-white/2">
                           <td colSpan={9} className="px-6 py-4 space-y-3">
                             {/* Actions row */}
-                            <div className="flex items-center gap-4 pb-2 border-b border-border/30">
+                            <div className="flex items-center gap-4 pb-2 border-b border-border/30 flex-wrap">
                               <DispositionUpdater
                                 id={log.id}
                                 current={log.disposition}
@@ -609,6 +683,13 @@ export default function CallsPage() {
                                   <ExternalLink className="w-2 h-2" />
                                 </a>
                               )}
+                              <div className="ml-auto">
+                                <DeleteButton
+                                  id={log.id}
+                                  endpoint="call-logs"
+                                  onDeleted={() => callLogsQuery.refetch()}
+                                />
+                              </div>
                             </div>
 
                             {log.summary && (

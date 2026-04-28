@@ -366,3 +366,18 @@ async function removeActiveCallByPhone(phone: string, campaignId: number): Promi
     logger.warn({ err, phone }, "Redis removeActiveCallByPhone failed");
   }
 }
+
+// ── DELETE /call-logs/:id — remove a call log entry from history ───────────────
+router.delete("/call-logs/:id", authenticate, async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id as string, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
+
+  const [deleted] = await db
+    .delete(callLogsTable)
+    .where(eq(callLogsTable.id, id))
+    .returning({ id: callLogsTable.id });
+
+  if (!deleted) { res.status(404).json({ error: "Call log not found" }); return; }
+
+  res.json({ ok: true, id: deleted.id });
+});

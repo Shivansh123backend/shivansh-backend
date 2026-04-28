@@ -613,6 +613,22 @@ router.patch("/calls/:id", authenticate, async (req, res): Promise<void> => {
   res.json(call);
 });
 
+// ── DELETE /calls/:id — remove a CDR entry from history ──────────────────────
+router.delete("/calls/:id", authenticate, async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(rawId, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid call ID" }); return; }
+
+  const [deleted] = await db
+    .delete(callsTable)
+    .where(eq(callsTable.id, id))
+    .returning({ id: callsTable.id });
+
+  if (!deleted) { res.status(404).json({ error: "Call not found" }); return; }
+
+  res.json({ ok: true, id: deleted.id });
+});
+
 // Transfer to human agent
 router.post("/calls/transfer", authenticate, async (req, res): Promise<void> => {
   const parsed = transferSchema.safeParse(req.body);

@@ -61,12 +61,12 @@ async function vapiCallFallback(payload: EnqueueCallPayload): Promise<TriggerCal
   if (!vapiPhoneNumberId && payload.from_number) {
     try {
       const { db } = await import("../lib/db.js");
-      const { phoneNumbers } = await import("@workspace/db");
+      const { phoneNumbersTable } = await import("@workspace/db");
       const { eq } = await import("drizzle-orm");
       const rows = await db
-        .select({ v: phoneNumbers.vapiPhoneNumberId })
-        .from(phoneNumbers)
-        .where(eq(phoneNumbers.phoneNumber, payload.from_number))
+        .select({ v: phoneNumbersTable.vapiPhoneNumberId })
+        .from(phoneNumbersTable)
+        .where(eq(phoneNumbersTable.phoneNumber, payload.from_number))
         .limit(1);
       vapiPhoneNumberId = rows[0]?.v ?? undefined;
     } catch {
