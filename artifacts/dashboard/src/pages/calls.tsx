@@ -333,6 +333,8 @@ export default function CallsPage() {
   const [logFilterCampaign, setLogFilterCampaign] = useState("__all__");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [massDeleting, setMassDeleting] = useState(false);
 
   const qc = useQueryClient();
   const socketRef = useRef<Socket | null>(null);
@@ -399,6 +401,33 @@ export default function CallsPage() {
     (campaigns ?? []).map((c: { id: number; name: string }) => [c.id, c.name]),
   );
 
+  const { toast } = useToast();
+
+  const handleMassDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setMassDeleting(true);
+    const token = localStorage.getItem("auth_token");
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const rows = (calls ?? []).filter((c) => selectedIds.has(c.id));
+    const results = await Promise.allSettled(
+      rows.map((c) => {
+        const numId = parseInt(c.id.replace(/^[cl]-/, ""));
+        const endpoint = c.source === "call_logs" ? "call-logs" : "calls";
+        return fetch(`/api/${endpoint}/${numId}`, { method: "DELETE", headers });
+      }),
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    toast({
+      title: failed === 0
+        ? `${rows.length} record${rows.length !== 1 ? "s" : ""} removed`
+        : `${rows.length - failed} removed, ${failed} failed`,
+      variant: failed > 0 ? "destructive" : "default",
+    });
+    setSelectedIds(new Set());
+    refetchCalls();
+    setMassDeleting(false);
+  };
+
   return (
     <Layout>
       <PageHeader
@@ -438,9 +467,9 @@ export default function CallsPage() {
       {/* ── Full CDR tab ────────────────────────────────────────────────────── */}
       {activeTab === "cdr" && (
         <>
-          <div className="px-6 py-3 border-b border-border flex items-center gap-3">
+          <div className="px-6 py-3 border-b border-border flex items-center gap-3 flex-wrap">
             <Filter className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-            <Select value={filterCampaign} onValueChange={setFilterCampaign}>
+            <Select value={filterCampaign} onValueChange={(v) => { setFilterCampaign(v); setSelectedIds(new Set()); }}>
               <SelectTrigger className="font-mono text-xs h-7 w-48">
                 <SelectValue placeholder="All campaigns" />
               </SelectTrigger>
@@ -451,7 +480,7 @@ export default function CallsPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={filterDirection} onValueChange={setFilterDirection}>
+            <Select value={filterDirection} onValueChange={(v) => { setFilterDirection(v); setSelectedIds(new Set()); }}>
               <SelectTrigger className="font-mono text-xs h-7 w-36">
                 <SelectValue placeholder="All directions" />
               </SelectTrigger>
@@ -464,12 +493,48 @@ export default function CallsPage() {
             {callsLoading && (
               <span className="text-[10px] font-mono text-muted-foreground animate-pulse">loading...</span>
             )}
+            {/* Bulk-action bar — visible only when rows are checked */}
+            {selectedIds.size > 0 && (
+              <div className="ml-auto flex items-center gap-3">
+                <span className="text-[10px] font-mono text-muted-foreground">
+                  {selectedIds.size} selected
+                </span>
+                <button
+                  onClick={() => setSelectedIds(new Set())}
+                  className="text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={handleMassDelete}
+                  disabled={massDeleting}
+                  className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-mono rounded border border-red-500/40 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                >
+                  {massDeleting
+                    ? <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                    : <Trash2 className="w-2.5 h-2.5" />}
+                  {massDeleting ? "Removing…" : `Remove ${selectedIds.size}`}
+                </button>
+              </div>
+            )}
           </div>
           <div className="p-6">
             <div className="border border-border rounded bg-card overflow-hidden">
               <table className="w-full text-xs font-mono">
                 <thead>
                   <tr className="border-b border-border">
+                    <th className="px-3 py-2.5 w-8">
+                      <input
+                        type="checkbox"
+                        className="accent-primary cursor-pointer"
+                        checked={(calls ?? []).length > 0 && selectedIds.size === (calls ?? []).length}
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < (calls ?? []).length; }}
+                        onChange={(e) => {
+                          if (e.target.checked) setSelectedIds(new Set((calls ?? []).map((c) => c.id)));
+                          else setSelectedIds(new Set());
+                        }}
+                      />
+                    </th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider w-8"></th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Dir</th>
                     <th className="text-left px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-wider">Phone</th>
@@ -485,21 +550,37 @@ export default function CallsPage() {
                   {callsLoading ? (
                     [...Array(6)].map((_, i) => (
                       <tr key={i}>
-                        {[...Array(9)].map((_, j) => (
+                        {[...Array(10)].map((_, j) => (
                           <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>
                         ))}
                       </tr>
                     ))
                   ) : (calls ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No call records found</td>
+                      <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">No call records found</td>
                     </tr>
                   ) : (calls ?? []).map((c) => (
                     <Fragment key={c.id}>
                       <tr
-                        className="border-b border-border/30 hover:bg-white/2 transition-colors cursor-pointer"
+                        className={`border-b border-border/30 hover:bg-white/2 transition-colors cursor-pointer ${selectedIds.has(c.id) ? "bg-primary/5" : ""}`}
                         onClick={() => setExpandedId(expandedId === c.id ? null : c.id)}
                       >
+                        <td
+                          className="px-3 py-3"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            className="accent-primary cursor-pointer"
+                            checked={selectedIds.has(c.id)}
+                            onChange={(e) => {
+                              const next = new Set(selectedIds);
+                              if (e.target.checked) next.add(c.id);
+                              else next.delete(c.id);
+                              setSelectedIds(next);
+                            }}
+                          />
+                        </td>
                         <td className="px-4 py-3 text-muted-foreground">
                           <ChevronDown className={`w-3 h-3 transition-transform ${expandedId === c.id ? "rotate-180" : ""}`} />
                         </td>
@@ -533,7 +614,7 @@ export default function CallsPage() {
                       </tr>
                       {expandedId === c.id && (
                         <tr key={`${c.id}-expanded`} className="border-b border-border/30 bg-white/2">
-                          <td colSpan={9} className="px-6 py-4 space-y-3">
+                          <td colSpan={10} className="px-6 py-4 space-y-3">
                             {/* Actions row */}
                             <div className="flex items-center gap-4 pb-2 border-b border-border/30 flex-wrap">
                               <DispositionUpdater
