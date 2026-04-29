@@ -1532,9 +1532,12 @@ router.post("/campaigns/:id/test-call", authenticate, requireRole("admin"), asyn
   const id = parseInt(rawId, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
 
-  const phone: string | undefined =
+  const rawPhone: string | undefined =
     req.body?.phone ?? req.body?.phone_number ?? req.body?.phoneNumber ?? req.body?.to;
-  if (!phone) { res.status(400).json({ error: "phone is required" }); return; }
+  if (!rawPhone) { res.status(400).json({ error: "phone is required" }); return; }
+  // Normalize to E.164: strip spaces/dashes/parens, prepend + if missing
+  const digitsOnly = rawPhone.replace(/[\s\-().]/g, "");
+  const phone = digitsOnly.startsWith("+") ? digitsOnly : `+${digitsOnly}`;
 
   const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, id)).limit(1);
   if (!campaign) { res.status(404).json({ error: "Campaign not found" }); return; }
