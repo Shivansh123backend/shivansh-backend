@@ -121,8 +121,8 @@ export default function HumanAgentsPage() {
     setDeletingId(a.id);
     try {
       await customFetch(`/api/human-agents/${a.id}`, { method: "DELETE" });
+      setAgents(prev => (prev ?? []).filter(agent => agent.id !== a.id));
       toast({ title: `${a.name} removed` });
-      await refresh();
     } catch (err: unknown) {
       const msg = (err as { message?: string })?.message ?? "Failed to remove agent";
       toast({ title: msg, variant: "destructive" });
@@ -133,6 +133,7 @@ export default function HumanAgentsPage() {
 
   const handleStatusChange = async (a: HumanAgent, status: "available" | "busy") => {
     if (status === a.status) return;
+    setAgents(prev => (prev ?? []).map(agent => agent.id === a.id ? { ...agent, status } : agent));
     try {
       await customFetch("/api/human-agents/status", {
         method: "POST",
@@ -140,8 +141,8 @@ export default function HumanAgentsPage() {
         body: JSON.stringify({ id: a.id, status }),
       });
       toast({ title: `${a.name} → ${status}` });
-      await refresh();
     } catch (err: unknown) {
+      await refresh();
       const msg = (err as { message?: string })?.message ?? "Failed to update status";
       toast({ title: msg, variant: "destructive" });
     }
