@@ -286,6 +286,13 @@ function UploadModal({ onClose, campaigns, lists }: { onClose: () => void; campa
             </div>
           )}
 
+          {/* Destination hint — shown when file is picked but nothing is selected */}
+          {file && !hasDestination && (
+            <p className="text-[10px] font-mono text-yellow-400 bg-yellow-500/10 border border-yellow-500/30 rounded px-2.5 py-1.5">
+              Select a lead list or campaign above before uploading.
+            </p>
+          )}
+
           {/* Actions */}
           <div className="flex gap-2 pt-1">
             <Button
@@ -297,8 +304,14 @@ function UploadModal({ onClose, campaigns, lists }: { onClose: () => void; campa
             </Button>
             <Button
               className="flex-1 font-mono text-xs uppercase tracking-wider"
-              disabled={!file || !hasDestination || upload.isPending}
-              onClick={() => upload.mutate()}
+              disabled={!file || upload.isPending}
+              onClick={() => {
+                if (!hasDestination) {
+                  toast({ title: "Please select a lead list or campaign first", variant: "destructive" });
+                  return;
+                }
+                upload.mutate();
+              }}
             >
               {upload.isPending ? (
                 <span className="flex items-center gap-1.5"><span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" /> Uploading…</span>
