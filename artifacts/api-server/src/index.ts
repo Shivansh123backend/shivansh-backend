@@ -6,7 +6,7 @@ import { initWebSocket } from "./websocket/index.js";
 import { getCallQueue } from "./queue/callQueue.js";
 import { closeRedis } from "./lib/redis.js";
 import { closeQueue } from "./queue/callQueue.js";
-import { ensureAdminUser, ensurePhoneNumbers, ensureElevenLabsVoices, ensureCatalogVoices } from "./lib/startup.js";
+import { ensureAdminUser, ensurePhoneNumbers, ensureElevenLabsVoices, ensureCatalogVoices, ensureSchema } from "./lib/startup.js";
 import { handleTelnyxMediaSocket, warmupElevenAgent } from "./services/elevenBridge.js";
 import { handleListenForkSocket } from "./websocket/listenFork.js";
 import { startCallbackScheduler } from "./routes/callbacks.js";
@@ -72,6 +72,12 @@ if (process.env.REDIS_HOST || process.env.REDIS_URL) {
 }
 
 // ── Startup tasks ──────────────────────────────────────────────────────────────
+// Run schema migration FIRST — ensures all DB columns exist before any other
+// startup task or request handler tries to read/write the campaigns table.
+ensureSchema().catch((err) => {
+  logger.warn({ err }, "ensureSchema failed — continuing anyway");
+});
+
 ensureAdminUser().catch((err) => {
   logger.warn({ err }, "ensureAdminUser failed — continuing anyway");
 });
