@@ -62,30 +62,64 @@ type ElevenLabsVoice = {
 // ── Tiny audio preview hook ────────────────────────────────────────────────────
 function useAudioPlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
 
-  const play = useCallback((url: string, id: string) => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    if (playing === id) {
+  const play = useCallback(async (voice: { id: string; voiceId?: string; previewUrl?: string | null }) => {
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = null; }
+    if (playing === voice.id) { setPlaying(null); return; }
+
+    setLoadingId(voice.id);
+    const token = localStorage.getItem("auth_token");
+    const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
+    const dbId = parseInt(voice.id, 10);
+
+    try {
+      let src: string;
+      if (!isNaN(dbId)) {
+        // DB voice — route through backend proxy
+        const endpoint = voice.previewUrl
+          ? `${baseUrl}/api/voices/${dbId}/preview`
+          : `${baseUrl}/api/voices/${dbId}/sample`;
+        const resp = await fetch(endpoint, {
+          method: voice.previewUrl ? "GET" : "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          ...(voice.previewUrl ? {} : { body: JSON.stringify({ text: "Hello! I'm your AI voice assistant. I'm here to help you with your calls today." }) }),
+        });
+        if (!resp.ok) return;
+        const blob = await resp.blob();
+        src = URL.createObjectURL(blob);
+        blobUrlRef.current = src;
+      } else if (voice.previewUrl) {
+        src = voice.previewUrl;
+      } else {
+        return;
+      }
+
+      const audio = new Audio(src);
+      audioRef.current = audio;
+      audio.onended = () => { setPlaying(null); audioRef.current = null; };
+      audio.onerror = () => { setPlaying(null); audioRef.current = null; };
+      await audio.play();
+      setPlaying(voice.id);
+    } catch {
       setPlaying(null);
-      return;
+    } finally {
+      setLoadingId(null);
     }
-    const audio = new Audio(url);
-    audioRef.current = audio;
-    audio.onended = () => setPlaying(null);
-    audio.onerror = () => setPlaying(null);
-    audio.play().catch(() => setPlaying(null));
-    setPlaying(id);
   }, [playing]);
 
   const stop = useCallback(() => {
-    if (audioRef.current) audioRef.current.pause();
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     setPlaying(null);
   }, []);
 
-  return { playing, play, stop };
+  return { playing, loadingId, play, stop };
 }
 
 // ── Voice picker with play button ─────────────────────────────────────────────
@@ -102,8 +136,9 @@ function VoicePicker({
   elVoices: ElevenLabsVoice[];
   elLoading: boolean;
 }) {
-  const { playing, play } = useAudioPlayer();
-  const allVoices = dbVoices.length > 0
+  const { playing, loadingId, play } = useAudioPlayer();
+  const isDbVoices = dbVoices.length > 0;
+  const allVoices = isDbVoices
     ? dbVoices.map(v => ({ ...v, id: String(v.id) }))
     : elVoices.map(v => ({
         id: v.voice_id,
@@ -152,16 +187,19 @@ function VoicePicker({
               )}
               <p className="text-[10px] font-mono text-muted-foreground">{v.gender} · {v.accent}</p>
             </div>
-            {v.previewUrl && (
+            {(isDbVoices || v.previewUrl) && (
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); play(v.previewUrl!, v.voiceId); }}
-                className="shrink-0 w-7 h-7 flex items-center justify-center rounded bg-primary/20 hover:bg-primary/40 text-primary transition-colors"
+                onClick={(e) => { e.stopPropagation(); play({ id: v.id, voiceId: v.voiceId, previewUrl: v.previewUrl }); }}
+                disabled={loadingId === v.id}
+                className="shrink-0 w-7 h-7 flex items-center justify-center rounded bg-primary/20 hover:bg-primary/40 text-primary transition-colors disabled:opacity-50"
                 title="Preview voice"
               >
-                {playing === v.voiceId
-                  ? <Pause className="w-3 h-3" />
-                  : <Play className="w-3 h-3" />
+                {loadingId === v.id
+                  ? <RefreshCw className="w-3 h-3 animate-spin" />
+                  : playing === v.id
+                    ? <Pause className="w-3 h-3" />
+                    : <Play className="w-3 h-3" />
                 }
               </button>
             )}

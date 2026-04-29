@@ -12,7 +12,7 @@ import {
   phoneNumbersTable,
   dncListTable,
 } from "@workspace/db";
-import { eq, and, inArray, sql, asc, desc, or } from "drizzle-orm";
+import { eq, and, inArray, isNull, sql, asc, desc, or } from "drizzle-orm";
 import { authenticate, requireRole } from "../middlewares/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { emitToSupervisors } from "../websocket/index.js";
@@ -385,7 +385,13 @@ router.post("/campaigns/start/:id", authenticate, requireRole("admin"), async (r
       .where(and(eq(leadListsTable.campaignId, id), eq(leadListsTable.active, true)))
     ).map(r => r.id);
     const startSourceFilter = startAssignedListIds.length > 0
-      ? or(eq(leadsTable.campaignId, id), inArray(leadsTable.listId, startAssignedListIds))
+      ? or(
+          eq(leadsTable.campaignId, id),
+          and(
+            inArray(leadsTable.listId, startAssignedListIds),
+            or(isNull(leadsTable.campaignId), eq(leadsTable.campaignId, id))
+          )
+        )
       : eq(leadsTable.campaignId, id);
 
     const [pendingRow] = await db
@@ -788,7 +794,13 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
   ).map(r => r.id);
 
   const sourceFilter = assignedListIds.length > 0
-    ? or(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.listId, assignedListIds))
+    ? or(
+        eq(leadsTable.campaignId, campaignId),
+        and(
+          inArray(leadsTable.listId, assignedListIds),
+          or(isNull(leadsTable.campaignId), eq(leadsTable.campaignId, campaignId))
+        )
+      )
     : eq(leadsTable.campaignId, campaignId);
 
   let pendingLeads = await db
@@ -809,6 +821,23 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
   } catch (err) {
     logger.warn({ err: String(err), campaignId }, "Prioritization failed — using priority sort");
     pendingLeads.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  }
+
+  // Phone-level dedup: if the same phone appears more than once (e.g. a lead
+  // was both directly assigned to the campaign AND its list is also assigned),
+  // call it only once — keep the first occurrence after prioritization.
+  {
+    const seenPhones = new Set<string>();
+    const before = pendingLeads.length;
+    pendingLeads = pendingLeads.filter(lead => {
+      const norm = lead.phone.replace(/\D+/g, "");
+      if (seenPhones.has(norm)) return false;
+      seenPhones.add(norm);
+      return true;
+    });
+    if (pendingLeads.length < before) {
+      logger.warn({ campaignId, removed: before - pendingLeads.length }, "Deduplicated duplicate phone entries from pendingLeads");
+    }
   }
 
   logger.info(
@@ -1146,7 +1175,13 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
     .where(and(eq(leadListsTable.campaignId, campaignId), eq(leadListsTable.active, true)))
   ).map(r => r.id);
   const remainSourceFilter = remainAssignedListIds.length > 0
-    ? or(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.listId, remainAssignedListIds))
+    ? or(
+        eq(leadsTable.campaignId, campaignId),
+        and(
+          inArray(leadsTable.listId, remainAssignedListIds),
+          or(isNull(leadsTable.campaignId), eq(leadsTable.campaignId, campaignId))
+        )
+      )
     : eq(leadsTable.campaignId, campaignId);
 
   const [remaining] = await db
@@ -1539,7 +1574,13 @@ router.post("/campaigns/:id/reset-leads", authenticate, requireRole("admin"), as
   const assignedListIds = assignedLists.map(r => r.id);
 
   const sourceFilter = assignedListIds.length > 0
-    ? or(eq(leadsTable.campaignId, id), inArray(leadsTable.listId, assignedListIds))
+    ? or(
+        eq(leadsTable.campaignId, id),
+        and(
+          inArray(leadsTable.listId, assignedListIds),
+          or(isNull(leadsTable.campaignId), eq(leadsTable.campaignId, id))
+        )
+      )
     : eq(leadsTable.campaignId, id);
 
   const result = await db
@@ -1662,7 +1703,13 @@ async function guardPendingLeads(id: number, campaign: typeof campaignsTable.$in
   const assignedListIds = assignedLists.map(r => r.id);
 
   const sourceFilter = assignedListIds.length > 0
-    ? or(eq(leadsTable.campaignId, id), inArray(leadsTable.listId, assignedListIds))
+    ? or(
+        eq(leadsTable.campaignId, id),
+        and(
+          inArray(leadsTable.listId, assignedListIds),
+          or(isNull(leadsTable.campaignId), eq(leadsTable.campaignId, id))
+        )
+      )
     : eq(leadsTable.campaignId, id);
 
   const [pendingRow] = await db.select({ count: db.$count(leadsTable) }).from(leadsTable)
