@@ -178,11 +178,12 @@ export async function ensureSchema(): Promise<void> {
         ADD COLUMN IF NOT EXISTS voice text,
         ADD COLUMN IF NOT EXISTS voice_provider text DEFAULT 'elevenlabs',
         ADD COLUMN IF NOT EXISTS routing_strategy text NOT NULL DEFAULT 'round_robin',
-        ADD COLUMN IF NOT EXISTS transfer_rules text
+        ADD COLUMN IF NOT EXISTS transfer_rules text,
+        ADD COLUMN IF NOT EXISTS transfer_mode text DEFAULT 'blind'
     `);
     logger.info("ensureSchema — all campaign columns verified");
 
-    // Also ensure audit_logs table exists (used by createAuditLog)
+    // audit_logs
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id serial PRIMARY KEY,
@@ -195,6 +196,26 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
     logger.info("ensureSchema — audit_logs table verified");
+
+    // human_agents (needed by Human Agents page)
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS human_agents (
+        id           serial PRIMARY KEY,
+        name         text NOT NULL,
+        phone_number text NOT NULL UNIQUE,
+        status       text NOT NULL DEFAULT 'available',
+        created_at   timestamptz NOT NULL DEFAULT now(),
+        updated_at   timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+
+    // campaign_agents.priority (routing strategies)
+    await db.execute(sql`
+      ALTER TABLE campaign_agents
+        ADD COLUMN IF NOT EXISTS priority integer NOT NULL DEFAULT 1
+    `);
+
+    logger.info("ensureSchema — human_agents and campaign_agents verified");
   } catch (err) {
     logger.error({ err }, "ensureSchema failed — server will continue but some features may not work");
   }
