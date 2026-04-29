@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { logger } from "../lib/logger.js";
 import { db } from "@workspace/db";
 import { callLogsTable, phoneNumbersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, or, and, isNull, desc } from "drizzle-orm";
 import { removeActiveCall } from "../lib/redis.js";
 import { vapiDirectCall, buildInboundAssistantForNumber } from "../services/vapiService.js";
 import { authenticate, requireRole } from "../middlewares/auth.js";
@@ -223,60 +223,85 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
       // cleanly even if no human picked up).
       const normalizedStatus = disposition === "failed" ? "failed" : "completed";
 
+      const answerType = disposition === "vm" ? "voicemail"
+        : disposition === "no_answer" ? "no_answer"
+        : disposition === "busy" ? "busy"
+        : "human";
+      const finalFields = {
+        status: normalizedStatus,
+        duration: Math.round(durationSeconds),
+        transcript: transcript || null,
+        summary: summary || null,
+        recordingUrl: recordingUrl || null,
+        disposition,
+        answerType,
+      };
+
       try {
-        // Prefer UPDATE of the existing row (created at dispatch time in
-        // processLead) so we don't end up with two rows per call. Fall back
-        // to INSERT if no row matches (e.g. test-call flow).
+        // Primary lookup: find the row by the Vapi call ID (set by campaigns.ts
+        // after receiving the Vapi API response).
         const existing = await db
           .select({ id: callLogsTable.id, numberUsed: callLogsTable.numberUsed })
           .from(callLogsTable)
           .where(eq(callLogsTable.callControlId, callId))
           .limit(1);
 
-        if (existing.length > 0) {
+        let rowId: number | null = existing[0]?.id ?? null;
+        let numberUsed: string | null = existing[0]?.numberUsed ?? null;
+
+        // Fallback: race condition — the end-of-call-report webhook sometimes
+        // fires before campaigns.ts has written callControlId to the DB row.
+        // Try to find the most recent "initiated" row for this campaign + phone
+        // that still has a null callControlId and claim it.
+        if (!rowId && customerNumber && campaignId) {
+          const raceRow = await db
+            .select({ id: callLogsTable.id, numberUsed: callLogsTable.numberUsed })
+            .from(callLogsTable)
+            .where(and(
+              eq(callLogsTable.campaignId, campaignId),
+              eq(callLogsTable.phoneNumber, customerNumber),
+              eq(callLogsTable.status, "initiated"),
+              or(isNull(callLogsTable.callControlId), eq(callLogsTable.callControlId, "")),
+            ))
+            .orderBy(desc(callLogsTable.id))
+            .limit(1);
+
+          if (raceRow.length > 0) {
+            rowId = raceRow[0].id;
+            numberUsed = raceRow[0].numberUsed;
+            logger.info({ callId, rowId, campaignId, customerNumber }, "end-of-call-report: claimed race-condition row via phone+campaign fallback");
+          }
+        }
+
+        if (rowId !== null) {
           await db
             .update(callLogsTable)
-            .set({
-              status: normalizedStatus,
-              duration: Math.round(durationSeconds),
-              transcript,
-              summary,
-              recordingUrl,
-              disposition,
-              answerType: disposition === "vm" ? "voicemail"
-                : disposition === "no_answer" ? "no_answer"
-                : disposition === "busy" ? "busy"
-                : "human",
-            })
-            .where(eq(callLogsTable.id, existing[0].id));
+            .set({ ...finalFields, callControlId: callId })
+            .where(eq(callLogsTable.id, rowId));
 
           // Release any locked from number (Vapi path normally skips
           // allocation, but this protects against stragglers).
-          if (existing[0].numberUsed && !existing[0].numberUsed.startsWith("vapi:")) {
+          if (numberUsed && !numberUsed.startsWith("vapi:")) {
             await db
               .update(phoneNumbersTable)
               .set({ isBusy: false })
-              .where(eq(phoneNumbersTable.phoneNumber, existing[0].numberUsed))
+              .where(eq(phoneNumbersTable.phoneNumber, numberUsed))
               .catch(() => {});
           }
         } else {
-          await db.insert(callLogsTable).values({
-            campaignId: campaignId ?? 0,
-            phoneNumber: customerNumber,
-            direction: "outbound",
-            status: normalizedStatus,
-            duration: Math.round(durationSeconds),
-            transcript,
-            summary,
-            recordingUrl,
-            callControlId: callId,
-            disposition,
-            answerType: disposition === "vm" ? "voicemail"
-              : disposition === "no_answer" ? "no_answer"
-              : disposition === "busy" ? "busy"
-              : "human",
-            numberUsed: `vapi:${process.env.VAPI_PHONE_NUMBER_ID ?? "unknown"}`,
-          });
+          // Last resort: insert a fresh row (e.g. test-call flow with no prior log entry).
+          if (!customerNumber) {
+            logger.warn({ callId, campaignId }, "end-of-call-report: no existing row and no customer number — skipping insert");
+          } else {
+            await db.insert(callLogsTable).values({
+              campaignId: campaignId ?? 0,
+              phoneNumber: customerNumber,
+              direction: "outbound",
+              callControlId: callId,
+              numberUsed: `vapi:${process.env.VAPI_PHONE_NUMBER_ID ?? "unknown"}`,
+              ...finalFields,
+            });
+          }
         }
       } catch (e) {
         logger.warn({ err: e instanceof Error ? e.message : String(e), callId }, "Failed to persist Vapi call_log");
