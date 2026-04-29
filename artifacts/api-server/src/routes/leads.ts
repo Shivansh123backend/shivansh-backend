@@ -61,24 +61,64 @@ function normaliseEmail(raw: string | undefined | null): string | null {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ? trimmed : null;
 }
 
-/** Extract name/phone/email from a raw row object (handles various header spellings). */
+/** Extract name/phone/email from a raw row object (handles many header spellings).
+ *  Case-insensitive: we lower-case both the key list and actual row keys to match. */
 function extractRow(row: Record<string, unknown>): {
   name: string;
   phone: string | null;
   email: string | null;
 } {
-  const str = (keys: string[]): string | null => {
-    for (const k of keys) {
-      const v = row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()];
-      if (v != null && String(v).trim()) return String(v).trim();
+  // Build a lower-cased key→value map so matching is always case-insensitive
+  const lc: Record<string, unknown> = {};
+  for (const k of Object.keys(row)) {
+    lc[k.toLowerCase().trim()] = row[k];
+  }
+
+  const get = (aliases: string[]): string | null => {
+    for (const a of aliases) {
+      const v = lc[a.toLowerCase()];
+      if (v != null) {
+        const s = String(v).trim();
+        if (s && s !== "0") return s;
+      }
     }
     return null;
   };
 
+  const nameAliases = [
+    "name", "full name", "full_name", "fullname",
+    "first name", "first_name", "firstname",
+    "contact name", "contact_name", "customer name", "customer_name",
+    "lead name", "lead_name", "client name", "client_name",
+    "person name", "person_name",
+  ];
+
+  const phoneAliases = [
+    "phone", "phone number", "phone_number", "phonenumber",
+    "mobile", "mobile number", "mobile_number", "mobilenumber",
+    "cell", "cell number", "cell_number", "cellnumber",
+    "telephone", "tel", "contact", "contact number", "contact_number",
+    "number", "ph", "ph no", "ph_no", "phone no", "phone_no",
+    "whatsapp", "whatsapp number", "whatsapp_number",
+  ];
+
+  const emailAliases = [
+    "email", "email address", "email_address", "emailaddress",
+    "e-mail", "e_mail", "mail",
+  ];
+
+  // If no full-name column, try combining first + last name
+  let nameValue = get(nameAliases);
+  if (!nameValue) {
+    const first = get(["first name", "first_name", "firstname", "fname", "given name", "given_name"]);
+    const last = get(["last name", "last_name", "lastname", "lname", "surname", "family name", "family_name"]);
+    if (first || last) nameValue = [first, last].filter(Boolean).join(" ");
+  }
+
   return {
-    name: str(["name", "Name", "NAME", "full_name", "Full Name"]) ?? "Unknown",
-    phone: normalisePhone(str(["phone_number", "phone", "Phone", "PHONE", "Phone Number", "mobile", "Mobile"])),
-    email: normaliseEmail(str(["email", "Email", "EMAIL", "e-mail", "E-mail"])),
+    name: nameValue ?? "Unknown",
+    phone: normalisePhone(get(phoneAliases)),
+    email: normaliseEmail(get(emailAliases)),
   };
 }
 
@@ -87,11 +127,14 @@ function parseCsv(buffer: Buffer): Record<string, unknown>[] {
   return csvParse(buffer, { columns: true, skip_empty_lines: true, trim: true });
 }
 
-/** Parse XLSX/XLS/ODS buffer → array of raw row objects. */
+/** Parse XLSX/XLS/ODS buffer → array of raw row objects.
+ *  raw:true preserves numeric cells as numbers (important for phone numbers stored
+ *  as integers in Excel — they come through as JS numbers which String() handles). */
 function parseExcel(buffer: Buffer): Record<string, unknown>[] {
-  const wb = XLSX.read(buffer, { type: "buffer" });
+  const wb = XLSX.read(buffer, { type: "buffer", cellText: true, cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+  // Use raw:false so XLSX formats numbers as strings (prevents scientific notation)
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "", raw: false });
 }
 
 interface NormalisedLead {
@@ -310,6 +353,18 @@ router.post(
       return;
     }
 
+    // Log what columns were detected — helps debug header mismatch issues
+    const detectedColumns = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
+    logger.info(
+      { filename: req.file.originalname, mime: req.file.mimetype, rowCount: rawRows.length, columns: detectedColumns },
+      "Upload file parsed"
+    );
+
+    if (rawRows.length === 0) {
+      res.status(400).json({ error: "File appears to be empty or could not be read. Make sure the first row contains headers (Name, Phone, Email)." });
+      return;
+    }
+
     // Extract + validate
     const validRows: NormalisedLead[] = [];
     let invalidCount = 0;
@@ -317,6 +372,20 @@ router.post(
       const { name, phone, email } = extractRow(row);
       if (!phone) { invalidCount++; continue; }
       validRows.push({ name, phone, email });
+    }
+
+    // If ALL rows are invalid, return a helpful message with the actual column names
+    if (validRows.length === 0 && rawRows.length > 0) {
+      res.status(400).json({
+        error: `No valid phone numbers found. Detected columns: [${detectedColumns.join(", ")}]. ` +
+          `Make sure one column is named: Phone, Mobile, Phone Number, Cell, or similar.`,
+        total_uploaded: 0,
+        total_skipped: invalidCount,
+        invalid_numbers: invalidCount,
+        duplicates: 0,
+        dnc_skipped: 0,
+      });
+      return;
     }
 
     // DNC filtering — skip any number on the do-not-call list
