@@ -264,11 +264,21 @@ router.post("/voices/:id/sample", authenticate, async (req, res): Promise<void> 
         headers: { "xi-api-key": apiKey, Accept: "audio/mpeg", "Content-Type": "application/json" },
         responseType: "stream",
         timeout: 30_000,
+        validateStatus: () => true,
       }
     );
 
+    if (ttsRes.status !== 200) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of ttsRes.data as AsyncIterable<Buffer>) chunks.push(chunk);
+      const body = Buffer.concat(chunks).toString("utf8");
+      logger.error({ status: ttsRes.status, voiceId: voice.voiceId, body }, "ElevenLabs TTS returned non-200");
+      res.status(502).json({ error: "TTS generation failed", detail: body.slice(0, 200) });
+      return;
+    }
+
     res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-store");
     (ttsRes.data as NodeJS.ReadableStream).pipe(res);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
