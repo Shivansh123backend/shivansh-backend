@@ -121,7 +121,7 @@ type UploadResult = {
 };
 
 function UploadModal({ onClose, campaigns, lists }: { onClose: () => void; campaigns: { id: number; name: string }[]; lists: LeadList[] }) {
-  const [campaignId, setCampaignId] = useState("");
+  const [campaignId, setCampaignId] = useState("__none__");
   const [listId, setListId] = useState("__none__");
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -130,14 +130,16 @@ function UploadModal({ onClose, campaigns, lists }: { onClose: () => void; campa
   const qc = useQueryClient();
   const { toast } = useToast();
 
+  const hasDestination = listId !== "__none__" || campaignId !== "__none__";
+
   const upload = useMutation({
     mutationFn: async () => {
       if (!file) throw new Error("No file selected");
-      if (!campaignId) throw new Error("Please select a campaign");
+      if (!hasDestination) throw new Error("Please select a lead list or campaign");
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("campaign_id", campaignId);
       if (listId !== "__none__") fd.append("list_id", listId);
+      if (campaignId !== "__none__") fd.append("campaign_id", campaignId);
       const res = await fetch("/api/leads/upload", {
         method: "POST",
         headers: {
@@ -185,27 +187,38 @@ function UploadModal({ onClose, campaigns, lists }: { onClose: () => void; campa
         </div>
 
         <div className="p-4 space-y-4">
-          {/* Campaign selector */}
+          {/* Lead List selector — primary destination */}
           <div className="space-y-1.5">
-            <Label className="text-[10px] font-mono uppercase text-muted-foreground">Campaign</Label>
-            <Select value={campaignId} onValueChange={setCampaignId}>
-              <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="Select campaign" /></SelectTrigger>
-              <SelectContent>
-                {campaigns.map(c => (
-                  <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* List selector */}
-          <div className="space-y-1.5">
-            <Label className="text-[10px] font-mono uppercase text-muted-foreground">List <span className="text-muted-foreground/50 normal-case">(optional)</span></Label>
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground flex items-center gap-1.5">
+              Lead List
+              <span className="text-primary/70 normal-case text-[9px]">← primary destination</span>
+            </Label>
             <Select value={listId} onValueChange={setListId}>
-              <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="No list" /></SelectTrigger>
+              <SelectTrigger className={`font-mono text-sm ${listId !== "__none__" ? "border-primary/40" : ""}`}>
+                <SelectValue placeholder="Select a list…" />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none__">— No list —</SelectItem>
                 {lists.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {lists.length === 0 && (
+              <p className="text-[10px] font-mono text-muted-foreground/60">No lists yet — create one in the Lists page first.</p>
+            )}
+          </div>
+
+          {/* Campaign selector — optional */}
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-mono uppercase text-muted-foreground">
+              Campaign <span className="text-muted-foreground/50 normal-case">(optional — assign leads directly to a campaign)</span>
+            </Label>
+            <Select value={campaignId} onValueChange={setCampaignId}>
+              <SelectTrigger className="font-mono text-sm"><SelectValue placeholder="No campaign" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— No campaign —</SelectItem>
+                {campaigns.map(c => (
+                  <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -284,7 +297,7 @@ function UploadModal({ onClose, campaigns, lists }: { onClose: () => void; campa
             </Button>
             <Button
               className="flex-1 font-mono text-xs uppercase tracking-wider"
-              disabled={!file || !campaignId || upload.isPending}
+              disabled={!file || !hasDestination || upload.isPending}
               onClick={() => upload.mutate()}
             >
               {upload.isPending ? (

@@ -11,7 +11,7 @@ export const leadsTable = pgTable("leads", {
   name: text("name").notNull(),
   phone: text("phone").notNull(),
   email: text("email"),
-  campaignId: integer("campaign_id").notNull(),
+  campaignId: integer("campaign_id"),
   listId: integer("list_id").references(() => leadListsTable.id, { onDelete: "set null" }),
   source: leadSourceEnum("source").notNull().default("manual"),
   status: leadStatusEnum("status").notNull().default("pending"),

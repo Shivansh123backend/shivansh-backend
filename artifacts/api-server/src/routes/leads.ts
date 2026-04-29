@@ -41,7 +41,7 @@ async function fetchDncSet(): Promise<Set<string>> {
 
 /** Insert rows in batches of BATCH_SIZE with BATCH_DELAY_MS between each batch. */
 async function batchInsert(
-  rows: Array<{ name: string; phone: string; email: string | null; campaignId: number; listId?: number | null; source: "manual" | "csv" | "sheet" }>,
+  rows: Array<{ name: string; phone: string; email: string | null; campaignId?: number | null; listId?: number | null; source: "manual" | "csv" | "sheet" }>,
 ): Promise<number> {
   let inserted = 0;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
@@ -103,7 +103,8 @@ interface NormalisedLead {
 /** Deduplicate by phone within the batch, then filter against existing DB rows. */
 async function deduplicateBatch(
   rows: NormalisedLead[],
-  campaignId: number
+  campaignId: number | null,
+  listId?: number | null,
 ): Promise<{ valid: NormalisedLead[]; skipped: number }> {
   // Within-batch deduplication (keep first occurrence per phone)
   const seen = new Set<string>();
@@ -115,18 +116,30 @@ async function deduplicateBatch(
     }
   }
 
-  // DB deduplication — find phones already in this campaign
   if (unique.length === 0) return { valid: [], skipped: rows.length };
 
   const phones = unique.map((r) => r.phone);
-  const existing = await db
-    .select({ phone: leadsTable.phone })
-    .from(leadsTable)
-    .where(and(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.phone, phones)));
 
-  const existingPhones = new Set(existing.map((e) => e.phone));
+  // DB deduplication — scope to campaign when available, otherwise to list
+  let existingPhones: Set<string>;
+  if (campaignId) {
+    const existing = await db
+      .select({ phone: leadsTable.phone })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.campaignId, campaignId), inArray(leadsTable.phone, phones)));
+    existingPhones = new Set(existing.map((e) => e.phone));
+  } else if (listId) {
+    const existing = await db
+      .select({ phone: leadsTable.phone })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.listId, listId), inArray(leadsTable.phone, phones)));
+    existingPhones = new Set(existing.map((e) => e.phone));
+  } else {
+    // No campaign or list — deduplicate within the batch only (already done above)
+    existingPhones = new Set();
+  }
+
   const valid = unique.filter((r) => !existingPhones.has(r.phone));
-
   return { valid, skipped: rows.length - valid.length };
 }
 
@@ -231,20 +244,27 @@ router.post("/leads", authenticate, handleAddLead);
 router.post("/leads/add", authenticate, handleAddLead);
 
 // ── POST /leads/upload ──────────────────────────────────────────────────────
-// CSV or Excel bulk upload — multipart/form-data field: "file" + "campaign_id"
+// CSV or Excel bulk upload — multipart/form-data field: "file" + optional "campaign_id" + optional "list_id"
+// At least one of list_id or campaign_id must be provided so leads have a home.
 router.post(
   "/leads/upload",
   authenticate,
   requireRole("admin"),
   upload.single("file"),
   async (req, res): Promise<void> => {
-    const campaignId = parseInt(req.body.campaign_id ?? req.body.campaignId, 10);
-    if (isNaN(campaignId)) {
-      res.status(400).json({ error: "campaign_id is required" });
+    const campaignIdRaw = req.body.campaign_id ?? req.body.campaignId;
+    const campaignId: number | null = campaignIdRaw ? parseInt(campaignIdRaw, 10) : null;
+    if (campaignIdRaw && (isNaN(campaignId as number) || (campaignId as number) <= 0)) {
+      res.status(400).json({ error: "Invalid campaign_id" });
       return;
     }
     const listIdRaw = req.body.list_id ?? req.body.listId;
     const listId: number | null = listIdRaw ? parseInt(listIdRaw, 10) : null;
+
+    if (!campaignId && !listId) {
+      res.status(400).json({ error: "Please select a lead list or campaign to upload into." });
+      return;
+    }
 
     if (!req.file) {
       // No file — if the body has JSON lead fields, handle as a single lead add
@@ -257,10 +277,12 @@ router.post(
       return;
     }
 
-    const campaign = await getCampaign(campaignId);
-    if (!campaign) {
-      res.status(404).json({ error: "Campaign not found" });
-      return;
+    if (campaignId) {
+      const campaign = await getCampaign(campaignId);
+      if (!campaign) {
+        res.status(404).json({ error: "Campaign not found" });
+        return;
+      }
     }
 
     if (listId) {
@@ -311,8 +333,8 @@ router.post(
       }
     }
 
-    // Deduplicate against DB
-    const { valid, skipped: dupCount } = await deduplicateBatch(nonDncRows, campaignId);
+    // Deduplicate against DB (scoped to campaign when available, else to list)
+    const { valid, skipped: dupCount } = await deduplicateBatch(nonDncRows, campaignId, listId);
 
     if (valid.length === 0) {
       res.json({
@@ -327,7 +349,7 @@ router.post(
 
     // Batch insert — 50 rows per batch, 500 ms between batches
     const totalInserted = await batchInsert(
-      valid.map(r => ({ name: r.name, phone: r.phone, email: r.email, campaignId, listId: listId ?? null, source: "csv" as const }))
+      valid.map(r => ({ name: r.name, phone: r.phone, email: r.email, campaignId: campaignId ?? undefined, listId: listId ?? null, source: "csv" as const }))
     );
 
     logger.info(
