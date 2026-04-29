@@ -295,14 +295,20 @@ router.post(
   requireRole("admin"),
   upload.single("file"),
   async (req, res): Promise<void> => {
-    const campaignIdRaw = req.body.campaign_id ?? req.body.campaignId;
-    const campaignId: number | null = campaignIdRaw ? parseInt(campaignIdRaw, 10) : null;
+    // Accept campaign_id / campaignId from body OR query string (Lovable frontend uses query params)
+    const campaignIdRaw =
+      req.body.campaign_id ?? req.body.campaignId ??
+      req.query.campaign_id ?? req.query.campaignId;
+    const campaignId: number | null = campaignIdRaw ? parseInt(String(campaignIdRaw), 10) : null;
     if (campaignIdRaw && (isNaN(campaignId as number) || (campaignId as number) <= 0)) {
       res.status(400).json({ error: "Invalid campaign_id" });
       return;
     }
-    const listIdRaw = req.body.list_id ?? req.body.listId;
-    const listId: number | null = listIdRaw ? parseInt(listIdRaw, 10) : null;
+    // Accept list_id / listId from body OR query string
+    const listIdRaw =
+      req.body.list_id ?? req.body.listId ??
+      req.query.list_id ?? req.query.listId;
+    const listId: number | null = listIdRaw ? parseInt(String(listIdRaw), 10) : null;
 
     if (!campaignId && !listId) {
       res.status(400).json({ error: "Please select a lead list or campaign to upload into." });
