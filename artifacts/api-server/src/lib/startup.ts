@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
 import { usersTable, phoneNumbersTable, voicesTable } from "@workspace/db";
-import { eq, count } from "drizzle-orm";
+import { eq, count, sql } from "drizzle-orm";
 import bcrypt from "bcrypt";
 import axios from "axios";
 import { logger } from "./logger.js";
@@ -143,6 +143,61 @@ export async function ensureCatalogVoices(): Promise<void> {
     }
   }
   logger.info({ seeded }, "Catalog voices (Deepgram + Cartesia) ensured in DB");
+}
+
+// ── Auto-migrate DB schema ────────────────────────────────────────────────────
+// Adds any missing columns to the campaigns table so the server works even
+// when drizzle-kit push hasn't been run manually after a schema change.
+// Uses ADD COLUMN IF NOT EXISTS — completely safe to run on every startup.
+export async function ensureSchema(): Promise<void> {
+  try {
+    await db.execute(sql`
+      ALTER TABLE campaigns
+        ADD COLUMN IF NOT EXISTS dialing_mode text NOT NULL DEFAULT 'progressive',
+        ADD COLUMN IF NOT EXISTS dialing_ratio integer NOT NULL DEFAULT 1,
+        ADD COLUMN IF NOT EXISTS dialing_speed integer NOT NULL DEFAULT 10,
+        ADD COLUMN IF NOT EXISTS drop_rate_limit integer NOT NULL DEFAULT 3,
+        ADD COLUMN IF NOT EXISTS retry_attempts integer NOT NULL DEFAULT 2,
+        ADD COLUMN IF NOT EXISTS retry_interval_minutes integer NOT NULL DEFAULT 60,
+        ADD COLUMN IF NOT EXISTS working_hours_start text,
+        ADD COLUMN IF NOT EXISTS working_hours_end text,
+        ADD COLUMN IF NOT EXISTS working_hours_timezone text DEFAULT 'UTC',
+        ADD COLUMN IF NOT EXISTS amd_enabled boolean NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS vm_drop_message text,
+        ADD COLUMN IF NOT EXISTS tcpa_enabled boolean NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS use_vapi boolean NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS region text,
+        ADD COLUMN IF NOT EXISTS accent text,
+        ADD COLUMN IF NOT EXISTS voice_profile text,
+        ADD COLUMN IF NOT EXISTS human_like text DEFAULT 'true',
+        ADD COLUMN IF NOT EXISTS background_sound text DEFAULT 'none',
+        ADD COLUMN IF NOT EXISTS hold_music text DEFAULT 'none',
+        ADD COLUMN IF NOT EXISTS transfer_number text,
+        ADD COLUMN IF NOT EXISTS knowledge_base text,
+        ADD COLUMN IF NOT EXISTS recording_notes text,
+        ADD COLUMN IF NOT EXISTS voice text,
+        ADD COLUMN IF NOT EXISTS voice_provider text DEFAULT 'elevenlabs',
+        ADD COLUMN IF NOT EXISTS routing_strategy text NOT NULL DEFAULT 'round_robin',
+        ADD COLUMN IF NOT EXISTS transfer_rules text
+    `);
+    logger.info("ensureSchema — all campaign columns verified");
+
+    // Also ensure audit_logs table exists (used by createAuditLog)
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id serial PRIMARY KEY,
+        user_id integer,
+        action text NOT NULL,
+        resource text NOT NULL,
+        resource_id text,
+        metadata text,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    logger.info("ensureSchema — audit_logs table verified");
+  } catch (err) {
+    logger.error({ err }, "ensureSchema failed — server will continue but some features may not work");
+  }
 }
 
 async function ensureDefaultUsers(): Promise<void> {
