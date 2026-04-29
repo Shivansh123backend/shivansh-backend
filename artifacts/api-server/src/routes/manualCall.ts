@@ -10,7 +10,11 @@ import { z } from "zod";
 const router: IRouter = Router();
 
 const manualCallSchema = z.object({
-  phone: z.string().min(7),
+  // Accept phone in any common field name
+  phone: z.string().min(7).optional(),
+  phone_number: z.string().min(7).optional(),
+  phoneNumber: z.string().min(7).optional(),
+  to: z.string().min(7).optional(),
   // Accept both camelCase (campaignId) and snake_case (campaign_id) from frontend
   campaign_id: z.union([z.number().int().positive(), z.string().transform(Number)]).optional().nullable(),
   campaignId: z.union([z.number().int().positive(), z.string().transform(Number)]).optional().nullable(),
@@ -20,7 +24,7 @@ const manualCallSchema = z.object({
   // Force a specific telephony provider ("vapi" | "telnyx")
   provider: z.string().optional().nullable(),
 }).transform((data) => ({
-  phone: data.phone,
+  phone: data.phone ?? data.phone_number ?? data.phoneNumber ?? data.to ?? "",
   campaign_id: Number(data.campaign_id ?? data.campaignId ?? 0) || 0,
   fromOverride: data.from ?? data.fromNumber ?? null,
   provider: data.provider ?? null,

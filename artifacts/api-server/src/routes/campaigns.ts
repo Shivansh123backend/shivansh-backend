@@ -1532,7 +1532,8 @@ router.post("/campaigns/:id/test-call", authenticate, requireRole("admin"), asyn
   const id = parseInt(rawId, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid campaign ID" }); return; }
 
-  const phone: string | undefined = req.body?.phone;
+  const phone: string | undefined =
+    req.body?.phone ?? req.body?.phone_number ?? req.body?.phoneNumber ?? req.body?.to;
   if (!phone) { res.status(400).json({ error: "phone is required" }); return; }
 
   const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.id, id)).limit(1);
