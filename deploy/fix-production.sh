@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SHIVANSH one-shot production fix
-# Run as root on EACH VPS:  bash /tmp/fix-production.sh
+# Run as root on EACH VPS:
+#   export VAPI_API_KEY='...' VAPI_WEBHOOK_SECRET='...' && bash /opt/shivansh/deploy/fix-production.sh
 # Safe to run multiple times.
 set -euo pipefail
 
@@ -12,9 +13,19 @@ echo "════════════════════════�
 echo "  SHIVANSH Production Fix — $(hostname)"
 echo "════════════════════════════════════════════════════"
 
-# ── 1. Patch missing env vars in .env ─────────────────
+# ── 1. Sync code from git (BEFORE touching .env) ──────
+# NOTE: git clean uses --exclude so deploy/.env is never deleted.
 echo ""
-echo "── Step 1: Patching $ENV_FILE"
+echo "── Step 1: Sync code to origin/main"
+cd "$APP"
+git fetch --all --quiet
+git reset --hard origin/main
+git clean -fd --exclude='deploy/.env' --quiet
+echo "   Code synced"
+
+# ── 2. Patch .env AFTER git ops so reset can't undo it ─
+echo ""
+echo "── Step 2: Patching $ENV_FILE"
 touch "$ENV_FILE"
 
 set_env_var() {
@@ -28,23 +39,21 @@ set_env_var() {
   fi
 }
 
-# Values can be overridden by passing them as env vars:
-#   VAPI_API_KEY=xxx VAPI_WEBHOOK_SECRET=xxx bash fix-production.sh
-VAPI_API_KEY_VAL="${VAPI_API_KEY:-__VAPI_API_KEY__}"
-VAPI_WEBHOOK_SECRET_VAL="${VAPI_WEBHOOK_SECRET:-__VAPI_WEBHOOK_SECRET__}"
+# Values passed as env vars when invoking this script
+VAPI_API_KEY_VAL="${VAPI_API_KEY:-}"
+VAPI_WEBHOOK_SECRET_VAL="${VAPI_WEBHOOK_SECRET:-}"
 
-set_env_var VAPI_API_KEY          "$VAPI_API_KEY_VAL"
-set_env_var VAPI_WEBHOOK_SECRET   "$VAPI_WEBHOOK_SECRET_VAL"
+if [ -n "$VAPI_API_KEY_VAL" ]; then
+  set_env_var VAPI_API_KEY "$VAPI_API_KEY_VAL"
+else
+  echo "   WARN: VAPI_API_KEY not passed — export it before running this script"
+fi
+
+if [ -n "$VAPI_WEBHOOK_SECRET_VAL" ]; then
+  set_env_var VAPI_WEBHOOK_SECRET "$VAPI_WEBHOOK_SECRET_VAL"
+fi
+
 echo "   .env patched"
-
-# ── 2. Pull latest code (force-sync to origin/main) ──
-echo ""
-echo "── Step 2: Sync code to origin/main"
-cd "$APP"
-git fetch --all --quiet
-# Discard any local modifications or untracked files so the pull never blocks
-git reset --hard origin/main
-git clean -fd --quiet
 
 # ── 3. Install dependencies ───────────────────────────
 echo ""
@@ -64,11 +73,10 @@ pnpm --filter @workspace/dashboard run build
 # ── 6. Apply DB schema patch ──────────────────────────
 echo ""
 echo "── Step 6: Apply DB schema patch"
-# shellcheck disable=SC1090
 set -a; source "$ENV_FILE"; set +a
 if [ -z "${DATABASE_URL:-}" ]; then
   echo "   WARNING: DATABASE_URL not in .env — skipping auto SQL patch"
-  echo "   Paste the SQL from deploy/production_db_patch.sql into Supabase manually."
+  echo "   Run deploy/production_db_patch.sql manually in Supabase SQL Editor."
 else
   psql "$DATABASE_URL" <<'SQLEOF'
 DO $$ BEGIN
