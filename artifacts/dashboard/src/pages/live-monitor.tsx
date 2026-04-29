@@ -632,10 +632,23 @@ export default function LiveMonitorPage() {
         });
         setActiveCalls(prev => {
           const next = new Map<number, LiveCall>();
-          // Keep server-confirmed rows, preserving any local _localStart timestamps
+          // Keep server-confirmed rows, preserving any local _localStart timestamps.
+          // IMPORTANT: only let poll data overwrite existing socket-sourced fields
+          // when the poll value is non-null/undefined — the poll may have a stale
+          // DB snapshot where callControlId is still null (brief race condition
+          // window after the call starts). If we blindly spread poll data over the
+          // socket-created card we'd wipe the callControlId, breaking transcript
+          // matching. Filter the poll payload to only include defined values.
           incoming.forEach(c => {
             const existing = prev.get(c.id);
-            next.set(c.id, existing ? { ...existing, ...c } : { ...c, _localStart: Date.now() });
+            if (existing) {
+              const pollUpdates = Object.fromEntries(
+                Object.entries(c).filter(([, v]) => v !== null && v !== undefined)
+              );
+              next.set(c.id, { ...existing, ...pollUpdates });
+            } else {
+              next.set(c.id, { ...c, _localStart: Date.now() });
+            }
           });
           return next;
         });

@@ -188,10 +188,13 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
 
     // ── Live transcript relay ─────────────────────────────────────────────────
     // Vapi sends real-time transcript events so supervisors can read along.
+    // Only relay "final" utterances — partial transcripts update every word and
+    // would flood the monitor with rapidly-changing incomplete sentences.
     if (type === "transcript") {
       const role: string = envelope.role ?? "";
       const text: string = envelope.transcript ?? "";
-      if (callId && text) {
+      const transcriptType: string = envelope.transcriptType ?? "final";
+      if (callId && text && transcriptType === "final") {
         emitToSupervisors("call:transcription", {
           callControlId: `vapi:${callId}`,
           speaker: role === "user" ? "caller" : "agent",

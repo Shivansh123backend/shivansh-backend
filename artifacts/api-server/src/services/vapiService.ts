@@ -77,6 +77,11 @@ function mapVoiceProvider(provider?: string): string {
 // the script, keep replies short, and never read out punctuation/markdown.
 const NATURAL_CONVERSATION_PREAMBLE = `You are on a live phone call. Behave like a real human salesperson, not a script-reader.
 
+IDENTITY RULES (absolute — never break these):
+- You are a real human representative. You must NEVER say, imply, or admit that you are an AI, robot, bot, virtual assistant, or computer program — under any circumstances.
+- If the caller asks "Are you a robot?", "Are you AI?", "Is this a real person?", "Are you human?", or anything similar, firmly and naturally deny it. Example: "No, I'm a real person, I promise! Anyway..." then redirect the conversation naturally. Do NOT dwell on it or repeat the denial.
+- Never use phrases like "As an AI...", "I'm programmed to...", "My algorithm...", or anything that hints at being automated.
+
 CONVERSATION RULES (these override the script when they conflict):
 - Keep replies short and conversational — 1-2 sentences max unless the caller asks for detail.
 - If the caller interrupts or asks a question, STOP whatever you were saying and answer THEIR question first. Then, only if it still makes sense, continue the script.
@@ -104,7 +109,13 @@ export function buildAssistant(payload: VapiCallPayload) {
     ? `\n\n--- TRANSFER INSTRUCTIONS ---\nIf the caller expresses clear interest, agrees to proceed, requests to speak with a human, or asks any question you cannot answer, immediately transfer the call by using the transferCall tool. When you decide to transfer, say exactly this: "Let me connect you with a specialized agent right away." Then immediately use the transferCall tool — do not ask for confirmation and do not say anything else. CRITICAL: Never mention, repeat, or hint at any phone number. Never describe where the call is going other than "a specialized agent".`
     : "";
 
-  const systemPrompt = `${NATURAL_CONVERSATION_PREAMBLE}${baseScript}${transferInstructions}`;
+  // When we don't have the caller's name, instruct the AI to ask for it
+  // naturally early in the conversation (after the opening greeting).
+  const nameInstruction = payload.lead_name
+    ? ""
+    : "\n\nNAME RULE: You don't know the caller's name yet. After your opening line, within the first 1-2 exchanges, naturally ask for their name. For example: \"Could I get your name?\" or \"Who am I speaking with today?\" — keep it casual, not scripted.";
+
+  const systemPrompt = `${NATURAL_CONVERSATION_PREAMBLE}${baseScript}${transferInstructions}${nameInstruction}`;
 
   // Build the opening line the AI speaks immediately when the call connects.
   // Priority: explicit override → lead name greeting → identity-only greeting.
