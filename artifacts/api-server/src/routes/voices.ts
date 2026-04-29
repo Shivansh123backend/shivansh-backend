@@ -92,7 +92,11 @@ router.get("/voices", authenticate, async (req, res): Promise<void> => {
 
 // ── POST /voices/preview — generate TTS preview for any provider ───────────────
 // Body: { provider: "elevenlabs"|"deepgram"|"cartesia", voice_id: string, text?: string }
-// Returns: { url: string } — publicly reachable MP3 served from /api/audio/:token
+// Returns: { url: string } where url is a base64 data URL (audio/mpeg).
+// Using a data URL (not /api/audio/:token) avoids the multi-process cache-miss
+// problem: PM2 runs shivansh-api and shivansh-worker as separate processes each
+// with their own in-memory Map — a token generated in one process returns 404
+// when fetched through the load balancer and hitting the other process.
 router.post("/voices/preview", authenticate, async (req, res): Promise<void> => {
   const body = req.body as { provider?: string; voice_id?: string; text?: string };
 
@@ -105,13 +109,71 @@ router.post("/voices/preview", authenticate, async (req, res): Promise<void> => 
     return;
   }
 
-  const provider  = body.provider as VoiceProvider;
-  const voiceId   = body.voice_id;
-  const text      = body.text ?? "Hello! I'm your AI assistant. I'm here to help you with your calls today.";
+  const provider = body.provider as VoiceProvider;
+  const voiceId  = body.voice_id;
+  const text     = body.text ?? "Hello! I'm your AI assistant. I'm here to help you with your calls today.";
 
   try {
-    const url = await generateTTSFromProvider(provider, voiceId, text);
-    res.json({ url, provider, voice_id: voiceId });
+    let audioBuffer: Buffer;
+
+    if (provider === "elevenlabs") {
+      const apiKey = process.env.ELEVENLABS_API_KEY;
+      if (!apiKey) { res.status(503).json({ error: "ElevenLabs API key not configured" }); return; }
+      const r = await axios.post(
+        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+        { text, model_id: "eleven_turbo_v2", voice_settings: { stability: 0.5, similarity_boost: 0.75 } },
+        { headers: { "xi-api-key": apiKey, "Content-Type": "application/json", Accept: "audio/mpeg" },
+          responseType: "arraybuffer", timeout: 20_000, validateStatus: () => true }
+      );
+      if (r.status !== 200) {
+        const detail = Buffer.from(r.data as ArrayBuffer).toString("utf8").slice(0, 300);
+        res.status(502).json({ error: "TTS preview failed", detail, provider, voice_id: voiceId });
+        return;
+      }
+      audioBuffer = Buffer.from(r.data as ArrayBuffer);
+
+    } else if (provider === "cartesia") {
+      const apiKey = process.env.CARTESIA_API_KEY;
+      if (!apiKey) { res.status(503).json({ error: "Cartesia API key not configured" }); return; }
+      const r = await axios.post(
+        "https://api.cartesia.ai/tts/bytes",
+        { model_id: "sonic-2", voice: { mode: "id", id: voiceId }, transcript: text,
+          output_format: { container: "mp3", encoding: "mp3", sample_rate: 44100 } },
+        { headers: { "X-API-Key": apiKey, "Cartesia-Version": "2024-06-10", "Content-Type": "application/json" },
+          responseType: "arraybuffer", timeout: 15_000, validateStatus: () => true }
+      );
+      if (r.status !== 200) {
+        const detail = Buffer.from(r.data as ArrayBuffer).toString("utf8").slice(0, 300);
+        res.status(502).json({ error: "TTS preview failed", detail, provider, voice_id: voiceId });
+        return;
+      }
+      audioBuffer = Buffer.from(r.data as ArrayBuffer);
+
+    } else if (provider === "deepgram") {
+      const apiKey = process.env.DEEPGRAM_API_KEY;
+      if (!apiKey) { res.status(503).json({ error: "Deepgram API key not configured" }); return; }
+      const r = await axios.post(
+        `https://api.deepgram.com/v1/speak?model=${encodeURIComponent(voiceId)}`,
+        { text },
+        { headers: { Authorization: `Token ${apiKey}`, "Content-Type": "application/json" },
+          responseType: "arraybuffer", timeout: 12_000, validateStatus: () => true }
+      );
+      if (r.status !== 200) {
+        const detail = Buffer.from(r.data as ArrayBuffer).toString("utf8").slice(0, 300);
+        res.status(502).json({ error: "TTS preview failed", detail, provider, voice_id: voiceId });
+        return;
+      }
+      audioBuffer = Buffer.from(r.data as ArrayBuffer);
+
+    } else {
+      res.status(400).json({ error: `Unsupported provider: ${provider}` });
+      return;
+    }
+
+    // Return as a base64 data URL — no token, no second request, no process boundary issue.
+    const dataUrl = `data:audio/mpeg;base64,${audioBuffer.toString("base64")}`;
+    res.json({ url: dataUrl, provider, voice_id: voiceId });
+    logger.info({ provider, voiceId, bytes: audioBuffer.length }, "Voice preview served");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const status = axios.isAxiosError(err) ? (err.response?.status ?? 502) : 502;
