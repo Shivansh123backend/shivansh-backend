@@ -687,7 +687,7 @@ export default function LiveMonitorPage() {
 
     socket.on("call:started", (data: { id?: number; callId?: number; callControlId?: string; leadId?: number; campaignId?: number; phoneNumber?: string; providerUsed?: string; selectedNumber?: string; agentId?: number }) => {
       const id = data.id ?? data.callId ?? 0;
-      const call: LiveCall = {
+      const incoming: LiveCall = {
         id,
         callControlId: data.callControlId,
         leadId: data.leadId,
@@ -699,7 +699,23 @@ export default function LiveMonitorPage() {
         status: "initiated",
         _localStart: Date.now(),
       };
-      setActiveCalls(prev => new Map(prev).set(id, call));
+      setActiveCalls(prev => {
+        const existing = prev.get(id);
+        if (existing) {
+          // Merge: keep existing non-null fields when the new event omits them.
+          // This prevents a second call:started (e.g. from the Vapi webhook
+          // status-update) from overwriting good data with empty/undefined values.
+          const merged: LiveCall = {
+            ...existing,
+            ...Object.fromEntries(
+              Object.entries(incoming).filter(([, v]) => v !== null && v !== undefined && v !== "")
+            ),
+            _localStart: existing._localStart, // always keep original start time
+          };
+          return new Map(prev).set(id, merged);
+        }
+        return new Map(prev).set(id, incoming);
+      });
       addEvent(makeEvent("call:started", `Call #${id} started`, data.phoneNumber ? `→ ${data.phoneNumber}` : undefined));
     });
 

@@ -927,10 +927,10 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
     const callFromNumber = allocation.phoneNumber;
     const vapiPhoneNumberIdForCall = allocation.vapiPhoneNumberId ?? undefined;
 
-    // No synced numbers in the Vapi pool — skip this lead and stop here.
-    // Leave status as "pending" so it can be retried once the user registers
-    // their phone numbers with Vapi (Phone Numbers → Sync to Vapi).
-    if (useVapiForThisCall && !vapiPhoneNumberIdForCall) {
+    // No synced numbers in the Vapi pool — skip this lead and stop here,
+    // UNLESS the global VAPI_PHONE_NUMBER_ID env fallback is set (in which
+    // case vapiDirectCall will use it automatically, so we can proceed).
+    if (useVapiForThisCall && !vapiPhoneNumberIdForCall && !process.env.VAPI_PHONE_NUMBER_ID) {
       logger.warn(
         { leadId: lead.id, campaignId },
         "Vapi campaign has no numbers registered with Vapi — open Phone Numbers and click 'Sync to Vapi'"

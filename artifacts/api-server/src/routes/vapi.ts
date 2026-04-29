@@ -161,19 +161,22 @@ router.post("/vapi/webhook", async (req: Request, res: Response) => {
       const status: string = envelope.status ?? call.status ?? "";
       if ((status === "in-progress" || status === "in_progress") && callId) {
         // Emit call:started so live monitor picks up calls that started before
-        // the supervisor opened the page (complements the /calls/live poll)
+        // the supervisor opened the page (complements the /calls/live poll).
+        // We query the call_logs row to fill in leadId and use the stored
+        // phoneNumber as fallback if Vapi doesn't echo back customer.number.
         const customerNumber: string = call.customer?.number ?? "";
         const calledNumber: string = call?.phoneNumber?.number ?? "";
         const existing = await db
-          .select({ id: callLogsTable.id })
+          .select({ id: callLogsTable.id, phoneNumber: callLogsTable.phoneNumber })
           .from(callLogsTable)
           .where(eq(callLogsTable.callControlId, callId))
           .limit(1);
+        const resolvedPhone = customerNumber || existing[0]?.phoneNumber || undefined;
         emitToSupervisors("call:started", {
           id: existing[0]?.id,
           callControlId: `vapi:${callId}`,
-          phoneNumber: customerNumber,
-          selectedNumber: calledNumber,
+          ...(resolvedPhone && { phoneNumber: resolvedPhone }),
+          selectedNumber: calledNumber || undefined,
           campaignId,
           providerUsed: "vapi",
         });
