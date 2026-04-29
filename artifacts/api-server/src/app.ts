@@ -1,6 +1,7 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import path from "path";
+import { fileURLToPath } from "url";
 import pinoHttp from "pino-http";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import router from "./routes";
@@ -37,10 +38,12 @@ app.use("/api", router);
 if (process.env.NODE_ENV === "production") {
   // Production: serve the compiled React dashboard as static files
   // with index.html fallback for client-side routing (SPA).
-  // Use DASHBOARD_DIST env if set, otherwise resolve relative to workspace root.
+  // Use DASHBOARD_DIST env if set, otherwise resolve relative to THIS file
+  // (dist/index.mjs → dist/public/) so the path is correct regardless of
+  // the process working directory (which varies between dev and production PM2).
   const dashboardDist =
     process.env.DASHBOARD_DIST ||
-    path.join(process.cwd(), "artifacts/dashboard/dist/public");
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
 
   logger.info({ dashboardDist }, "Serving dashboard static files");
 
