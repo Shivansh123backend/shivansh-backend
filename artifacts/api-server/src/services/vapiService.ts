@@ -100,7 +100,7 @@ export function buildAssistant(payload: VapiCallPayload) {
   // Append transfer instructions to the prompt when a transfer number is
   // configured so the AI knows exactly when and how to hand off the call.
   const transferInstructions = payload.transfer_number
-    ? `\n\n--- TRANSFER INSTRUCTIONS ---\nIf the caller expresses clear interest, agrees to proceed, requests to speak with a human, or asks any question you cannot answer, immediately transfer the call by using the transferCall tool. Say "Let me connect you with our team now" and use the transfer tool right away — do not ask for confirmation. IMPORTANT: Never say or repeat the transfer phone number aloud under any circumstances.`
+    ? `\n\n--- TRANSFER INSTRUCTIONS ---\nIf the caller expresses clear interest, agrees to proceed, requests to speak with a human, or asks any question you cannot answer, immediately transfer the call by using the transferCall tool. When you decide to transfer, say exactly this: "Let me connect you with a specialized agent right away." Then immediately use the transferCall tool — do not ask for confirmation and do not say anything else. CRITICAL: Never mention, repeat, or hint at any phone number. Never describe where the call is going other than "a specialized agent".`
     : "";
 
   const systemPrompt = `${NATURAL_CONVERSATION_PREAMBLE}${baseScript}${transferInstructions}`;

@@ -125,9 +125,12 @@ function useVoicePlayer(toast: ReturnType<typeof useToast>["toast"]) {
   return { playing, loading, play, stop };
 }
 
-// Real ElevenLabs voice IDs are 20+ alphanumeric chars with no underscores
-function isRealVoiceId(voiceId: string) {
-  return /^[a-zA-Z0-9]{15,}$/.test(voiceId);
+// Validates voice IDs per provider to avoid calling TTS with placeholder/bad IDs
+function canPreviewVoice(voiceId: string, provider: string) {
+  if (provider === "elevenlabs") return /^[a-zA-Z0-9]{15,}$/.test(voiceId);   // 20-char alphanum
+  if (provider === "cartesia")   return /^[0-9a-f-]{30,}$/.test(voiceId);    // UUID format
+  if (provider === "deepgram")   return voiceId.startsWith("aura-");         // aura-* prefix
+  return false;
 }
 
 // ── Voice card ─────────────────────────────────────────────────────────────────
@@ -145,7 +148,7 @@ function VoiceCard({
   onStop: () => void;
 }) {
   const hasPreview = !!voice.previewUrl;
-  const canGenerate = !hasPreview && voice.provider === "elevenlabs" && isRealVoiceId(voice.voiceId);
+  const canGenerate = !hasPreview && canPreviewVoice(voice.voiceId, voice.provider);
   const canPlay = hasPreview || canGenerate;
 
   return (

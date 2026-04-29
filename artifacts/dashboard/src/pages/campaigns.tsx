@@ -65,6 +65,7 @@ function useAudioPlayer() {
   const blobUrlRef = useRef<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const play = useCallback(async (voice: { id: string; voiceId?: string; previewUrl?: string | null }) => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
@@ -79,7 +80,7 @@ function useAudioPlayer() {
     try {
       let src: string;
       if (!isNaN(dbId)) {
-        // DB voice — route through backend proxy
+        // DB voice — always route through backend proxy (handles all providers)
         const endpoint = voice.previewUrl
           ? `${baseUrl}/api/voices/${dbId}/preview`
           : `${baseUrl}/api/voices/${dbId}/sample`;
@@ -91,7 +92,10 @@ function useAudioPlayer() {
           },
           ...(voice.previewUrl ? {} : { body: JSON.stringify({ text: "Hello! I'm your AI voice assistant. I'm here to help you with your calls today." }) }),
         });
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({})) as { error?: string; detail?: string };
+          throw new Error(errData.detail ?? errData.error ?? `Preview failed (${resp.status})`);
+        }
         const blob = await resp.blob();
         src = URL.createObjectURL(blob);
         blobUrlRef.current = src;
@@ -104,15 +108,24 @@ function useAudioPlayer() {
       const audio = new Audio(src);
       audioRef.current = audio;
       audio.onended = () => { setPlaying(null); audioRef.current = null; };
-      audio.onerror = () => { setPlaying(null); audioRef.current = null; };
+      audio.onerror = () => {
+        setPlaying(null);
+        audioRef.current = null;
+        toast({ title: "Playback error", description: "Could not play audio", variant: "destructive" });
+      };
       await audio.play();
       setPlaying(voice.id);
-    } catch {
+    } catch (err) {
       setPlaying(null);
+      toast({
+        title: "Preview unavailable",
+        description: err instanceof Error ? err.message : "Could not generate voice sample",
+        variant: "destructive",
+      });
     } finally {
       setLoadingId(null);
     }
-  }, [playing]);
+  }, [playing, toast]);
 
   const stop = useCallback(() => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
