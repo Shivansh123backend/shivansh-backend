@@ -138,10 +138,19 @@ SQLEOF
   echo "   DB patch complete"
 fi
 
-# ── 7. Restart PM2 ────────────────────────────────────
+# ── 7. Restart PM2 with a clean stop+start so new env is guaranteed ──
 echo ""
-echo "── Step 7: Restart PM2 with updated env"
-pm2 reload "$APP/deploy/ecosystem.config.cjs" --update-env
+echo "── Step 7: Restarting PM2 (stop → start)"
+echo "   .env VAPI line: $(grep VAPI_API_KEY "$ENV_FILE" | head -1 | cut -c1-40)..."
+
+# Stop the existing processes cleanly (ignore errors if not running)
+pm2 stop shivansh-api    2>/dev/null || true
+pm2 stop shivansh-worker 2>/dev/null || true
+pm2 delete shivansh-api    2>/dev/null || true
+pm2 delete shivansh-worker 2>/dev/null || true
+
+# Start fresh — ecosystem re-reads .env at this exact moment
+pm2 start "$APP/deploy/ecosystem.config.cjs"
 pm2 save
 
 # ── 8. Health check ───────────────────────────────────

@@ -52,6 +52,7 @@ const apps = [
       autorestart: true,
       watch: false,
       env: {
+        ...process.env,
         ...fileEnv,
         NODE_ENV: "production",
       },
@@ -71,6 +72,7 @@ const apps = [
       autorestart: true,
       watch: false,
       env: {
+        ...process.env,
         ...fileEnv,
         NODE_ENV: "production",
         WORKER_ENABLED: "true",
