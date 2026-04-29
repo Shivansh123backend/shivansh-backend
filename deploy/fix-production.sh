@@ -37,13 +37,14 @@ set_env_var VAPI_API_KEY          "$VAPI_API_KEY_VAL"
 set_env_var VAPI_WEBHOOK_SECRET   "$VAPI_WEBHOOK_SECRET_VAL"
 echo "   .env patched"
 
-# ── 2. Pull latest code ───────────────────────────────
+# ── 2. Pull latest code (force-sync to origin/main) ──
 echo ""
-echo "── Step 2: Pull latest code from git"
+echo "── Step 2: Sync code to origin/main"
 cd "$APP"
 git fetch --all --quiet
-git checkout main
-git pull origin main
+# Discard any local modifications or untracked files so the pull never blocks
+git reset --hard origin/main
+git clean -fd --quiet
 
 # ── 3. Install dependencies ───────────────────────────
 echo ""
