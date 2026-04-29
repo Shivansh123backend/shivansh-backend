@@ -36,6 +36,7 @@ export interface VapiCallPayload {
   first_message?: string;   // Optional opening line (bot speaks first)
   lead_id?: string;
   lead_name?: string;
+  agent_name?: string;   // AI persona name used in the opening greeting
   knowledge_base?: string;  // Optional KB injected into system prompt
   // Vapi phone-number ID to originate from. Per-call override of the
   // VAPI_PHONE_NUMBER_ID env var. Set this to the allocated Telnyx
@@ -105,9 +106,18 @@ export function buildAssistant(payload: VapiCallPayload) {
 
   const systemPrompt = `${NATURAL_CONVERSATION_PREAMBLE}${baseScript}${transferInstructions}`;
 
+  // Build the opening line the AI speaks immediately when the call connects.
+  // Priority: explicit override → lead name greeting → identity-only greeting.
+  // When there is no lead name we always include the agent + campaign identity
+  // so the prospect immediately knows who's calling (never say "Hi there?" cold).
+  const fromPart = payload.campaign_name?.trim()
+    ? ` calling from ${payload.campaign_name.trim()}`
+    : "";
   const firstMessage =
     payload.first_message ??
-    `Hi${payload.lead_name ? `, am I speaking with ${payload.lead_name}` : " there"}?`;
+    (payload.lead_name
+      ? `Hi, am I speaking with ${payload.lead_name}?`
+      : `Hi, this is ${payload.agent_name ?? "your agent"}${fromPart}. How are you today?`);
 
   // ── Vapi transferCall tool ─────────────────────────────────────────────────
   // When a transfer_number is configured this tool is added to the assistant.

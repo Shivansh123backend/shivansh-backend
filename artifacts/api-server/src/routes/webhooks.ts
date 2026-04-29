@@ -1434,7 +1434,12 @@ router.post("/webhooks/telnyx", async (req, res): Promise<void> => {
 
       const outboundHoldMusicUrl = resolveHoldMusicUrl(campaign?.holdMusic);
 
-      const leadName = lead?.name;
+      // Treat "Unknown" (and blanks) as no name so the AI uses the generic
+      // identity-only greeting instead of addressing the prospect as "Unknown".
+      const rawLeadName = lead?.name?.trim();
+      const leadName = rawLeadName && !/^unknown$/i.test(rawLeadName) && rawLeadName !== "[Lead Name]"
+        ? rawLeadName
+        : undefined;
       const firstName = leadName?.split(" ")[0];
       const callVoiceId =
         outboundCtx.voice && outboundCtx.voice !== "default" ? outboundCtx.voice : DEFAULT_ELEVEN_VOICE;

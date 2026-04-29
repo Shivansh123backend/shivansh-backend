@@ -43,6 +43,7 @@ export interface EnqueueCallPayload {
   knowledge_base?: string;
   lead_id?: string;
   lead_name?: string;
+  agent_name?: string;   // AI persona name used in the opening greeting
   first_message?: string;
 }
 
@@ -97,6 +98,7 @@ async function vapiCallFallback(payload: EnqueueCallPayload): Promise<TriggerCal
     knowledge_base: payload.knowledge_base,
     lead_id: payload.lead_id,
     lead_name: payload.lead_name,
+    agent_name: payload.agent_name,
     first_message: payload.first_message,
     vapi_phone_number_id: vapiPhoneNumberId ?? undefined,
     background_sound: payload.background_sound,

@@ -772,7 +772,7 @@ async function allocateNumber(
 }
 
 async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
-  const { script, voiceName, voiceProvider, fromNumber, transferNumber, backgroundSound, holdMusicUrl } =
+  const { script, voiceName, voiceProvider, fromNumber, transferNumber, backgroundSound, holdMusicUrl, agentName } =
     await stage("resolveCampaignAssets", campaignId, () => resolveCampaignAssets(campaignId, campaign));
 
   const retryAttempts = campaign.retryAttempts ?? 2;
@@ -1043,7 +1043,8 @@ async function _runCampaignCalls(campaignId: number, campaign: typeof campaignsT
       vapi_phone_number_id: vapiPhoneNumberIdForCall,
       knowledge_base: liveCampaign?.knowledgeBase ?? undefined,
       lead_id: String(lead.id),
-      lead_name: lead.name ?? undefined,
+      lead_name: normalizeLeadName(lead.name) ?? undefined,
+      agent_name: agentName,
     });
 
     // If call fails, release the number immediately (webhook won't fire).
@@ -1332,6 +1333,19 @@ CLOSING WHEN INTERESTED:
 === END STYLE INSTRUCTIONS ===
 `;
 
+/**
+ * Normalize a lead name from the database.
+ * Returns null when the name is blank, "Unknown", or any similar placeholder,
+ * so downstream call logic can properly branch to the "no name" greeting path
+ * instead of addressing the prospect as "Unknown".
+ */
+function normalizeLeadName(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const t = name.trim();
+  if (!t || /^unknown$/i.test(t) || t === "[Lead Name]") return null;
+  return t;
+}
+
 async function resolveCampaignAssets(campaignId: number, campaign: typeof campaignsTable.$inferSelect) {
   const DEFAULT_PROMPT = `You are a friendly, professional voice agent making an outbound call. Here's how you handle the call:
 
@@ -1465,7 +1479,19 @@ TONE: Be a real person having a real conversation. Stay warm, listen actively, a
   // Last-resort sentinel — will be caught by workerService guard with a clear error
   const resolvedFromNumber = fromNumber ?? "+10000000000";
 
-  return { script, voiceName, voiceProvider, fromNumber: resolvedFromNumber, transferNumber, backgroundSound, holdMusicUrl };
+  // Resolve the AI agent's display name (e.g. "Alex") so it can be used in
+  // the opening greeting when the lead has no name on record.
+  let agentName: string | undefined;
+  if (campaign.agentId) {
+    const [agentRow] = await db
+      .select({ name: aiAgentsTable.name })
+      .from(aiAgentsTable)
+      .where(eq(aiAgentsTable.id, campaign.agentId))
+      .limit(1);
+    agentName = agentRow?.name ?? undefined;
+  }
+
+  return { script, voiceName, voiceProvider, fromNumber: resolvedFromNumber, transferNumber, backgroundSound, holdMusicUrl, agentName };
 }
 
 router.post("/campaigns/stop/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
