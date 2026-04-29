@@ -21,8 +21,8 @@ const updateStatusSchema = z.object({
   status: z.enum(["available", "busy"]),
 });
 
-// POST /agents/create — create a human agent in the pool
-router.post("/agents/create", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+// POST /human-agents/create — create a human agent in the pool
+router.post("/human-agents/create", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const parsed = createHumanAgentSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -47,7 +47,6 @@ router.post("/agents/create", authenticate, requireRole("admin"), async (req, re
       created_at: agent.createdAt,
     });
   } catch (err: unknown) {
-    // Check for PG unique-violation error code 23505 on any error in the chain
     const isUniqueViolation =
       isDuplicateKeyError(err) || isDuplicateKeyError((err as { cause?: unknown })?.cause);
     if (isUniqueViolation) {
@@ -58,8 +57,8 @@ router.post("/agents/create", authenticate, requireRole("admin"), async (req, re
   }
 });
 
-// POST /agents/status — update a human agent's status (DB + Redis)
-router.post("/agents/status", authenticate, async (req, res): Promise<void> => {
+// POST /human-agents/status — update a human agent's status (DB + Redis)
+router.post("/human-agents/status", authenticate, async (req, res): Promise<void> => {
   const parsed = updateStatusSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -77,14 +76,12 @@ router.post("/agents/status", authenticate, async (req, res): Promise<void> => {
     return;
   }
 
-  // Mirror status to Redis for real-time dashboard
   await setAgentStatus({
     agent_id: updated.id,
     status: parsed.data.status,
     updated_at: new Date().toISOString(),
   });
 
-  // Broadcast to supervisors via WebSocket
   emitToSupervisors("agent_status", {
     agent_id: updated.id,
     name: updated.name,
@@ -100,19 +97,14 @@ router.post("/agents/status", authenticate, async (req, res): Promise<void> => {
   });
 });
 
-// GET /agents/stats — per-agent call stats for today (callsToday, avgDuration, dispositions)
-// MUST be registered BEFORE /agents/available to avoid Express treating "stats" as an :id param
-router.get("/agents/stats", authenticate, async (_req, res): Promise<void> => {
+// GET /human-agents/stats — per-agent call stats for today
+// MUST be before /human-agents/:id to avoid Express treating "stats" as :id
+router.get("/human-agents/stats", authenticate, async (_req, res): Promise<void> => {
   const agents = await db.select().from(humanAgentsTable);
 
-  // Start of today UTC
   const startOfDay = new Date();
   startOfDay.setUTCHours(0, 0, 0, 0);
 
-  // ── Single-query aggregation (no N+1) ───────────────────────────────────────
-  // Pull every today-call for every agent in one round-trip and group in JS.
-  // Trades one transient larger result set for many small queries that scale
-  // linearly with agent count.
   const todayCalls = agents.length === 0 ? [] : await db
     .select({
       humanAgentId: callsTable.humanAgentId,
@@ -127,7 +119,6 @@ router.get("/agents/stats", authenticate, async (_req, res): Promise<void> => {
       )
     );
 
-  // Group rows by agent id once.
   const byAgent = new Map<number, { calls: number; total: number; dispositions: Record<string, number> }>();
   for (const c of todayCalls) {
     if (c.humanAgentId == null) continue;
@@ -143,8 +134,6 @@ router.get("/agents/stats", authenticate, async (_req, res): Promise<void> => {
     }
   }
 
-  // Redis presence is per-agent and intentionally kept parallel — these are
-  // small in-memory lookups, not DB calls, so this stays O(N) cheaply.
   const results = await Promise.all(
     agents.map(async (agent) => {
       const redisStatus = await getAgentStatus(agent.id);
@@ -170,8 +159,8 @@ router.get("/agents/stats", authenticate, async (_req, res): Promise<void> => {
   res.json(results);
 });
 
-// GET /agents/available — return the first available agent (used for call transfers)
-router.get("/agents/available", authenticate, async (req, res): Promise<void> => {
+// GET /human-agents/available — return the first available agent (used for call transfers)
+router.get("/human-agents/available", authenticate, async (_req, res): Promise<void> => {
   const agents = await db
     .select()
     .from(humanAgentsTable)
@@ -193,8 +182,8 @@ router.get("/agents/available", authenticate, async (req, res): Promise<void> =>
   });
 });
 
-// DELETE /agents/:id — remove a human agent from the pool (admin only)
-router.delete("/agents/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
+// DELETE /human-agents/:id — remove a human agent from the pool (admin only)
+router.delete("/human-agents/:id", authenticate, requireRole("admin"), async (req, res): Promise<void> => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json({ error: "Invalid agent id" });
@@ -211,8 +200,6 @@ router.delete("/agents/:id", authenticate, requireRole("admin"), async (req, res
     return;
   }
 
-  // Best-effort: clear Redis presence and notify supervisors. Failures are
-  // logged but do not block the delete (the row is already gone in the DB).
   try {
     await getRedisClient().del(`agent_status:${id}`);
   } catch (err) {
@@ -223,11 +210,10 @@ router.delete("/agents/:id", authenticate, requireRole("admin"), async (req, res
   res.json({ ok: true, id: deleted.id, name: deleted.name });
 });
 
-// GET /agents — list all human agents with live Redis status + current_call
-router.get("/agents", authenticate, async (req, res): Promise<void> => {
+// GET /human-agents — list all human agents with live Redis status + current_call
+router.get("/human-agents", authenticate, async (_req, res): Promise<void> => {
   const agents = await db.select().from(humanAgentsTable);
 
-  // Enrich each agent with real-time status from Redis (falls back to DB status)
   const enriched = await Promise.all(
     agents.map(async (a) => {
       const redisStatus = await getAgentStatus(a.id);
@@ -246,13 +232,10 @@ router.get("/agents", authenticate, async (req, res): Promise<void> => {
 
 export default router;
 
-// Detect PostgreSQL unique-violation errors (code 23505) at any depth in the chain
 function isDuplicateKeyError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as Record<string, unknown>;
-  // pg driver sets `code` directly on the error
   if (e.code === "23505") return true;
-  // Drizzle wraps it: the message contains the pg error code description
   if (typeof e.message === "string" && e.message.includes("unique constraint")) return true;
   return false;
 }
